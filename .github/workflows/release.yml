@@ -1,30 +1,47 @@
-# Builds the Windows installer and publishes it as a GitHub release when a version
-# tag is pushed (see tools/release.py). Installed apps update themselves from the
-# release's latest.json, which is signed with TAURI_SIGNING_PRIVATE_KEY.
+# Publishes a new app version. Start it with `python -I tools/release.py`, or from the
+# Actions tab: Release -> Run workflow.
+#
+# It bumps the version, runs the tests, commits and tags the bump on master, then
+# builds the signed installer and publishes it as the latest GitHub release. Installed
+# apps find it within 30 minutes and update (or ask, if automatic updates are off).
 name: Release
 
 on:
-  push:
-    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      notes:
+        description: What changed (shown to users in the update prompt)
+        type: string
+        default: Bug fixes and improvements.
 
 permissions:
   contents: write
 
+concurrency:
+  group: release
+
 jobs:
   release:
+    if: github.ref == 'refs/heads/master'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Check tag matches app version
+      - name: Check signing secrets
         shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          version=$(node -p "require('./apps/overlay/src-tauri/tauri.conf.json').version")
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match app version $version (use tools/release.py)"
+          if [ -z "$KEY" ] || [ -z "$PASSWORD" ]; then
+            echo "::error::Add the TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD repository secrets (see README, Publishing)."
             exit 1
           fi
 
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: oven-sh/setup-bun@v2
@@ -41,6 +58,18 @@ jobs:
           python -I -m unittest discover -s tools/mappack
           (cd apps/overlay && bun run test)
 
+      - name: Bump version
+        id: version
+        shell: bash
+        run: |
+          version=$(python -I tools/version.py "${{ inputs.bump }}")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Release $version"
+          git tag -a "v$version" -m "Game Maps $version"
+          git push origin HEAD:master "v$version"
+
       - name: Build and publish
         uses: tauri-apps/tauri-action@v0
         env:
@@ -50,9 +79,10 @@ jobs:
         with:
           projectPath: apps/overlay
           tauriScript: bun run tauri
-          tagName: ${{ github.ref_name }}
-          releaseName: Game Maps ${{ github.ref_name }}
-          releaseBody: Download and run the `Game Maps_..._x64-setup.exe` below. Installed copies update automatically.
+          tagName: v${{ steps.version.outputs.version }}
+          releaseName: Game Maps v${{ steps.version.outputs.version }}
+          releaseBody: ${{ inputs.notes }}
+          releaseCommitish: master
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true

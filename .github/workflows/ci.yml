@@ -1,0 +1,43 @@
+# Checks every pull request and push to master, so master is always releasable.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install frontend dependencies
+        working-directory: apps/overlay
+        run: bun install --frozen-lockfile
+
+      - name: Rust
+        run: |
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace
+
+      - name: Python tools
+        run: |
+          python -I -m unittest discover -s tools/pins
+          python -I -m unittest discover -s tools/mappack
+
+      - name: Frontend
+        working-directory: apps/overlay
+        run: |
+          bun run lint
+          bun run build
+          bun run test

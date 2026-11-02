@@ -1,20 +1,23 @@
 //! App updates through the Tauri updater (signed installers on GitHub Releases).
 //!
-//! The app checks at startup and every few hours. With automatic updates on, a found
-//! update installs once no game is running, so a session is never interrupted.
+//! The app checks at startup and every 30 minutes. With automatic updates on, a found
+//! update installs once no game is running, so a session is never interrupted. With
+//! them off, the user is asked (once per version, also only while no game runs) and
+//! the launcher keeps offering it.
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 use crate::link::{AgentLink, LinkState};
 use crate::settings;
 
 pub const EVENT: &str = "update-state";
-const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+const CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const TICK: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Serialize)]
@@ -55,16 +58,20 @@ impl Updates {
         let _ = app.emit(EVENT, state);
     }
 
-    fn has_pending(&self) -> bool {
-        self.pending.lock().unwrap().is_some()
+    fn pending_version(&self) -> Option<String> {
+        self.pending.lock().unwrap().as_ref().map(|u| u.version.clone())
     }
 
-    pub async fn check(&self, app: &AppHandle) -> Result<(), String> {
+    /// Looks for a newer version. `manual`: the user asked, so show progress and
+    /// errors; background checks stay quiet unless they find something.
+    pub async fn check(&self, app: &AppHandle, manual: bool) -> Result<(), String> {
         if cfg!(debug_assertions) {
             return Err("updates are disabled in development builds".into());
         }
         let _busy = self.busy.lock().await;
-        self.set(app, UpdateState::Checking);
+        if manual {
+            self.set(app, UpdateState::Checking);
+        }
         let result = async { app.updater().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string()) }.await;
         match result {
             Ok(Some(update)) => {
@@ -74,12 +81,15 @@ impl Updates {
                 Ok(())
             }
             Ok(None) => {
+                *self.pending.lock().unwrap() = None;
                 self.set(app, UpdateState::UpToDate);
                 Ok(())
             }
             Err(e) => {
                 log::info!("update check failed: {e}");
-                self.set(app, UpdateState::Error { message: "Could not check for updates. Are you online?".into() });
+                if manual {
+                    self.set(app, UpdateState::Error { message: "Could not check for updates. Are you online?".into() });
+                }
                 Err(e)
             }
         }
@@ -128,19 +138,44 @@ pub fn start_background(app: AppHandle) {
         let mut last_check: Option<Instant> = None;
         // One automatic install attempt per check; after a failure the user can retry.
         let mut auto_tried = false;
+        // Ask about each version once; the launcher keeps offering it after that.
+        let mut prompted: Option<String> = None;
         loop {
             let updates = app.state::<Updates>();
             if last_check.is_none_or(|t| t.elapsed() >= CHECK_INTERVAL) {
                 last_check = Some(Instant::now());
                 auto_tried = false;
-                let _ = updates.check(&app).await;
+                let _ = updates.check(&app, false).await;
             }
             let game_running = app.state::<std::sync::Arc<AgentLink>>().status().state != LinkState::WaitingForGame;
-            if !auto_tried && updates.has_pending() && settings::get(&app).auto_update && !game_running {
-                auto_tried = true;
-                let _ = updates.install(&app).await;
+            if let (Some(version), false) = (updates.pending_version(), game_running) {
+                if settings::get(&app).auto_update {
+                    if !auto_tried {
+                        auto_tried = true;
+                        let _ = updates.install(&app).await;
+                    }
+                } else if prompted.as_ref() != Some(&version) {
+                    prompted = Some(version.clone());
+                    prompt(&app, &version);
+                }
             }
             tokio::time::sleep(TICK).await;
         }
     });
+}
+
+/// Asks whether to install `version` now (automatic updates are off).
+fn prompt(app: &AppHandle, version: &str) {
+    let handle = app.clone();
+    app.dialog()
+        .message(format!("Game Maps {version} is available. Install it now? Game Maps restarts when it's done."))
+        .title("Update available")
+        .buttons(MessageDialogButtons::OkCancelCustom("Update now".into(), "Later".into()))
+        .show(move |update_now| {
+            if update_now {
+                tauri::async_runtime::spawn(async move {
+                    let _ = handle.state::<Updates>().install(&handle).await;
+                });
+            }
+        });
 }

@@ -74,22 +74,53 @@ cd apps/overlay && bun run test
 
 ### Publishing
 
-Map data and the app are published separately, both on GitHub Releases. The repository
-(or at least its releases) must be public so installed apps can download them.
+Map data and the app are published separately, both on GitHub Releases, and installed
+apps pick up both on their own. The repository must be public so they can download them.
 
-- **Map data** (tiles, icons, pins): after regenerating a game's data, run
-  `python -I tools/mappack/publish.py --game <id>`. It zips the pack, uploads it to the
-  `maps` release and updates `maps.json`. Installed apps pick it up within a few hours
-  or at their next start. No app release needed.
-- **App**: `python -I tools/release.py 0.2.0`, then `git push --follow-tags`. The
-  `Release` workflow builds the signed installer and publishes the release, and installed
-  apps update themselves when no game is running. It needs the repository secrets
-  `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (the updater key
-  whose public half is in `tauri.conf.json`). Losing the private key means existing
-  installs can no longer update, so back it up.
+**Map update** (no app release needed). After regenerating a game's tiles, icons or pins
+(see above):
 
-To build an installer locally: set the two variables above and run `bun run app:build`
-in `apps/overlay` (output in `target/release/bundle/nsis/`).
+```sh
+python -I tools/mappack/publish.py sons-of-the-forest   # or --all
+```
+
+It uploads the pack to the `maps` release and points `maps.json` at it. Every installed
+app downloads it within 30 minutes, or right away when the game starts. A map that is
+open on screen switches over when it's closed. Unchanged maps are skipped, so you can
+run `--all` at any time.
+
+**App update** (code changes, including live features like positioning). Merge your
+changes into `master`, then:
+
+```sh
+python -I tools/release.py                      # patch: 0.1.0 -> 0.1.1
+python -I tools/release.py minor "What changed"  # notes appear in the update prompt
+```
+
+Or open the **Actions** tab on GitHub, pick **Release** and press **Run workflow**. The
+workflow tests, bumps the version, builds and signs the installer, and publishes it as
+the latest release (about 15 minutes). Installed apps find it within 30 minutes. With
+automatic updates on, they install it as soon as no game is running. Otherwise they ask
+first, and the launcher offers it too.
+
+Friends always install from
+[the latest release](https://github.com/HYPExMon5ter/game-maps/releases/latest).
+
+**One-time setup** for app releases: the workflow signs updates with the key created for
+this project, which lives in `~/.tauri/` on the machine that set it up. Add it as two
+repository secrets:
+
+```powershell
+gh secret set TAURI_SIGNING_PRIVATE_KEY --body (Get-Content ~/.tauri/game-maps.key -Raw).Trim()
+gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --body (Get-Content ~/.tauri/game-maps.key.password -Raw).Trim()
+```
+
+Back up both files somewhere safe. Installed apps only accept updates signed with this
+key (its public half is in `tauri.conf.json`), so losing it means nobody can update
+without reinstalling.
+
+CI (`.github/workflows/ci.yml`) runs the tests, lints and clippy on every pull request
+and push to `master`.
 
 Layout:
 
@@ -103,7 +134,8 @@ Layout:
 | `tools/mapgen` | Generators that build map tiles/icons from game files |
 | `tools/pins` | Builds `pins.json` from in-game world exports |
 | `tools/mappack` | Publishes a game's map data as a downloadable map pack |
-| `tools/release.py` | Bumps the version and tags an app release |
+| `tools/release.py` | Publishes a new app version (starts the Release workflow) |
+| `tools/version.py` | Sets the app version in every file that records it |
 | `docs/` | Plan, research notes, per-game notes |
 
 Adding a game: create `games/<id>/game.json` (with `steamAppId` for the Play button)

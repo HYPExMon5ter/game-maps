@@ -1,67 +1,49 @@
-"""Bump the app version, commit, and tag a release.
+"""Publish a new version of the app. Installed copies update themselves.
 
-    python -I tools/release.py 0.2.0
-    git push --follow-tags
+    python -I tools/release.py                 # 0.1.0 -> 0.1.1
+    python -I tools/release.py minor "Added a mini-map for caves"
+    python -I tools/release.py major "..."
 
-Pushing the tag runs .github/workflows/release.yml, which builds the installer and
-publishes it; installed copies then update themselves.
+This starts the Release workflow on GitHub (same as pressing "Run workflow" on the
+Actions tab): it bumps the version, runs the tests, builds and signs the installer,
+and publishes the release from the latest commit on master. Commit and push your
+changes to master first. Needs the GitHub CLI, logged in.
 """
 from __future__ import annotations
 
-import json
-import os
-import re
 import subprocess
 import sys
+import time
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-TAURI_CONF = os.path.join(ROOT, "apps", "overlay", "src-tauri", "tauri.conf.json")
-PACKAGE_JSON = os.path.join(ROOT, "apps", "overlay", "package.json")
-CARGO_TOML = os.path.join(ROOT, "Cargo.toml")
-
-
-def git(*args: str) -> str:
-    return subprocess.run(["git", *args], cwd=ROOT, check=True, capture_output=True, text=True).stdout
+WORKFLOW = "release.yml"
+DEFAULT_NOTES = "Bug fixes and improvements."
+REQUIRED_SECRETS = {"TAURI_SIGNING_PRIVATE_KEY", "TAURI_SIGNING_PRIVATE_KEY_PASSWORD"}
 
 
-def set_json_version(path: str, version: str) -> None:
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
-    data["version"] = version
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
-
-
-def set_cargo_version(version: str) -> None:
-    with open(CARGO_TOML, encoding="utf-8") as f:
-        text = f.read()
-    text, n = re.subn(r'(\[workspace\.package\][^\[]*?\nversion = )"[^"]*"', rf'\g<1>"{version}"', text, count=1)
-    if n != 1:
-        raise SystemExit("could not find [workspace.package] version in Cargo.toml")
-    with open(CARGO_TOML, "w", encoding="utf-8", newline="\n") as f:
-        f.write(text)
+def gh(*args: str) -> str:
+    return subprocess.run(["gh", *args], check=True, capture_output=True, text=True).stdout
 
 
 def main() -> None:
-    if len(sys.argv) != 2 or not re.fullmatch(r"\d+\.\d+\.\d+", sys.argv[1]):
+    args = sys.argv[1:]
+    bump = args[0] if args else "patch"
+    if bump not in {"patch", "minor", "major"}:
         raise SystemExit(__doc__)
-    version = sys.argv[1]
-    if git("status", "--porcelain").strip():
-        raise SystemExit("commit or stash your changes first")
+    notes = args[1] if len(args) > 1 else DEFAULT_NOTES
 
-    set_json_version(TAURI_CONF, version)
-    set_json_version(PACKAGE_JSON, version)
-    set_cargo_version(version)
-    # Refresh Cargo.lock with the new workspace version.
-    subprocess.run(["cargo", "metadata", "--format-version", "1", "--quiet"], cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
+    missing = REQUIRED_SECRETS - set(gh("secret", "list", "--json", "name", "--jq", ".[].name").split())
+    if missing:
+        raise SystemExit(f"missing repository secrets: {', '.join(sorted(missing))} (see README, Publishing)")
 
-    git("add", TAURI_CONF, PACKAGE_JSON, CARGO_TOML, os.path.join(ROOT, "Cargo.lock"))
-    git("commit", "-m", f"Release {version}")
-    # Annotated, so `git push --follow-tags` sends it.
-    git("tag", "-a", f"v{version}", "-m", f"Game Maps {version}")
-    print(f"Tagged v{version}. Publish it with: git push --follow-tags")
+    gh("workflow", "run", WORKFLOW, "--ref", "master", "-f", f"bump={bump}", "-f", f"notes={notes}")
+    time.sleep(3)  # let GitHub register the run
+    url = gh("run", "list", "--workflow", WORKFLOW, "--limit", "1", "--json", "url", "--jq", ".[0].url").strip()
+    print(f"Release started ({bump}): {url}")
+    print("It takes about 15 minutes; installed apps update within 30 minutes after that.")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except subprocess.CalledProcessError as e:
+        sys.exit(f"gh {' '.join(e.cmd[1:])} failed:\n{e.stderr}")
