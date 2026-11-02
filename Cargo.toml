@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = ["crates/protocol", "crates/il2cpp", "crates/agent", "apps/overlay/src-tauri"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "UNLICENSED"
+publish = false
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+windows = "0.62"
+game-maps-protocol = { path = "crates/protocol" }
+il2cpp = { path = "crates/il2cpp" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+# Keep unwinding: the agent runs inside the game and must catch its own panics
+# at every FFI boundary instead of aborting the host process.
