@@ -2,7 +2,7 @@
 
     python -I tools/release.py                 # 0.1.0 -> 0.1.1
     python -I tools/release.py minor "Added a mini-map for caves"
-    python -I tools/release.py major "..."
+    python -I tools/release.py 1.0.0 "..."         # an exact version
 
 This starts the Release workflow on GitHub (same as pressing "Run workflow" on the
 Actions tab): it bumps the version, runs the tests, builds and signs the installer,
@@ -11,6 +11,7 @@ changes to master first. Needs the GitHub CLI, logged in.
 """
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import time
@@ -27,7 +28,7 @@ def gh(*args: str) -> str:
 def main() -> None:
     args = sys.argv[1:]
     bump = args[0] if args else "patch"
-    if bump not in {"patch", "minor", "major"}:
+    if bump not in {"patch", "minor", "major"} and not re.fullmatch(r"\d+\.\d+\.\d+", bump):
         raise SystemExit(__doc__)
     notes = args[1] if len(args) > 1 else DEFAULT_NOTES
 
