@@ -5,12 +5,15 @@
 //! a zip whose root mirrors `games/<id>/` (minus `game.json`, which ships with the
 //! app) and is installed into `<app data>/maps/<id>/`, next to a `pack.json` recording
 //! its version. `tools/mappack/publish.py` builds and uploads packs.
+//!
+//! Every supported game's pack is installed and kept on the latest published version:
+//! checked at startup, every 30 minutes, and when a game starts.
 
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -20,6 +23,10 @@ pub const MANIFEST_URL: &str = "https://github.com/HYPExMon5ter/game-maps/releas
 /// Marks a finished install; written last, so a folder without it is incomplete.
 const PACK_FILE: &str = "pack.json";
 pub const EVENT: &str = "map-packs";
+/// How often published maps are checked while the app runs.
+const CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);
+/// A game start re-checks unless the last check is more recent than this.
+const GAME_START_MAX_AGE: Duration = Duration::from_secs(2 * 60);
 
 #[derive(Debug, Clone, Deserialize)]
 struct Manifest {
@@ -69,7 +76,7 @@ pub struct MapPacks {
     dir: PathBuf,
     client: reqwest::Client,
     statuses: Mutex<HashMap<String, PackStatus>>,
-    manifest: Mutex<Option<Manifest>>,
+    last_refresh: Mutex<Option<Instant>>,
 }
 
 impl MapPacks {
@@ -89,7 +96,7 @@ impl MapPacks {
             .connect_timeout(Duration::from_secs(15))
             .build()
             .expect("http client");
-        Self { dir, client, statuses: Mutex::new(statuses), manifest: Mutex::new(None) }
+        Self { dir, client, statuses: Mutex::new(statuses), last_refresh: Mutex::new(None) }
     }
 
     pub fn dir(&self) -> &Path {
@@ -100,10 +107,6 @@ impl MapPacks {
         let mut list: Vec<_> = self.statuses.lock().unwrap().values().cloned().collect();
         list.sort_by(|a, b| a.game_id.cmp(&b.game_id));
         list
-    }
-
-    fn status(&self, id: &str) -> Option<PackStatus> {
-        self.statuses.lock().unwrap().get(id).cloned()
     }
 
     fn edit(&self, app: &AppHandle, id: &str, f: impl FnOnce(&mut PackStatus)) {
@@ -127,33 +130,28 @@ impl MapPacks {
                 status.available = manifest.packs.get(id).cloned();
             }
         }
-        *self.manifest.lock().unwrap() = Some(manifest);
+        *self.last_refresh.lock().unwrap() = Some(Instant::now());
         let _ = app.emit(EVENT, self.statuses());
         Ok(())
     }
 
-    /// Installs a game's pack if it isn't installed yet (e.g. the game just started).
-    pub async fn ensure_installed(&self, app: &AppHandle, id: &str) {
-        let Some(status) = self.status(id) else { return };
-        if status.installed.is_some() || status.downloading.is_some() {
-            return;
-        }
-        if self.manifest.lock().unwrap().is_none() {
+    /// Fetches the pack list (unless it was fetched within `max_age`), then installs
+    /// every published pack that is missing or outdated.
+    pub async fn sync(&self, app: &AppHandle, max_age: Duration) {
+        let fresh = self.last_refresh.lock().unwrap().is_some_and(|t| t.elapsed() < max_age);
+        if !fresh {
             if let Err(e) = self.refresh(app).await {
-                self.edit(app, id, |s| s.error = Some(e));
+                log::info!("{e}");
                 return;
             }
         }
-        if let Err(e) = self.install(app, id).await {
-            log::warn!("map pack {id}: {e}");
-        }
-    }
-
-    /// Updates every installed pack that has a newer version.
-    pub async fn update_installed(&self, app: &AppHandle) {
-        let outdated: Vec<String> =
-            self.statuses().into_iter().filter(|s| s.update_available() && s.downloading.is_none()).map(|s| s.game_id).collect();
-        for id in outdated {
+        let wanted: Vec<String> = self
+            .statuses()
+            .into_iter()
+            .filter(|s| s.downloading.is_none() && s.available.is_some() && (s.installed.is_none() || s.update_available()))
+            .map(|s| s.game_id)
+            .collect();
+        for id in wanted {
             if let Err(e) = self.install(app, &id).await {
                 log::warn!("map pack {id}: {e}");
             }
@@ -284,17 +282,18 @@ fn retry(mut op: impl FnMut() -> std::io::Result<()>) -> std::io::Result<()> {
 /// Checks for pack updates at startup and every few hours, installing updates to
 /// packs the user already has.
 pub fn start_background(app: AppHandle) {
-    const INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
     tauri::async_runtime::spawn(async move {
         loop {
-            let packs = app.state::<MapPacks>();
-            match packs.refresh(&app).await {
-                Ok(()) => packs.update_installed(&app).await,
-                Err(e) => log::info!("{e}"),
-            }
-            tokio::time::sleep(INTERVAL).await;
+            app.state::<MapPacks>().sync(&app, Duration::ZERO).await;
+            tokio::time::sleep(CHECK_INTERVAL).await;
         }
     });
+}
+
+/// Checks right away when a game starts, so a map published minutes ago is there.
+pub fn sync_soon(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move { app.state::<MapPacks>().sync(&app, GAME_START_MAX_AGE).await });
 }
 
 #[cfg(test)]

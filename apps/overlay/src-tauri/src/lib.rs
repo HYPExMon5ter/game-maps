@@ -220,7 +220,7 @@ fn get_update_state(updates: State<'_, Updates>) -> UpdateState {
 
 #[tauri::command]
 async fn check_for_updates(app: AppHandle, updates: State<'_, Updates>) -> Result<(), String> {
-    updates.check(&app).await
+    updates.check(&app, true).await
 }
 
 #[tauri::command]
@@ -326,6 +326,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::Builder::new().args([BACKGROUND_ARG]).build())
         .manage(OverlayState::default())
         .manage(Updates::default())
@@ -361,13 +362,14 @@ pub fn run() {
             mappacks::start_background(handle.clone());
             updates::start_background(handle.clone());
 
-            // Fetch a game's map as soon as the game is detected, if it's missing.
+            // A game just started: pick up a map published since the last check.
             let h = handle.clone();
             app.listen_any("agent-status", move |event| {
-                let Ok(status) = serde_json::from_str::<serde_json::Value>(event.payload()) else { return };
-                let Some(game_id) = status.get("game_id").and_then(|v| v.as_str()).map(str::to_owned) else { return };
-                let h = h.clone();
-                tauri::async_runtime::spawn(async move { h.state::<MapPacks>().ensure_installed(&h, &game_id).await });
+                let status = serde_json::from_str::<serde_json::Value>(event.payload()).unwrap_or_default();
+                let started = matches!(status.get("state").and_then(|v| v.as_str()), Some("connecting" | "ready"));
+                if started {
+                    mappacks::sync_soon(&h);
+                }
             });
 
             build_tray(app)?;

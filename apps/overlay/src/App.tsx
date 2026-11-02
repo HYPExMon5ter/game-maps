@@ -10,6 +10,9 @@ import type { Hotkey } from './lib/protocol'
 import { FullMap } from './ui/FullMap'
 import { COMPASS_HEIGHT, Hud, HUD_GAP } from './ui/Hud'
 
+/** A new map pack arrived while the full map was open. */
+let reloadWhenClosed = false
+
 function useBackendSync() {
   useEffect(() => {
     const { setStatus, setMode, setSnapshot, setSettings, setMapHotkeys } = useStore.getState()
@@ -20,14 +23,18 @@ function useBackendSync() {
       events.snapshot((s) => setSnapshot(s.local || s.others.length ? s : null)),
       events.overlayMode(async (mode) => {
         setMode(mode)
+        if (mode !== 'open' && reloadWhenClosed) return window.location.reload()
         // Snapshots are only streamed while visible; catch up immediately.
         if (mode !== 'hidden') setSnapshot(await backend.lastSnapshot())
         if (mode === 'open') requestAnimationFrame(() => mapHandle.current?.resize())
       }),
       startAgentLogBuffer(),
-      // New map data for the shown game: reload so tiles, icons and pins all switch over.
+      // New map data for the shown game: reload so tiles, icons and pins all switch
+      // over, but not while the user is looking at the map.
       events.mapPackInstalled((gameId) => {
-        if (useStore.getState().game?.id === gameId) window.location.reload()
+        if (useStore.getState().game?.id !== gameId) return
+        if (useStore.getState().mode === 'open') reloadWhenClosed = true
+        else window.location.reload()
       }),
     ]
     let stopPersist: (() => void) | null = null

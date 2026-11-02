@@ -1,15 +1,18 @@
-"""Build a game's map pack and publish it for the app to download.
+"""Publish map data so every installed Game Maps picks it up automatically.
 
 A map pack is everything under games/<id>/ that is generated from the game (tiles,
 icons, pins), zipped. The app ships game.json itself. Packs live on the `maps` GitHub
 release (a pre-release, so it never becomes the app's "latest" release), next to
-maps.json, which lists the current pack per game.
+maps.json, which lists the current pack per game. Installed apps check it every 30
+minutes and whenever a game starts, and install new packs on their own.
 
 Usage (needs the GitHub CLI, logged in):
-    python -I tools/mappack/publish.py --game sons-of-the-forest
-    python -I tools/mappack/publish.py --game sons-of-the-forest --dry-run   # build only
+    python -I tools/mappack/publish.py sons-of-the-forest
+    python -I tools/mappack/publish.py --all
+    python -I tools/mappack/publish.py sons-of-the-forest --dry-run   # build only
 
-Installed apps pick up the new pack within a few hours (or at their next start).
+Packs are built reproducibly, so a game whose map data hasn't changed is skipped
+(users don't re-download identical maps). Use --force to publish anyway.
 """
 from __future__ import annotations
 
@@ -24,6 +27,7 @@ import tempfile
 import zipfile
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+GAMES_DIR = os.path.join(ROOT, "games")
 DEFAULT_REPO = "HYPExMon5ter/game-maps"
 RELEASE_TAG = "maps"
 MANIFEST = "maps.json"
@@ -31,6 +35,8 @@ MANIFEST = "maps.json"
 EXCLUDE = {"game.json", "preview.png", "preview-caves.png"}
 # Already compressed; storing them avoids wasted CPU for no gain.
 STORED_EXTENSIONS = {".webp", ".png", ".jpg", ".jpeg"}
+# Fixed entry timestamp, so identical files always produce an identical zip.
+ZIP_DATE = (1980, 1, 1, 0, 0, 0)
 
 
 def pack_files(game_dir: str) -> list[tuple[str, str]]:
@@ -54,8 +60,11 @@ def build_pack(game_dir: str, out_path: str) -> dict:
     with zipfile.ZipFile(out_path, "w") as zf:
         for path, rel in files:
             ext = os.path.splitext(rel)[1].lower()
-            compress = zipfile.ZIP_STORED if ext in STORED_EXTENSIONS else zipfile.ZIP_DEFLATED
-            zf.write(path, rel, compress_type=compress)
+            info = zipfile.ZipInfo(rel, date_time=ZIP_DATE)
+            info.compress_type = zipfile.ZIP_STORED if ext in STORED_EXTENSIONS else zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            with open(path, "rb") as f:
+                zf.writestr(info, f.read())
     digest = hashlib.sha256()
     with open(out_path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
@@ -72,7 +81,7 @@ def fetch_manifest(repo: str) -> dict:
     if gh("release", "view", RELEASE_TAG, "--repo", repo, check=False).returncode != 0:
         print(f"creating release '{RELEASE_TAG}' on {repo}")
         gh("release", "create", RELEASE_TAG, "--repo", repo, "--prerelease", "--title", "Map data",
-           "--notes", "Map packs downloaded by the Game Maps app. Managed by tools/mappack/publish.py.")
+           "--notes", "Map data downloaded automatically by the Game Maps app. Managed by tools/mappack/publish.py.")
         return {"packs": {}}
     res = gh("release", "download", RELEASE_TAG, "--repo", repo, "--pattern", MANIFEST, "--output", "-", check=False)
     if res.returncode != 0 or not res.stdout.strip():
@@ -80,43 +89,77 @@ def fetch_manifest(repo: str) -> dict:
     return json.loads(res.stdout)
 
 
+def upload_manifest(repo: str, manifest: dict) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, MANIFEST)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2)
+        gh("release", "upload", RELEASE_TAG, path, "--repo", repo, "--clobber")
+
+
+def prune_old_packs(repo: str, game: str, keep: set[str]) -> None:
+    """Deletes a game's older pack zips. The one replaced last is kept, so apps that
+    were mid-download when the manifest changed can still finish."""
+    names = gh("release", "view", RELEASE_TAG, "--repo", repo, "--json", "assets", "--jq", ".assets[].name").stdout.split()
+    for name in names:
+        if name.startswith(f"{game}-") and name.endswith(".zip") and name not in keep:
+            gh("release", "delete-asset", RELEASE_TAG, name, "--repo", repo, "--yes")
+            print(f"  removed old pack {name}")
+
+
+def all_games() -> list[str]:
+    return sorted(d for d in os.listdir(GAMES_DIR) if os.path.isfile(os.path.join(GAMES_DIR, d, "game.json")))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--game", required=True, help="game id (folder under games/)")
-    ap.add_argument("--version", help="pack version (default: current UTC time, e.g. 2026.11.02.1530)")
+    ap.add_argument("games", nargs="*", help="game ids (folders under games/)")
+    ap.add_argument("--all", action="store_true", help="publish every game that has map data")
     ap.add_argument("--repo", default=DEFAULT_REPO)
-    ap.add_argument("--dry-run", action="store_true", help="build the pack without uploading")
+    ap.add_argument("--force", action="store_true", help="publish even if the map data is unchanged")
+    ap.add_argument("--dry-run", action="store_true", help="build packs without uploading")
     args = ap.parse_args()
 
-    game_dir = os.path.join(ROOT, "games", args.game)
-    if not os.path.isfile(os.path.join(game_dir, "game.json")):
-        raise SystemExit(f"unknown game: {args.game}")
-    version = args.version or dt.datetime.now(dt.timezone.utc).strftime("%Y.%m.%d.%H%M")
+    if args.all:
+        games = [g for g in all_games() if os.path.isdir(os.path.join(GAMES_DIR, g, "tiles"))]
+    else:
+        games = args.games
+        if not games:
+            ap.error(f"name a game ({', '.join(all_games())}) or pass --all")
+        unknown = [g for g in games if g not in all_games()]
+        if unknown:
+            raise SystemExit(f"unknown game: {', '.join(unknown)} (known: {', '.join(all_games())})")
+
     out_dir = os.path.join(ROOT, "target", "mappacks")
     os.makedirs(out_dir, exist_ok=True)
-    zip_name = f"{args.game}-{version}.zip"
-    zip_path = os.path.join(out_dir, zip_name)
+    manifest = None if args.dry_run else fetch_manifest(args.repo)
+    version = dt.datetime.now(dt.timezone.utc).strftime("%Y.%m.%d.%H%M%S")
 
-    info = build_pack(game_dir, zip_path)
-    print(f"built {zip_path}: {info['files']} files, {info['size'] / 1e6:.1f} MB")
-    if args.dry_run:
-        return
-
-    manifest = fetch_manifest(args.repo)
-    manifest.setdefault("packs", {})[args.game] = {
-        "version": version,
-        "url": f"https://github.com/{args.repo}/releases/download/{RELEASE_TAG}/{zip_name}",
-        "sha256": info["sha256"],
-        "size": info["size"],
-    }
-    # Upload the pack before the manifest that points to it.
-    gh("release", "upload", RELEASE_TAG, zip_path, "--repo", args.repo, "--clobber")
-    with tempfile.TemporaryDirectory() as tmp:
-        manifest_path = os.path.join(tmp, MANIFEST)
-        with open(manifest_path, "w", encoding="utf-8") as f:
-            json.dump(manifest, f, indent=2)
-        gh("release", "upload", RELEASE_TAG, manifest_path, "--repo", args.repo, "--clobber")
-    print(f"published {args.game} {version}")
+    for game in games:
+        zip_name = f"{game}-{version}.zip"
+        zip_path = os.path.join(out_dir, zip_name)
+        info = build_pack(os.path.join(GAMES_DIR, game), zip_path)
+        print(f"{game}: {info['files']} files, {info['size'] / 1e6:.1f} MB")
+        if manifest is None:
+            print(f"  built {zip_path}")
+            continue
+        current = manifest.setdefault("packs", {}).get(game)
+        if current and current.get("sha256") == info["sha256"] and not args.force:
+            print("  unchanged since the last publish, skipped")
+            os.remove(zip_path)
+            continue
+        # Upload the pack before the manifest that points to it.
+        gh("release", "upload", RELEASE_TAG, zip_path, "--repo", args.repo, "--clobber")
+        manifest["packs"][game] = {
+            "version": version,
+            "url": f"https://github.com/{args.repo}/releases/download/{RELEASE_TAG}/{zip_name}",
+            "sha256": info["sha256"],
+            "size": info["size"],
+        }
+        upload_manifest(args.repo, manifest)
+        keep = {zip_name} | ({current["url"].rsplit("/", 1)[-1]} if current else set())
+        prune_old_packs(args.repo, game, keep)
+        print(f"  published version {version}")
 
 
 if __name__ == "__main__":

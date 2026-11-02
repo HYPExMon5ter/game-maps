@@ -26,6 +26,23 @@ class BuildPackTest(unittest.TestCase):
                 self.assertEqual(info["sha256"], hashlib.sha256(f.read()).hexdigest())
             self.assertEqual(info["size"], os.path.getsize(out))
 
+    def test_same_files_give_same_pack(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game = os.path.join(tmp, "game")
+            os.makedirs(os.path.join(game, "tiles"))
+            tile = os.path.join(game, "tiles", "a.webp")
+            with open(tile, "wb") as f:
+                f.write(b"x")
+            first = publish.build_pack(game, os.path.join(tmp, "1.zip"))
+            os.utime(tile, (0, 1_000_000_000))  # a newer timestamp alone isn't a change
+            second = publish.build_pack(game, os.path.join(tmp, "2.zip"))
+            self.assertEqual(first["sha256"], second["sha256"])
+
+            with open(tile, "wb") as f:
+                f.write(b"y")
+            third = publish.build_pack(game, os.path.join(tmp, "3.zip"))
+            self.assertNotEqual(first["sha256"], third["sha256"])
+
     def test_requires_tiles(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(SystemExit):
