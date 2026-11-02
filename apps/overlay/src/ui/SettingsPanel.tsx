@@ -1,12 +1,12 @@
 import { X } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { agentLogs } from '../lib/agentLogs'
 import { backend } from '../lib/backend'
 import { MAX_UI_SCALE, MIN_UI_SCALE, useUiScale } from '../lib/uiScale'
-import { hotkeyLabel, vkFromCode } from '../lib/keys'
-import type { AgentLog, Corner } from '../lib/protocol'
-import { useStore } from '../state/store'
+import type { AgentLog, Corner, Hotkey } from '../lib/protocol'
+import { selectMapHotkey, useStore } from '../state/store'
 import { Button, Slider, Toggle } from './controls'
+import { HotkeyInput } from './HotkeyInput'
 
 const pct = (v: number) => `${Math.round(v * 100)}%`
 const CORNERS: { id: Corner; label: string }[] = [
@@ -67,35 +67,25 @@ function InterfaceScale() {
 
 function HotkeyField() {
   const game = useStore((s) => s.game)
-  const hotkey = useStore((s) => s.settings.hotkey)
-  const setSettings = useStore((s) => s.setSettings)
-  const [capturing, setCapturing] = useState(false)
-  const current = hotkey ?? game?.defaultHotkeys[0] ?? null
-
-  useEffect(() => {
-    if (!capturing) return
-    const onKey = (e: KeyboardEvent) => {
-      e.preventDefault()
-      e.stopPropagation()
-      if (e.key === 'Escape') return setCapturing(false)
-      const vk = vkFromCode(e.code)
-      if (vk === null) return
-      setSettings({ hotkey: { action: 'toggle_map', vk, ctrl: e.ctrlKey, shift: e.shiftKey, alt: e.altKey } })
-      setCapturing(false)
-    }
-    window.addEventListener('keydown', onKey, { capture: true })
-    return () => window.removeEventListener('keydown', onKey, { capture: true })
-  }, [capturing, setSettings])
+  const current = useStore(selectMapHotkey)
+  const isDefault = useStore((s) => !s.game || !s.mapHotkeys[s.game.id])
+  const setMapHotkeys = useStore((s) => s.setMapHotkeys)
+  const notify = useStore((s) => s.notify)
+  const onChange = useCallback(
+    (hotkey: Hotkey | null) => {
+      if (!game) return
+      backend
+        .setMapHotkey(game.id, hotkey)
+        .then((saved) => setMapHotkeys(saved.map_hotkeys))
+        .catch((e: unknown) => notify(`Could not change the key: ${String(e)}`, 'error'))
+    },
+    [game, setMapHotkeys, notify],
+  )
 
   return (
     <div className="flex items-center justify-between gap-3 py-1">
       <span className="text-[13px]">Open / close map</span>
-      <div className="flex gap-1.5">
-        <Button tone={capturing ? 'primary' : 'default'} onClick={() => setCapturing(true)}>
-          {capturing ? 'Press a key…' : current ? hotkeyLabel(current) : 'Not set'}
-        </Button>
-        {hotkey && <Button onClick={() => setSettings({ hotkey: null })}>Reset</Button>}
-      </div>
+      <HotkeyInput value={current} isDefault={isDefault} onChange={onChange} />
     </div>
   )
 }
@@ -110,6 +100,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
+  const game = useStore((s) => s.game)
   const settings = useStore((s) => s.settings)
   const setSettings = useStore((s) => s.setSettings)
   const setHud = useStore((s) => s.setHud)
@@ -132,7 +123,9 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
 
       <Section title="Controls">
         <HotkeyField />
-        <p className="text-[11px] text-ink-faint">The key still reaches the game, so your in-game GPS keeps working.</p>
+        <p className="text-[11px] text-ink-faint">
+          Applies to {game?.name ?? 'this game'} only. The key still reaches the game, so your in-game GPS keeps working.
+        </p>
       </Section>
 
       <Section title="Full map">

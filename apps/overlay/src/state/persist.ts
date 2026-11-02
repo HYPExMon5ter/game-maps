@@ -2,6 +2,7 @@
 // the Tauri store plugin. Writes are debounced by the plugin's autosave.
 
 import { load, type Store } from '@tauri-apps/plugin-store'
+import type { Hotkey } from '../lib/protocol'
 import { DEFAULT_SETTINGS, EMPTY_USER_DATA, useStore, type GameUserData, type Settings } from './store'
 
 let store: Store | null = null
@@ -11,10 +12,20 @@ async function getStore(): Promise<Store> {
   return store
 }
 
-export async function loadSettings(): Promise<Settings> {
+/**
+ * Loads UI settings. Also returns the map hotkey older versions stored here (one for
+ * all games); it now lives per game in the backend's settings.
+ */
+export async function loadSettings(): Promise<{ settings: Settings; legacyHotkey: Hotkey | null }> {
   const s = await getStore()
-  const saved = (await s.get<Partial<Settings>>('settings')) ?? {}
-  return { ...DEFAULT_SETTINGS, ...saved, hud: { ...DEFAULT_SETTINGS.hud, ...saved.hud } }
+  const { hotkey, ...saved } = (await s.get<Partial<Settings> & { hotkey?: Hotkey | null }>('settings')) ?? {}
+  return { settings: { ...DEFAULT_SETTINGS, ...saved, hud: { ...DEFAULT_SETTINGS.hud, ...saved.hud } }, legacyHotkey: hotkey ?? null }
+}
+
+/** Drops the old all-games hotkey once it has been moved to the backend. */
+export async function clearLegacyHotkey(): Promise<void> {
+  const s = await getStore()
+  await s.set('settings', useStore.getState().settings)
 }
 
 export async function loadUserData(gameId: string): Promise<GameUserData> {

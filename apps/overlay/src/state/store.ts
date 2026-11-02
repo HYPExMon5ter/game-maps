@@ -21,8 +21,6 @@ export interface Settings {
   /** Interface scale; null picks one from the screen size. */
   uiScale: number | null
   followPlayer: boolean
-  /** User override for the toggle hotkey; null uses the game's default. */
-  hotkey: Hotkey | null
   hud: HudSettings
 }
 
@@ -40,7 +38,6 @@ export const DEFAULT_SETTINGS: Settings = {
   panelScale: 1,
   uiScale: null,
   followPlayer: false,
-  hotkey: null,
   hud: { minimap: false, corner: 'top_right', size: 300, opacity: 0.92, rotateWithPlayer: false },
 }
 
@@ -55,6 +52,8 @@ interface AppState {
   gamePins: Pin[]
   user: GameUserData
   settings: Settings
+  /** Per-game map hotkey overrides (owned by the backend, see `set_map_hotkey`). */
+  mapHotkeys: Record<string, Hotkey>
   selectedPinId: string | null
   tracked: TrackTarget | null
   query: string
@@ -68,6 +67,7 @@ interface AppState {
   setSnapshot(s: WorldSnapshot | null): void
   setGame(game: GameDefinition, pins: Pin[], user: GameUserData): void
   setSettings(patch: Partial<Settings>): void
+  setMapHotkeys(mapHotkeys: Record<string, Hotkey>): void
   setHud(patch: Partial<HudSettings>): void
   selectPin(id: string | null): void
   setTracked(t: TrackTarget | null): void
@@ -94,6 +94,7 @@ export const useStore = create<AppState>((set) => ({
   gamePins: [],
   user: EMPTY_USER_DATA,
   settings: DEFAULT_SETTINGS,
+  mapHotkeys: {},
   selectedPinId: null,
   tracked: null,
   query: '',
@@ -106,6 +107,7 @@ export const useStore = create<AppState>((set) => ({
   setSnapshot: (snapshot) => set({ snapshot }),
   setGame: (game, gamePins, user) => set({ game, map: game.maps[0] ?? null, gamePins, user, selectedPinId: null }),
   setSettings: (patch) => set((s) => ({ settings: { ...s.settings, ...patch } })),
+  setMapHotkeys: (mapHotkeys) => set({ mapHotkeys }),
   setHud: (patch) => set((s) => ({ settings: { ...s.settings, hud: { ...s.settings.hud, ...patch } } })),
   selectPin: (selectedPinId) => set({ selectedPinId }),
   setTracked: (tracked) => set({ tracked }),
@@ -164,6 +166,12 @@ export function isCategoryVisible(category: Category | undefined, user: GameUser
 
 export function selectViewLayer(s: Pick<AppState, 'viewLayerOverride' | 'snapshot'>): WorldLayer {
   return s.viewLayerOverride ?? (s.snapshot?.local?.layer === 'caves' ? 'caves' : 'surface')
+}
+
+/** The key that opens the current game's map: the user's choice or the game's default. */
+export function selectMapHotkey(s: Pick<AppState, 'game' | 'mapHotkeys'>): Hotkey | null {
+  if (!s.game) return null
+  return s.mapHotkeys[s.game.id] ?? s.game.defaultHotkeys[0] ?? null
 }
 
 /** Game pins plus the user's custom pins. */

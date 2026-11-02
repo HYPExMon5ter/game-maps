@@ -1,0 +1,58 @@
+# Builds the Windows installer and publishes it as a GitHub release when a version
+# tag is pushed (see tools/release.py). Installed apps update themselves from the
+# release's latest.json, which is signed with TAURI_SIGNING_PRIVATE_KEY.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check tag matches app version
+        shell: bash
+        run: |
+          version=$(node -p "require('./apps/overlay/src-tauri/tauri.conf.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match app version $version (use tools/release.py)"
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install frontend dependencies
+        working-directory: apps/overlay
+        run: bun install --frozen-lockfile
+
+      - name: Test
+        shell: bash
+        run: |
+          cargo test --workspace
+          python -I -m unittest discover -s tools/pins
+          python -I -m unittest discover -s tools/mappack
+          (cd apps/overlay && bun run test)
+
+      - name: Build and publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: apps/overlay
+          tauriScript: bun run tauri
+          tagName: ${{ github.ref_name }}
+          releaseName: Game Maps ${{ github.ref_name }}
+          releaseBody: Download and run the `Game Maps_..._x64-setup.exe` below. Installed copies update automatically.
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true

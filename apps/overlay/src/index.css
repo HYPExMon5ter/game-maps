@@ -30,6 +30,17 @@ body,
   user-select: none;
 }
 
+/* The launcher is a regular, opaque window. */
+html:has(body.launcher),
+body.launcher,
+body.launcher #root {
+  background: var(--color-panel-solid);
+}
+
+body.launcher #root {
+  overflow-y: auto;
+}
+
 .glass {
   background: var(--color-panel);
   backdrop-filter: blur(14px) saturate(1.2);
