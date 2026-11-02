@@ -52,6 +52,8 @@ jobs:
       - name: Test
         shell: bash
         run: |
+          # The app bundles the agent DLL, and its build checks that the file exists.
+          cargo build --release -p game-maps-agent
           cargo test --workspace
           python -I -m unittest discover -s tools/pins
           python -I -m unittest discover -s tools/mappack
