@@ -4,16 +4,19 @@ import { backend, events } from './lib/backend'
 import { loadGame } from './lib/game'
 import { matchesHotkey } from './lib/keys'
 import { mapHandle } from './map/handle'
-import { loadSettings, loadUserData, startPersisting } from './state/persist'
-import { useStore } from './state/store'
+import { clearLegacyHotkey, loadSettings, loadUserData, startPersisting } from './state/persist'
+import { selectMapHotkey, useStore } from './state/store'
+import type { Hotkey } from './lib/protocol'
 import { FullMap } from './ui/FullMap'
 import { COMPASS_HEIGHT, Hud, HUD_GAP } from './ui/Hud'
 
 function useBackendSync() {
   useEffect(() => {
-    const { setStatus, setMode, setSnapshot, setSettings } = useStore.getState()
+    const { setStatus, setMode, setSnapshot, setSettings, setMapHotkeys } = useStore.getState()
     const cleanups: Promise<() => void>[] = [
       events.status(setStatus),
+      // Hotkeys may be changed from the launcher too.
+      events.appSettings((s) => setMapHotkeys(s.map_hotkeys)),
       events.snapshot((s) => setSnapshot(s.local || s.others.length ? s : null)),
       events.overlayMode(async (mode) => {
         setMode(mode)
@@ -22,11 +25,18 @@ function useBackendSync() {
         if (mode === 'open') requestAnimationFrame(() => mapHandle.current?.resize())
       }),
       startAgentLogBuffer(),
+      // New map data for the shown game: reload so tiles, icons and pins all switch over.
+      events.mapPackInstalled((gameId) => {
+        if (useStore.getState().game?.id === gameId) window.location.reload()
+      }),
     ]
     let stopPersist: (() => void) | null = null
     void (async () => {
-      setSettings(await loadSettings())
+      const [{ settings, legacyHotkey }, appSettings] = await Promise.all([loadSettings(), backend.appSettings()])
+      setSettings(settings)
+      setMapHotkeys(appSettings.map_hotkeys)
       stopPersist = startPersisting()
+      if (legacyHotkey) void migrateLegacyHotkey(legacyHotkey)
       setStatus(await backend.status())
       setMode(await backend.overlayMode())
       setSnapshot(await backend.lastSnapshot())
@@ -45,7 +55,7 @@ function useGameLoader() {
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      const id = detected ?? current ?? (await backend.listGames())[0]
+      const id = detected ?? current ?? (await backend.listGames())[0]?.id
       if (!id || id === current) return
       try {
         const [{ game, pins }, user] = await Promise.all([loadGame(id), loadUserData(id)])
@@ -60,14 +70,18 @@ function useGameLoader() {
   }, [detected, current])
 }
 
-function useHotkeySync() {
-  const hotkey = useStore((s) => s.settings.hotkey)
-  const game = useStore((s) => s.game)
-  const connected = useStore((s) => s.status?.state === 'connected')
-  useEffect(() => {
-    const hotkeys = hotkey ? [hotkey] : (game?.defaultHotkeys ?? [])
-    if (hotkeys.length) void backend.setHotkeys(hotkeys)
-  }, [hotkey, game, connected])
+/**
+ * Older versions kept one map hotkey for all games in the UI settings. Applies it to
+ * every game without its own key, once (the UI settings no longer store it).
+ */
+async function migrateLegacyHotkey(hotkey: Hotkey) {
+  const [games, current] = await Promise.all([backend.listGames(), backend.appSettings()])
+  let latest = current
+  for (const game of games) {
+    if (!latest.map_hotkeys[game.id]) latest = await backend.setMapHotkey(game.id, hotkey)
+  }
+  useStore.getState().setMapHotkeys(latest.map_hotkeys)
+  await clearLegacyHotkey()
 }
 
 /** Keeps the backend's HUD window geometry in line with what the HUD shows. */
@@ -95,8 +109,7 @@ function useOverlayKeys() {
         document.getElementById('pin-search')?.focus()
         return
       }
-      const { settings, game } = useStore.getState()
-      const hotkey = settings.hotkey ?? game?.defaultHotkeys[0]
+      const hotkey = selectMapHotkey(useStore.getState())
       if (e.key === 'Escape' || (hotkey && matchesHotkey(e, hotkey))) {
         e.preventDefault()
         void backend.closeOverlay()
@@ -110,7 +123,6 @@ function useOverlayKeys() {
 export default function App() {
   useBackendSync()
   useGameLoader()
-  useHotkeySync()
   useHudSync()
   useOverlayKeys()
   const mode = useStore((s) => s.mode)

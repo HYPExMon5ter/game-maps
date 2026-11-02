@@ -2,6 +2,7 @@
   "id": "sons-of-the-forest",
   "name": "Sons of the Forest",
   "process": "SonsOfTheForest.exe",
+  "steamAppId": 1326470,
   "engine": "unity-il2cpp",
   "unitsPerMeter": 1,
   "defaultHotkeys": [

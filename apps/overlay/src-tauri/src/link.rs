@@ -1,5 +1,9 @@
 //! Connection to the in-game agent: detect a supported game, inject the agent if it
 //! isn't loaded yet, then relay messages between the agent and the UI.
+//!
+//! Games set to automatic hooking are connected as soon as they start; manual games
+//! wait for [`AgentLink::request_connect`]. [`AgentLink::disconnect`] unloads the agent
+//! and keeps it out until the user connects again or the game restarts.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -15,11 +19,12 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Notify};
 
 use crate::games::GameEntry;
 use crate::injector;
 use crate::overlay;
+use crate::settings::{self, HookMode};
 
 const SNAPSHOT_HZ: u32 = 30;
 const TELEPORT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -43,6 +48,8 @@ enum SessionEnd {
 #[serde(rename_all = "snake_case")]
 pub enum LinkState {
     WaitingForGame,
+    /// The game is running but not connected: hooking is manual, or the user disconnected.
+    Ready,
     Connecting,
     Connected,
     Error,
@@ -67,11 +74,29 @@ struct Inner {
     status: LinkStatus,
     snapshot: Option<WorldSnapshot>,
     sender: Option<mpsc::UnboundedSender<AppMessage>>,
-    hotkeys_override: Option<Vec<Hotkey>>,
+}
+
+/// Per-process hooking decisions.
+#[derive(Default)]
+struct Control {
+    /// Processes the agent was injected into (never injected twice).
+    injected: HashSet<u32>,
+    /// Processes the user disconnected from.
+    detached: HashSet<u32>,
+    connect_requested: Option<u32>,
+}
+
+enum ConnectError {
+    /// No agent in the game, and injecting wasn't allowed.
+    NotLoaded,
+    Failed(String),
 }
 
 pub struct AgentLink {
     inner: Mutex<Inner>,
+    control: Mutex<Control>,
+    /// Wakes the link loop early (connect requests, hook mode changes).
+    wake: Notify,
     pending: Mutex<HashMap<u32, oneshot::Sender<Result<(), String>>>>,
     pending_exports: Mutex<HashMap<u32, oneshot::Sender<Result<WorldExport, String>>>>,
     next_request: AtomicU32,
@@ -90,8 +115,9 @@ impl AgentLink {
                 status: LinkStatus { state: LinkState::WaitingForGame, game_id: None, pid: None, capabilities: None, message: None },
                 snapshot: None,
                 sender: None,
-                hotkeys_override: None,
             }),
+            control: Mutex::new(Control::default()),
+            wake: Notify::new(),
             pending: Mutex::new(HashMap::new()),
             pending_exports: Mutex::new(HashMap::new()),
             next_request: AtomicU32::new(1),
@@ -109,12 +135,55 @@ impl AgentLink {
         self.inner.lock().unwrap().snapshot.clone()
     }
 
-    pub fn set_hotkeys(&self, hotkeys: Vec<Hotkey>) {
-        let mut inner = self.inner.lock().unwrap();
-        if let Some(tx) = &inner.sender {
-            let _ = tx.send(AppMessage::SetHotkeys { hotkeys: hotkeys.clone() });
+    /// Connects to the running game now, injecting the agent if needed.
+    pub fn request_connect(&self) -> Result<(), String> {
+        let pid = self.status().pid.ok_or("the game is not running")?;
+        let mut control = self.control.lock().unwrap();
+        control.connect_requested = Some(pid);
+        // Retry after a failed injection (loading the same agent twice is harmless).
+        control.injected.remove(&pid);
+        drop(control);
+        self.wake.notify_one();
+        Ok(())
+    }
+
+    /// Unloads the agent from the running game and stays disconnected.
+    pub fn disconnect(&self) -> Result<(), String> {
+        let pid = self.status().pid.ok_or("the game is not running")?;
+        {
+            let mut control = self.control.lock().unwrap();
+            control.detached.insert(pid);
+            control.injected.remove(&pid);
+            control.connect_requested = None;
         }
-        inner.hotkeys_override = Some(hotkeys);
+        if let Some(tx) = &self.inner.lock().unwrap().sender {
+            let _ = tx.send(AppMessage::Detach);
+        }
+        self.wake.notify_one();
+        Ok(())
+    }
+
+    /// Re-evaluates hooking right away (e.g. after a hook mode change).
+    pub fn wake(&self) {
+        self.wake.notify_one();
+    }
+
+    async fn idle(&self, duration: Duration) {
+        tokio::select! {
+            _ = tokio::time::sleep(duration) => {}
+            _ = self.wake.notified() => {}
+        }
+    }
+
+    /// Sends new hotkeys to the agent if it is connected to `game_id`. New sessions
+    /// read them from the settings.
+    pub fn apply_hotkeys(&self, game_id: &str, hotkeys: Vec<Hotkey>) {
+        let inner = self.inner.lock().unwrap();
+        if let (Some(tx), Some(current)) = (&inner.sender, &inner.status.game_id) {
+            if current == game_id {
+                let _ = tx.send(AppMessage::SetHotkeys { hotkeys });
+            }
+        }
     }
 
     pub async fn teleport(&self, target: TeleportTarget) -> Result<(), String> {
@@ -176,51 +245,70 @@ impl AgentLink {
     }
 
     async fn run(self: Arc<Self>, app: AppHandle, config: LinkConfig) {
-        let mut injected: HashSet<u32> = HashSet::new();
         loop {
             let found = config.games.iter().find_map(|g| injector::find_process(&g.process).map(|pid| (g, pid)));
             let Some((game, pid)) = found else {
-                injected.clear();
+                *self.control.lock().unwrap() = Control::default();
                 self.set_status(&app, LinkStatus { state: LinkState::WaitingForGame, game_id: None, pid: None, capabilities: None, message: None });
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                self.idle(Duration::from_secs(2)).await;
                 continue;
             };
             overlay::set_game_window(&app, pid);
-            self.set_status(&app, LinkStatus {
-                state: LinkState::Connecting,
+            let status = |state: LinkState, message: Option<String>| LinkStatus {
+                state,
                 game_id: Some(game.id.clone()),
                 pid: Some(pid),
                 capabilities: None,
-                message: None,
-            });
+                message,
+            };
 
-            match self.connect(pid, &config, &mut injected).await {
+            let (may_inject, detached) = {
+                let mut control = self.control.lock().unwrap();
+                if control.connect_requested.take() == Some(pid) {
+                    control.detached.remove(&pid);
+                    (true, false)
+                } else {
+                    let detached = control.detached.contains(&pid);
+                    (!detached && settings::get(&app).hook_mode(&game.id) == HookMode::Auto, detached)
+                }
+            };
+            if detached {
+                // Don't even reattach to an agent that is still unloading.
+                self.set_status(&app, status(LinkState::Ready, Some("Disconnected".into())));
+                self.idle(Duration::from_secs(2)).await;
+                continue;
+            }
+            if may_inject {
+                self.set_status(&app, status(LinkState::Connecting, None));
+            }
+
+            match self.connect(pid, &config, may_inject).await {
                 Ok((pipe, expected_module)) => {
                     if self.session(&app, game, pid, pipe, &expected_module).await == SessionEnd::AgentReplaced {
                         // The outdated agent unloads itself; inject the current one next.
-                        injected.remove(&pid);
+                        self.control.lock().unwrap().injected.remove(&pid);
                     }
                 }
-                Err(message) => {
-                    self.set_status(&app, LinkStatus {
-                        state: LinkState::Error,
-                        game_id: Some(game.id.clone()),
-                        pid: Some(pid),
-                        capabilities: None,
-                        message: Some(message),
-                    });
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+                Err(ConnectError::NotLoaded) => {
+                    self.set_status(&app, status(LinkState::Ready, None));
+                    self.idle(Duration::from_secs(2)).await;
+                    continue;
+                }
+                Err(ConnectError::Failed(message)) => {
+                    self.set_status(&app, status(LinkState::Error, Some(message)));
+                    self.idle(Duration::from_secs(5)).await;
                 }
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
 
-    /// Connects to the agent in `pid`, injecting it first if needed. Also returns the
-    /// file name of the current agent build, to detect outdated loaded agents.
-    async fn connect(&self, pid: u32, config: &LinkConfig, injected: &mut HashSet<u32>) -> Result<(NamedPipeClient, String), String> {
+    /// Connects to the agent in `pid`, injecting it first if allowed and needed. Also
+    /// returns the file name of the current agent build, to detect outdated agents.
+    async fn connect(&self, pid: u32, config: &LinkConfig, may_inject: bool) -> Result<(NamedPipeClient, String), ConnectError> {
+        let failed = ConnectError::Failed;
         let name = pipe_name(pid);
-        let dll = injector::stage_agent(&config.agent_dll, &config.staging_dir).map_err(|e| e.to_string())?;
+        let dll = injector::stage_agent(&config.agent_dll, &config.staging_dir).map_err(|e| failed(e.to_string()))?;
         let expected = dll.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let mut deadline = Instant::now() + Duration::from_secs(2);
         loop {
@@ -228,23 +316,27 @@ impl AgentLink {
                 Ok(pipe) => return Ok((pipe, expected)),
                 Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) => {}
                 Err(e) if e.raw_os_error() == Some(ERROR_FILE_NOT_FOUND) => {
-                    if injected.insert(pid) {
+                    if !may_inject {
+                        return Err(ConnectError::NotLoaded);
+                    }
+                    let first = self.control.lock().unwrap().injected.insert(pid);
+                    if first {
                         let dll = dll.clone();
                         log::info!("injecting {} into pid {pid}", dll.display());
                         let res = tokio::task::spawn_blocking(move || injector::inject(pid, &dll))
                             .await
-                            .map_err(|e| e.to_string())?;
-                        res.map_err(|e| e.to_string())?;
+                            .map_err(|e| failed(e.to_string()))?;
+                        res.map_err(|e| failed(e.to_string()))?;
                         deadline = Instant::now() + CONNECT_AFTER_INJECT;
                     }
                 }
-                Err(e) => return Err(format!("cannot open agent pipe: {e}")),
+                Err(e) => return Err(failed(format!("cannot open agent pipe: {e}"))),
             }
             if Instant::now() > deadline {
-                return Err("the game is running but the agent did not start; is it still loading?".into());
+                return Err(failed("the game is running but the agent did not start; is it still loading?".into()));
             }
             if !injector::is_alive(pid) {
-                return Err("the game exited".into());
+                return Err(failed("the game exited".into()));
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
@@ -255,7 +347,7 @@ impl AgentLink {
         let mut lines = BufReader::new(read_half).lines();
         let (tx, mut rx) = mpsc::unbounded_channel::<AppMessage>();
 
-        let hotkeys = self.inner.lock().unwrap().hotkeys_override.clone().unwrap_or_else(|| game.hotkeys());
+        let hotkeys = settings::get(app).hotkeys(game);
         for msg in [
             AppMessage::Hello { protocol_version: PROTOCOL_VERSION },
             AppMessage::SetHotkeys { hotkeys },

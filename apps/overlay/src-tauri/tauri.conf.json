@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "bun run build",
+    "beforeBuildCommand": "cargo build --release -p game-maps-agent && bun run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -24,6 +24,18 @@
         "shadow": false,
         "visible": false,
         "focus": false
+      },
+      {
+        "label": "launcher",
+        "title": "Game Maps",
+        "url": "launcher.html",
+        "width": 560,
+        "height": 700,
+        "minWidth": 460,
+        "minHeight": 520,
+        "center": true,
+        "visible": false,
+        "backgroundColor": "#0e1216"
       }
     ],
     "security": {
@@ -33,10 +45,28 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
+    "publisher": "Game Maps",
+    "shortDescription": "In-game maps with live location",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
     "resources": {
-      "../../../games/": "games/",
+      "../../../games/sons-of-the-forest/game.json": "games/sons-of-the-forest/game.json",
       "../../../target/release/game_maps_agent.dll": "agent/game_maps_agent.dll"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFCRTEyQzYxRUQ2Q0JENTQKUldSVXZXenRZU3poR3hKRy91c3VFRGlxUGhTL3d4bHEzcFI1TkJrMm1NQ2ZaQjJvZURYRCtZSVEK",
+      "endpoints": ["https://github.com/HYPExMon5ter/game-maps/releases/latest/download/latest.json"],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

@@ -6,7 +6,7 @@ import { compassReading, formatDistance } from '../lib/compass'
 import { LAYER_LABELS } from '../lib/game'
 import { hotkeyLabel } from '../lib/keys'
 import { movers } from '../lib/movers'
-import { selectViewLayer, useStore } from '../state/store'
+import { selectMapHotkey, selectViewLayer, useStore } from '../state/store'
 import { Button, IconButton } from './controls'
 
 function StatusChip() {
@@ -15,7 +15,9 @@ function StatusChip() {
   const game = useStore((s) => s.game)
   let tone = 'bg-white/30'
   let text = 'Start the game to see your location'
-  if (status?.state === 'connecting') {
+  if (status?.state === 'ready') {
+    text = 'Not connected. Click Connect in the Game Maps window'
+  } else if (status?.state === 'connecting') {
     tone = 'bg-amber-300 animate-pulse'
     text = 'Connecting to game…'
   } else if (status?.state === 'error') {
@@ -87,7 +89,7 @@ export function TopBar({ onSettings, settingsOpen }: { onSettings: () => void; s
   const gameMap = useStore((s) => s.map)
   const follow = useStore((s) => s.settings.followPlayer)
   const hud = useStore((s) => s.settings.hud)
-  const hotkey = useStore((s) => s.settings.hotkey ?? s.game?.defaultHotkeys[0] ?? null)
+  const hotkey = useStore(selectMapHotkey)
   const setSettings = useStore((s) => s.setSettings)
   const setHud = useStore((s) => s.setHud)
   const hasLocation = useStore((s) => !!s.snapshot?.local)

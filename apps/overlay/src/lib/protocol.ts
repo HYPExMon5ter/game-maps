@@ -64,7 +64,8 @@ export type TeleportTarget =
   | { kind: 'position'; position: Vec3; snap_to_ground: boolean }
   | { kind: 'player'; id: string }
 
-export type LinkState = 'waiting_for_game' | 'connecting' | 'connected' | 'error'
+/** `ready`: the game is running but not connected (manual hooking, or disconnected). */
+export type LinkState = 'waiting_for_game' | 'ready' | 'connecting' | 'connected' | 'error'
 
 export interface LinkStatus {
   state: LinkState
