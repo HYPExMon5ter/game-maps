@@ -1,0 +1,40 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: input
+    id: game
+    attributes:
+      label: Game
+      placeholder: Sons of the Forest
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Game Maps version
+      description: Shown at the top of the Game Maps window.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: session
+    attributes:
+      label: Session
+      options:
+        - Single player
+        - Multiplayer (host)
+        - Multiplayer (joined)
+        - Not in game
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Click **Open logs** in the Game Maps window and drag the newest log file here.

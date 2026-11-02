@@ -27,6 +27,8 @@ jobs:
 
       - name: Rust
         run: |
+          # The app bundles the agent DLL, and its build checks that the file exists.
+          cargo build --release -p game-maps-agent
           cargo clippy --workspace --all-targets -- -D warnings
           cargo test --workspace
 

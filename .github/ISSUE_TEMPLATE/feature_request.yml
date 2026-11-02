@@ -1,0 +1,16 @@
+name: Feature or game request
+description: Suggest a feature or a game to support
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like?
+      description: For a new game, include its name and store page.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why?
+      description: What it would help you do.

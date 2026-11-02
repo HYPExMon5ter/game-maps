@@ -10,9 +10,8 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: Version bump
-        type: choice
-        options: [patch, minor, major]
+        description: Version (patch, minor, major, or exact like 1.0.0)
+        type: string
         default: patch
       notes:
         description: What changed (shown to users in the update prompt)
@@ -53,6 +52,8 @@ jobs:
       - name: Test
         shell: bash
         run: |
+          # The app bundles the agent DLL, and its build checks that the file exists.
+          cargo build --release -p game-maps-agent
           cargo test --workspace
           python -I -m unittest discover -s tools/pins
           python -I -m unittest discover -s tools/mappack
@@ -66,7 +67,8 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "Release $version"
+          # Nothing to commit when releasing the version already in the files.
+          git diff --quiet || git commit -am "Release $version"
           git tag -a "v$version" -m "Game Maps $version"
           git push origin HEAD:master "v$version"
 
