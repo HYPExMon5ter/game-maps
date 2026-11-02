@@ -1,0 +1,83 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif;
+  --color-panel: rgb(14 18 22 / 0.88);
+  --color-panel-solid: #0e1216;
+  --color-panel-raised: rgb(255 255 255 / 0.06);
+  --color-line: rgb(255 255 255 / 0.09);
+  --color-ink: #e8edf2;
+  --color-ink-dim: rgb(232 237 242 / 0.62);
+  --color-ink-faint: rgb(232 237 242 / 0.38);
+  --color-accent: #ffd166;
+  --color-accent-ink: #1c1606;
+  --color-live: #38bdf8;
+  --color-danger: #f87171;
+}
+
+/* The window is transparent: only panels paint. */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: transparent;
+  overflow: hidden;
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+.glass {
+  background: var(--color-panel);
+  backdrop-filter: blur(14px) saturate(1.2);
+  border: 1px solid var(--color-line);
+  box-shadow: 0 18px 50px rgb(0 0 0 / 0.45);
+}
+
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.18) transparent;
+}
+
+/* Player markers (created imperatively in map/players.ts). */
+.player-local {
+  filter: drop-shadow(0 1px 3px rgb(0 0 0 / 0.6));
+  pointer-events: none;
+}
+
+.player-remote {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+}
+
+.player-remote-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 2.5px solid #fff;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.6);
+}
+
+.player-remote-label {
+  margin-top: 3px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 0.68);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.maplibregl-map {
+  font-family: var(--font-sans);
+}
+
+.maplibregl-canvas:focus {
+  outline: none;
+}

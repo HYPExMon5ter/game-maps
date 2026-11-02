@@ -1,0 +1,11 @@
+[package]
+name = "il2cpp"
+description = "Name-based access to a running Unity IL2CPP runtime from inside the process"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }

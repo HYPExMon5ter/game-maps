@@ -1,0 +1,159 @@
+{
+  "id": "sons-of-the-forest",
+  "name": "Sons of the Forest",
+  "process": "SonsOfTheForest.exe",
+  "engine": "unity-il2cpp",
+  "unitsPerMeter": 1,
+  "defaultHotkeys": [
+    {
+      "action": "toggle_map",
+      "vk": 77
+    }
+  ],
+  "maps": [
+    {
+      "id": "surface",
+      "name": "Island",
+      "layers": [
+        "surface",
+        "caves"
+      ],
+      "background": "#2e5c80",
+      "tiles": {
+        "url": "tiles/surface/{z}/{x}/{y}.webp",
+        "tileSize": 256,
+        "minNativeZoom": 3,
+        "maxNativeZoom": 8,
+        "maxZoom": 11
+      },
+      "projection": {
+        "east": "x",
+        "north": "z",
+        "up": "y",
+        "minEast": -2000,
+        "maxEast": 2000,
+        "minNorth": -2000,
+        "maxNorth": 2000,
+        "tileZoom": 3,
+        "tileX": 3,
+        "tileY": 3
+      },
+      "layerTiles": {
+        "caves": {
+          "url": "tiles/caves/{z}/{x}/{y}.webp",
+          "tileSize": 256,
+          "minNativeZoom": 3,
+          "maxNativeZoom": 8,
+          "maxZoom": 11
+        }
+      }
+    }
+  ],
+  "categories": [
+    {
+      "id": "cave",
+      "name": "Caves",
+      "color": "#bb6bd9",
+      "icon": "game:Cave",
+      "visible": true
+    },
+    {
+      "id": "bunker",
+      "name": "Bunkers",
+      "color": "#56ccf2",
+      "icon": "game:BunkerIconOutline",
+      "visible": true
+    },
+    {
+      "id": "weapon",
+      "name": "Weapons",
+      "color": "#eb5757",
+      "icon": "game:KatanaIcon",
+      "visible": true
+    },
+    {
+      "id": "upgrade",
+      "name": "Weapon Mods",
+      "color": "#ff8a65",
+      "icon": "game:LaserSightModIcon",
+      "visible": true
+    },
+    {
+      "id": "outfit",
+      "name": "Outfits & Armor",
+      "color": "#d4a373",
+      "icon": "game:ClothingIcon",
+      "visible": true
+    },
+    {
+      "id": "tool",
+      "name": "Tools & Gear",
+      "color": "#f2994a",
+      "icon": "game:ShovelIcon",
+      "visible": true
+    },
+    {
+      "id": "key",
+      "name": "Key Items",
+      "color": "#f2c94c",
+      "icon": "game:KeycardAIcon",
+      "visible": true
+    },
+    {
+      "id": "blueprint",
+      "name": "Blueprints",
+      "color": "#2f80ed",
+      "icon": "game:PaperIcon",
+      "visible": true
+    },
+    {
+      "id": "collectible",
+      "name": "Notes & Collectibles",
+      "color": "#9b51e0",
+      "icon": "game:BookIcon",
+      "visible": true
+    },
+    {
+      "id": "ammo",
+      "name": "Ammo & Explosives",
+      "color": "#a3b13a",
+      "icon": "game:AmmoIcon",
+      "visible": true
+    },
+    {
+      "id": "vehicle",
+      "name": "Golf Carts & Gliders",
+      "color": "#2d9cdb",
+      "icon": "game:GolfCartIcon",
+      "visible": true
+    },
+    {
+      "id": "gps",
+      "name": "GPS Signals",
+      "color": "#27ae60",
+      "icon": "game:GPSTrackerIcon",
+      "visible": true
+    },
+    {
+      "id": "food",
+      "name": "Food & Medicine",
+      "color": "#6fcf97",
+      "icon": "game:CannedFoodIcon",
+      "visible": false
+    },
+    {
+      "id": "material",
+      "name": "Crafting Materials",
+      "color": "#8d7b6a",
+      "icon": "game:RopeIcon",
+      "visible": false
+    },
+    {
+      "id": "custom",
+      "name": "My Pins",
+      "color": "#ffffff",
+      "icon": "builtin:pin",
+      "visible": true
+    }
+  ]
+}
