@@ -110,9 +110,9 @@ Friends always install from
 this project, which lives in `~/.tauri/` on the machine that set it up. Add it as two
 repository secrets:
 
-```sh
-gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/game-maps.key
-gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD < ~/.tauri/game-maps.key.password
+```powershell
+gh secret set TAURI_SIGNING_PRIVATE_KEY --body (Get-Content ~/.tauri/game-maps.key -Raw).Trim()
+gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --body (Get-Content ~/.tauri/game-maps.key.password -Raw).Trim()
 ```
 
 Back up both files somewhere safe. Installed apps only accept updates signed with this
