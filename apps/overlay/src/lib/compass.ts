@@ -29,7 +29,24 @@ export function compassReading(p: Projection, player: LocalPlayer, target: Vec3,
   }
 }
 
-export function formatDistance(meters: number): string {
-  if (meters < 1000) return `${Math.round(meters)} m`
-  return `${(meters / 1000).toFixed(meters < 10_000 ? 2 : 1)} km`
+/** Imperial (feet and miles, the default) or metric (meters and kilometers). */
+export type Units = 'imperial' | 'metric'
+
+const FEET_PER_METER = 3.28084
+const METERS_PER_MILE = 1609.344
+
+/** A distance for display: feet up to a tenth of a mile, then miles (or m / km). */
+export function formatDistance(meters: number, units: Units): string {
+  if (units === 'metric') {
+    if (meters < 1000) return `${Math.round(meters)} m`
+    return `${(meters / 1000).toFixed(meters < 10_000 ? 2 : 1)} km`
+  }
+  const miles = meters / METERS_PER_MILE
+  if (miles < 0.1) return `${Math.round(meters * FEET_PER_METER)} ft`
+  return `${miles.toFixed(miles < 10 ? 2 : 1)} mi`
+}
+
+/** A height difference for display: whole feet or meters. */
+export function formatHeight(meters: number, units: Units): string {
+  return units === 'metric' ? `${Math.round(meters)} m` : `${Math.round(meters * FEET_PER_METER)} ft`
 }

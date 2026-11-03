@@ -21,6 +21,7 @@
     "minisearch": "^7.2.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "trystero": "0.26.0",
     "zustand": "^5.0.16"
   },
   "devDependencies": {

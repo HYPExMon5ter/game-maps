@@ -8,6 +8,7 @@ import { groundDistance } from '../lib/projection'
 import { PinSearch } from '../lib/search'
 import { isCategoryVisible, selectAllPins, useStore } from '../state/store'
 import { Button, Switch } from './controls'
+import { useSettings } from '../settings/store'
 
 export function CategoryIcon({ gameId, category, icon, color, size = 22 }: { gameId: string; category?: Category; icon?: string; color?: string; size?: number }) {
   const ref = icon ?? category?.icon ?? 'builtin:pin'
@@ -47,9 +48,11 @@ export function Sidebar({ onEditPin }: { onEditPin: (pin: Pin) => void }) {
   const selectPin = useStore((s) => s.selectPin)
   const map = useStore((s) => s.map)
   const local = useStore((s) => s.snapshot?.local ?? null)
+  const units = useSettings((s) => s.ui.units)
   const hasLocation = local !== null
 
-  const pins = useMemo(() => selectAllPins({ gamePins, user }), [gamePins, user])
+  const friendPins = useStore((s) => s.friendPins)
+  const pins = useMemo(() => selectAllPins({ gamePins, user, friendPins }), [gamePins, user, friendPins])
   const index = useMemo(() => (game ? new PinSearch(pins, game.categories) : null), [pins, game])
   const results = useMemo(() => {
     if (!index || !query.trim()) return null
@@ -88,6 +91,9 @@ export function Sidebar({ onEditPin }: { onEditPin: (pin: Pin) => void }) {
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-faint" />
           <input
             id="pin-search"
+            type="search"
+            autoComplete="off"
+            spellCheck={false}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={`Search ${pins.length.toLocaleString()} locations…  ( / )`}
@@ -127,7 +133,7 @@ export function Sidebar({ onEditPin }: { onEditPin: (pin: Pin) => void }) {
                         {pin.layer && pin.layer !== 'surface' ? ` · ${LAYER_LABELS[pin.layer]}` : ''}
                       </span>
                     </span>
-                    {dist !== null && <span className="text-[11px] tabular-nums text-ink-faint">{formatDistance(dist)}</span>}
+                    {dist !== null && <span className="text-[11px] tabular-nums text-ink-faint">{formatDistance(dist, units)}</span>}
                   </button>
                 </li>
               )

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compassReading, formatDistance } from './compass'
+import { compassReading, formatDistance, formatHeight } from './compass'
 import type { Projection } from './projection'
 
 const p: Projection = { east: 'x', north: 'z', up: 'y', minEast: -2000, maxEast: 2000, minNorth: -2000, maxNorth: 2000 }
@@ -25,8 +25,15 @@ describe('compassReading', () => {
     expect(r.distance).toBeCloseTo(5)
   })
 
-  it('formats distances', () => {
-    expect(formatDistance(42.4)).toBe('42 m')
-    expect(formatDistance(1534)).toBe('1.53 km')
+  it('formats metric distances', () => {
+    expect(formatDistance(42.4, 'metric')).toBe('42 m')
+    expect(formatDistance(1534, 'metric')).toBe('1.53 km')
+  })
+
+  it('formats imperial distances in feet, then miles', () => {
+    expect(formatDistance(30, 'imperial')).toBe('98 ft')
+    expect(formatDistance(161, 'imperial')).toBe('0.10 mi')
+    expect(formatDistance(3218.7, 'imperial')).toBe('2.00 mi')
+    expect(formatHeight(10, 'imperial')).toBe('33 ft')
   })
 })

@@ -1,20 +1,28 @@
-// Things that move and can be tracked or teleported to: other players and companions
-// (e.g. Kelvin) the game tracks on its GPS.
+// Live things on the map that can be selected, followed, tracked or teleported to:
+// other players, companions (e.g. Kelvin) and the game's live GPS markers (golf carts,
+// gliders, boats, placed locators, ...).
 
+import { markerName } from './markers'
 import type { Vec3, WorldSnapshot } from './protocol'
 
 export interface Mover {
   id: string
   name: string
-  kind: 'player' | 'companion'
+  kind: 'player' | 'companion' | 'marker'
   /** CSS color for the marker dot. */
   color: string
   position: Vec3
+  /** Game icon of live markers (`icons/game/<icon>.png`). */
+  icon?: string
 }
 
 export const COMPANION_COLOR = '#f2c94c'
 const DEFAULT_PLAYER_COLOR = '#f472b6'
+const MARKER_COLOR = '#475569'
 
+export const MOVER_KIND_LABELS: Record<Mover['kind'], string> = { player: 'Player', companion: 'Companion', marker: 'Live marker' }
+
+/** Other players and companions: drawn as named dots and listed in the players menu. */
 export function movers(snapshot: WorldSnapshot | null): Mover[] {
   if (!snapshot) return []
   const players: Mover[] = snapshot.others.map((o) => ({
@@ -30,6 +38,15 @@ export function movers(snapshot: WorldSnapshot | null): Mover[] {
   return [...players, ...companions]
 }
 
+/** Every live entity: players, companions and the other live markers. */
+export function liveEntities(snapshot: WorldSnapshot | null): Mover[] {
+  if (!snapshot) return []
+  const markers: Mover[] = (snapshot.markers ?? [])
+    .filter((m) => m.kind !== 'companion')
+    .map((m) => ({ id: m.id, name: markerName(m), kind: 'marker', color: MARKER_COLOR, position: m.position, icon: m.icon ?? undefined }))
+  return [...movers(snapshot), ...markers]
+}
+
 export function findMover(snapshot: WorldSnapshot | null, id: string): Mover | undefined {
-  return movers(snapshot).find((m) => m.id === id)
+  return liveEntities(snapshot).find((m) => m.id === id)
 }

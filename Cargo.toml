@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/protocol", "crates/il2cpp", "crates/agent", "apps/overlay/src-tauri"]
+members = ["crates/protocol", "crates/unity-runtime", "crates/agent", "apps/overlay/src-tauri"]
 
 [workspace.package]
 edition = "2021"
@@ -14,7 +14,7 @@ serde_json = "1"
 thiserror = "2"
 windows = "0.62"
 game-maps-protocol = { path = "crates/protocol" }
-il2cpp = { path = "crates/il2cpp" }
+unity-runtime = { path = "crates/unity-runtime" }
 
 [profile.release]
 lto = "thin"

@@ -1,10 +1,33 @@
+import { HUD_MARGIN, hudSize } from '../lib/hudLayout'
 import { MapView } from '../map/MapView'
 import { useStore } from '../state/store'
 import { Compass } from './Compass'
+import { SyncRequestNotice } from './SyncRequests'
+import { Waypoint } from './Waypoint'
+import { useSettings } from '../settings/store'
 
-/** Click-through HUD shown while playing: mini-map and/or tracking compass. */
+/**
+ * Click-through HUD shown while playing: mini-map and/or tracking compass. With a
+ * waypoint, the window covers the game's screen and the HUD sits in its corner.
+ */
 export function Hud() {
-  const hud = useStore((s) => s.settings.hud)
+  const hud = useSettings((s) => s.ui.hud)
+  const tracking = useStore((s) => s.tracked !== null)
+  if (!(tracking && hud.waypoint)) return <HudPanel />
+  const size = hudSize(hud.minimap, tracking, hud)
+  const [v, h] = hud.corner.split('_') as ['top' | 'bottom', 'left' | 'right']
+  return (
+    <div className="relative h-full w-full">
+      <Waypoint />
+      <div className="absolute" style={{ [v]: HUD_MARGIN, [h]: HUD_MARGIN, width: size.width, height: size.height }}>
+        <HudPanel />
+      </div>
+    </div>
+  )
+}
+
+function HudPanel() {
+  const hud = useSettings((s) => s.ui.hud)
   const tracking = useStore((s) => s.tracked !== null)
   const hasLocation = useStore((s) => !!s.snapshot?.local)
 
@@ -19,9 +42,7 @@ export function Hud() {
         </div>
       )}
       {tracking && <Compass compact interactive={false} />}
+      <SyncRequestNotice />
     </div>
   )
 }
-
-export const COMPASS_HEIGHT = 70
-export const HUD_GAP = 8

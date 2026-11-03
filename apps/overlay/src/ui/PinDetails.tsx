@@ -1,10 +1,12 @@
-import { Check, Navigation, Pencil, Trash2, X, Zap } from 'lucide-react'
+import { Check, Navigation, Pencil, Send, Trash2, X, Zap } from 'lucide-react'
 import { findPin, teleportToPin } from '../lib/actions'
 import { compassReading, formatDistance } from '../lib/compass'
 import { LAYER_LABELS, type Pin } from '../lib/game'
+import { readyPeers, shareTrack, targetOfPin, useSyncStore } from '../lib/sync/sync'
 import { useStore } from '../state/store'
 import { Button } from './controls'
 import { CategoryIcon } from './Sidebar'
+import { useSettings } from '../settings/store'
 
 export function PinDetails({ onEdit }: { onEdit: (pin: Pin) => void }) {
   const id = useStore((s) => s.selectedPinId)
@@ -14,8 +16,10 @@ export function PinDetails({ onEdit }: { onEdit: (pin: Pin) => void }) {
   useStore((s) => s.user)
   const found = useStore((s) => (id ? s.user.found.includes(id) : false))
   const tracked = useStore((s) => s.tracked)
+  const units = useSettings((s) => s.ui.units)
   const local = useStore((s) => s.snapshot?.local ?? null)
   const canTeleport = useStore((s) => s.status?.state === 'connected' && !!s.status.capabilities?.teleport)
+  const together = useSyncStore((s) => readyPeers(s).length > 0)
   const { selectPin, toggleFound, setTracked, deleteCustomPin } = useStore.getState()
 
   const pin = id ? findPin(id) : undefined
@@ -33,7 +37,7 @@ export function PinDetails({ onEdit }: { onEdit: (pin: Pin) => void }) {
           <p className="text-[12px] text-ink-faint">
             {category?.name ?? pin.category}
             {pin.layer && pin.layer !== 'surface' ? ` · ${LAYER_LABELS[pin.layer]}` : ''}
-            {reading ? ` · ${formatDistance(reading.distance)} away` : ''}
+            {reading ? ` · ${formatDistance(reading.distance, units)} away` : ''}
           </p>
         </div>
         <button className="text-ink-faint hover:text-ink" onClick={() => selectPin(null)} aria-label="Close">
@@ -45,6 +49,17 @@ export function PinDetails({ onEdit }: { onEdit: (pin: Pin) => void }) {
         <Button tone={isTracked ? 'primary' : 'default'} onClick={() => setTracked(isTracked ? null : { kind: 'pin', id: pin.id })}>
           <Navigation className="size-4" /> {isTracked ? 'Tracking' : 'Track'}
         </Button>
+        {together && (
+          <Button
+            title="Ask the other players to track this too"
+            onClick={() => {
+              const target = targetOfPin(pin.id)
+              if (target) shareTrack(target)
+            }}
+          >
+            <Send className="size-4" /> Share
+          </Button>
+        )}
         <Button disabled={!canTeleport} title={canTeleport ? undefined : 'Teleport needs the game running'} onClick={() => teleportToPin(pin)}>
           <Zap className="size-4" /> Teleport
         </Button>

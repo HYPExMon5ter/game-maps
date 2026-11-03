@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { backend } from '../lib/backend'
 import { ASSET_BASE, type Pin } from '../lib/game'
 import { useStore } from '../state/store'
-import { Button } from './controls'
+import { Button, Toggle } from './controls'
 import { CategoryIcon } from './Sidebar'
 
 const SWATCHES = ['#ffffff', '#ffd166', '#f2994a', '#eb5757', '#f472b6', '#bb6bd9', '#56ccf2', '#2d9cdb', '#6fcf97', '#27ae60']
@@ -130,6 +130,15 @@ export function PinEditor({ pin, onClose }: { pin: Pin; onClose: () => void }) {
               className="size-6 cursor-pointer rounded-full border-0 bg-transparent p-0"
             />
           </div>
+        </div>
+
+        <div className="mb-3">
+          <Toggle
+            label="Share with players on this server"
+            hint="Others running Game Maps in your game see it while you're both connected"
+            checked={!!draft.shared}
+            onChange={(shared) => setDraft({ ...draft, shared: shared || undefined })}
+          />
         </div>
 
         <div className="mb-5">

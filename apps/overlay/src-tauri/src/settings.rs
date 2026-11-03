@@ -68,12 +68,26 @@ pub struct AppSettings {
     /// Per-game override of the key that opens the map; absent uses the game's default.
     pub map_hotkeys: HashMap<String, Hotkey>,
     pub zoom_keys: ZoomKeys,
+    /// Key that returns the player to where they were before their last teleport (all
+    /// games); `None` turns it off.
+    pub back_key: Option<Hotkey>,
     pub auto_update: bool,
+}
+
+/// Backspace: rarely bound by games, and easy to reach.
+pub fn default_back_key() -> Hotkey {
+    Hotkey { action: HotkeyAction::TeleportBack, vk: 0x08, ctrl: false, shift: false, alt: false }
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
-        Self { hook_modes: HashMap::new(), map_hotkeys: HashMap::new(), zoom_keys: ZoomKeys::default(), auto_update: true }
+        Self {
+            hook_modes: HashMap::new(),
+            map_hotkeys: HashMap::new(),
+            zoom_keys: ZoomKeys::default(),
+            back_key: Some(default_back_key()),
+            auto_update: true,
+        }
     }
 }
 
@@ -89,6 +103,7 @@ impl AppSettings {
             None => game.hotkeys(),
         };
         keys.extend(self.zoom_keys.bindings().cloned());
+        keys.extend(self.back_key.clone());
         keys
     }
 }
@@ -160,11 +175,25 @@ mod tests {
     #[test]
     fn zoom_keys_default_to_numpad_and_main_row_and_can_be_turned_off() {
         let mut settings = AppSettings::default();
-        let zoom = |s: &AppSettings| s.hotkeys(&game("a")).into_iter().filter(|h| h.action != HotkeyAction::ToggleMap).map(|h| h.vk).collect::<Vec<_>>();
+        let zoom = |s: &AppSettings| {
+            s.hotkeys(&game("a")).into_iter().filter(|h| matches!(h.action, HotkeyAction::ZoomIn | HotkeyAction::ZoomOut)).map(|h| h.vk).collect::<Vec<_>>()
+        };
         assert_eq!(zoom(&settings), vec![0x6B, 0xBB, 0x6D, 0xBD]);
 
         settings.zoom_keys.zoom_in[1] = None;
         assert_eq!(zoom(&settings), vec![0x6B, 0x6D, 0xBD]);
+    }
+
+    #[test]
+    fn teleport_back_key_defaults_to_backspace_and_can_be_turned_off() {
+        let back = |s: &AppSettings| s.hotkeys(&game("a")).into_iter().filter(|h| h.action == HotkeyAction::TeleportBack).map(|h| h.vk).collect::<Vec<_>>();
+        let mut settings = AppSettings::default();
+        assert_eq!(back(&settings), vec![0x08]);
+        // Settings saved before the key existed get the default.
+        let old: AppSettings = serde_json::from_str(r#"{"hook_modes":{},"auto_update":true}"#).unwrap();
+        assert_eq!(back(&old), vec![0x08]);
+        settings.back_key = None;
+        assert!(back(&settings).is_empty());
     }
 
     #[test]

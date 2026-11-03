@@ -20,6 +20,41 @@ export interface LocalPlayer {
   position: Vec3
   forward: Vec3 | null
   layer: WorldLayer
+  /** The game's main camera (absent from older agents). */
+  camera?: CameraView | null
+}
+
+/** A walking route from the game's navigation mesh. */
+export interface PathInfo {
+  corners: Vec3[]
+  /** False when the destination can't be reached; the route ends as close as it gets. */
+  complete: boolean
+}
+
+/** Which legs of a route can't be walked right now (see `backend.checkRoute`). */
+export interface RouteCheck {
+  /** Indices `i` of blocked legs, from `points[i]` to `points[i + 1]`. */
+  blocked: number[]
+  /** Legs checked, from the start: long routes take several checks. */
+  checked: number
+}
+
+/** The floor under a probed point (see `backend.probeGround`). */
+export interface GroundPoint {
+  /** Height of the floor nearest the point, if there's one close by. */
+  y: number | null
+  /** Whether the game camera can see that floor point. */
+  visible: boolean
+}
+
+export interface CameraView {
+  position: Vec3
+  forward: Vec3
+  up: Vec3
+  /** Vertical field of view, degrees. */
+  fov_y: number
+  /** Width / height of the camera's image. */
+  aspect: number
 }
 
 export interface RemotePlayer {
@@ -48,9 +83,30 @@ export interface WorldSnapshot {
   others: RemotePlayer[]
   /** Absent from older agents. */
   markers?: Marker[]
+  /** Creatures the game has active around the player; absent when there are none. */
+  creatures?: Creature[]
+  /** The multiplayer session the player is in; absent in single player. */
+  session?: MultiplayerSession
 }
 
-export type HotkeyAction = 'toggle_map' | 'zoom_in' | 'zoom_out'
+export interface MultiplayerSession {
+  /** The same for everyone in the session. */
+  id: string
+  /** This player's name as the others see it. */
+  player_name: string | null
+}
+
+export type CreatureKind = 'hostile' | 'animal' | 'friendly'
+
+export interface Creature {
+  id: string
+  kind: CreatureKind
+  /** The game's type name (e.g. "Fingers", "Deer"). */
+  name: string
+  position: Vec3
+}
+
+export type HotkeyAction = 'toggle_map' | 'zoom_in' | 'zoom_out' | 'teleport_back'
 
 export interface Hotkey {
   action: HotkeyAction
@@ -85,6 +141,8 @@ export interface PinConfig {
   width: number
   height: number
   margin: number
+  /** Cover the game's whole screen (click-through) to draw waypoints over it. */
+  fullscreen: boolean
 }
 
 export interface AgentLog {

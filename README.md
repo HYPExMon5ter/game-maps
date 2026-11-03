@@ -23,10 +23,21 @@ other players, and teleport. Press a key and it's there.**
 - **Live location** of you, other players in multiplayer, and everything the in-game
   GPS shows (companions, placed locators, moved vehicles).
 - **Teleport** anywhere on the map, to any pin, or to another player, including into
-  caves and bunkers.
-- **Track** a pin or player with an on-screen compass, and keep a click-through
+  caves and bunkers, and **teleport back** (Backspace) to where you were.
+- **Track** a pin, player, companion or vehicle with an on-screen compass and a
+  **waypoint drawn over the game**, follow them on the map, and keep a click-through
   **mini-map** in a corner while you play.
+- **Walking routes** to what you track, on the surface and through caves, checked
+  against the world as it is (blocked passages are avoided).
+- **Nearby creatures**: enemies, companions and animals around you on the map and
+  mini-map.
+- **Play together**: everyone on your server running Game Maps can ask each other to
+  track something, ping spots on the map, and share custom pins. Peer to peer, no
+  account or server.
+- **Collectibles are marked found** as you walk up to them.
 - **Custom pins** with your own names, colors and icons.
+- **Picks up where you left off**: what you track, your selection and the map view
+  are remembered.
 - **No mod loader and no game files changed.** Works whether you host or join.
 - **Always current.** The app and its maps update themselves.
 
@@ -35,6 +46,7 @@ other players, and teleport. Press a key and it's there.**
 | Game | Map | Live location | Teleport | Other players |
 |---|:---:|:---:|:---:|:---:|
 | Sons of the Forest | ✓ | ✓ | ✓ | ✓ |
+| Sunkenland | ✓ | ✓ | ✓ | ✓ |
 
 More games can be added; see [Adding a game](docs/development.md#adding-a-game).
 
@@ -65,15 +77,13 @@ On each game:
 
 - **Play:** start the game through Steam. **Connect** attaches to it when it's running.
 - **Map** (map icon): open the map without the game.
-- The **arrow** shows more options:
-  - **Connect to game:** *Automatically* (as soon as it starts) or *Manually* (only
-    when you click Connect).
-  - **Key to open the map:** pick any key or combination. You can also change it from
-    the map's settings.
-  - **Map data:** whether the map is downloaded and up to date.
+- The **arrow** shows whether the map is downloaded and up to date, and opens that
+  game's settings.
 
-The **gear** has **Start with Windows**, **Install updates automatically**, and update
-and log buttons.
+The **gear** opens the settings (the same as the map's): grouped by topic, with a
+search box. Settings marked with the game icon are kept per game, such as how Game Maps
+connects to it, the key that opens its map, and nearby creatures; the rest apply to
+every game.
 
 Closing the window keeps Game Maps running in the system tray. Quit it from the tray
 icon.
@@ -87,15 +97,16 @@ icon.
 | Open / close the map | **M** (or your key) in game; **Esc** also closes it |
 | Zoom | Mouse wheel, or **Num +** / **Num -** (also **=** / **-**). The keys zoom the mini-map while you play too |
 | Search | **/** or **Ctrl+F** |
-| Add a pin, teleport, copy coordinates | Right-click the map |
-| Track, teleport to, or mark a pin found | Click the pin |
+| Add a pin, teleport, ping, copy coordinates | Right-click the map |
+| Track, share, teleport to, or mark a pin found | Click the pin |
 | Switch between surface and caves | **Surface / Underground** in the top bar (follows you automatically) |
 | Find other players and companions | **Players** in the top bar |
 | Mini-map while playing | **Picture-in-picture** in the top bar |
-| Opacity, size, mini-map size and corner, zoom keys | **Settings** (gear icon) |
+| Keys, map and mini-map look, what the map shows | **Settings** (gear icon; type to search) |
 
-The map and zoom keys still reach the game, so the in-game GPS keeps working. Each
-zoom key can be changed or turned off in **Settings**.
+While Game Maps is connected, the game doesn't see the map key, so only this map
+opens (the in-game map works as usual when Game Maps isn't running). Each zoom key
+can be changed or turned off in **Settings**.
 
 ## Updates
 
@@ -156,9 +167,9 @@ attach the log from **Open logs** in the Game Maps window.
 Game Maps is a [Tauri](https://tauri.app) app (Rust + React +
 [MapLibre](https://maplibre.org)). When a supported game starts, it loads a small
 Rust agent into the game process. The agent reads the player's position through
-Unity's IL2CPP runtime and streams it to the app over a local named pipe. The map
-is a separate transparent window drawn over the game, so it costs the game almost
-nothing to render.
+Unity's scripting runtime (IL2CPP or Mono) and streams it to the app over a local
+named pipe. The map is a separate transparent window drawn over the game, so it
+costs the game almost nothing to render.
 
 Map tiles, icons and pins are generated from the game's own files, so they line up
 exactly with live positions. They're published separately from the app, so map

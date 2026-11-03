@@ -14,16 +14,19 @@ terrain square [x0, x0+W] x [z0, z0+W] with north (+z) up; column = x, row 0 = m
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import os
-import shutil
+import sys
 
 import numpy as np
 import UnityPy
 from PIL import Image, ImageFilter
 
-TILE = 256
+# Shared tile writer (`python -I` leaves the script's directory off the import path).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import tiles  # noqa: E402
+from icons import trim_icon, write_icon_index  # noqa: E402
+
 # The map image occupies Web Mercator tile (MAP_TILE_X, MAP_TILE_Y) at zoom MAP_TILE_ZOOM;
 # tiles are written in that absolute XYZ scheme. Must match `projection` in game.json.
 # One eighth of the world wide, so even 32:9 screens can center the island without
@@ -179,32 +182,9 @@ def render(t, size: int) -> Image.Image:
     return img.filter(ImageFilter.UnsharpMask(radius=1.2, percent=40, threshold=2))
 
 
-def resize(img: Image.Image, side: int) -> Image.Image:
-    """Resamples a square image; transparency is premultiplied so edges don't darken."""
-    if img.mode == "RGBA":
-        return img.convert("RGBa").resize((side, side), Image.LANCZOS).convert("RGBA")
-    return img.resize((side, side), Image.LANCZOS)
-
-
 def write_tiles(img: Image.Image, out_dir: str, layer: str = "surface") -> tuple[int, int]:
-    """Writes the pyramid for `tiles/<layer>` in absolute XYZ coordinates (RGB or
-    RGBA). Returns (min_zoom, max_zoom)."""
-    size = img.width
-    max_zoom = int(math.log2(size // TILE))
-    tiles_dir = os.path.join(out_dir, "tiles", layer)
-    if os.path.isdir(tiles_dir):
-        shutil.rmtree(tiles_dir)
-    for z in range(max_zoom + 1):
-        n = 2 ** z
-        level = img if n * TILE == size else resize(img, n * TILE)
-        abs_z = z + MAP_TILE_ZOOM
-        for x in range(n):
-            col = os.path.join(tiles_dir, str(abs_z), str(MAP_TILE_X * n + x))
-            os.makedirs(col, exist_ok=True)
-            for y in range(n):
-                tile = level.crop((x * TILE, y * TILE, (x + 1) * TILE, (y + 1) * TILE))
-                tile.save(os.path.join(col, f"{MAP_TILE_Y * n + y}.webp"), "WEBP", quality=88, method=4)
-    return MAP_TILE_ZOOM, max_zoom + MAP_TILE_ZOOM
+    """Writes the pyramid for `tiles/<layer>` in this map's tile placement."""
+    return tiles.write_tiles(img, out_dir, MAP_TILE_ZOOM, MAP_TILE_X, MAP_TILE_Y, layer)
 
 
 # Icon sources, all white glyphs on transparent backgrounds:
@@ -215,20 +195,6 @@ GPS_BUNDLE_PREFIX = "items_assets_gpslocatoritem_"
 UI_BUNDLE_PREFIX = "uishared_assets_all_"
 UI_ICONS = {"Cave", "CaveOutline"}
 MAX_ICON_SIZE = 512
-
-
-def trim_icon(img: Image.Image, margin: float = 0.06) -> Image.Image:
-    """Crops an icon to its visible glyph and centers it on a square canvas, so every
-    icon fills pin badges the same way (inventory icons carry wide, uneven padding)."""
-    img = img.convert("RGBA")
-    bbox = img.getchannel("A").point(lambda a: 255 if a > 8 else 0).getbbox()
-    if not bbox:
-        return img
-    glyph = img.crop(bbox)
-    side = round(max(glyph.size) * (1 + 2 * margin))
-    out = Image.new("RGBA", (side, side), (0, 0, 0, 0))
-    out.paste(glyph, ((side - glyph.width) // 2, (side - glyph.height) // 2))
-    return out
 
 
 def export_icons(game_dir: str, out_dir: str) -> int:
@@ -256,9 +222,7 @@ def export_icons(game_dir: str, out_dir: str) -> int:
                 continue
             trim_icon(tex.image).save(os.path.join(icons_dir, f"{tex.m_Name}.png"))
             count += 1
-    names = sorted(n[:-4] for n in os.listdir(icons_dir) if n.endswith(".png"))
-    with open(os.path.join(icons_dir, "index.json"), "w") as f:
-        json.dump(names, f)
+    write_icon_index(icons_dir)
     return count
 
 
@@ -284,18 +248,7 @@ def main():
         print("wrote preview.png")
         return
     min_zoom, max_zoom = write_tiles(img, args.out)
-    meta = {
-        "surface": {
-            "tileSize": TILE,
-            "minNativeZoom": min_zoom,
-            "maxNativeZoom": max_zoom,
-            "tileZoom": MAP_TILE_ZOOM,
-            "tileX": MAP_TILE_X,
-            "tileY": MAP_TILE_Y,
-        }
-    }
-    with open(os.path.join(args.out, "tiles", "tiles.json"), "w") as f:
-        json.dump(meta, f, indent=2)
+    tiles.write_tiles_meta(args.out, {"surface": (min_zoom, max_zoom)}, MAP_TILE_ZOOM, MAP_TILE_X, MAP_TILE_Y)
     print(f"wrote tiles z{min_zoom}..{max_zoom}")
 
 

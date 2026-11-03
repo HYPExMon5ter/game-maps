@@ -1,32 +1,23 @@
-// Persists settings and per-game user data (custom pins, found pins, filters) with
-// the Tauri store plugin. Writes are debounced by the plugin's autosave.
+// Persists per-game user data (custom pins, found pins, filters) and the per-game map
+// session (tracking, selection, view) with the Tauri store plugin. Writes are debounced
+// by the plugin's autosave. Settings are saved in the same store (see `settings/sync`).
 
 import { load, type Store } from '@tauri-apps/plugin-store'
-import type { Hotkey } from '../lib/protocol'
-import { migrateHud } from '../lib/minimap'
-import { DEFAULT_SETTINGS, EMPTY_USER_DATA, useStore, type GameUserData, type Settings } from './store'
+import {
+  EMPTY_SESSION,
+  EMPTY_USER_DATA,
+  selectSession,
+  useStore,
+  type GameUserData,
+  type MapSession,
+  type SavedMapView,
+} from './store'
 
 let store: Store | null = null
 
-async function getStore(): Promise<Store> {
+export async function getStore(): Promise<Store> {
   store ??= await load('user-data.json', { defaults: {}, autoSave: 400 })
   return store
-}
-
-/**
- * Loads UI settings. Also returns the map hotkey older versions stored here (one for
- * all games); it now lives per game in the backend's settings.
- */
-export async function loadSettings(): Promise<{ settings: Settings; legacyHotkey: Hotkey | null }> {
-  const s = await getStore()
-  const { hotkey, ...saved } = (await s.get<Partial<Settings> & { hotkey?: Hotkey | null }>('settings')) ?? {}
-  return { settings: { ...DEFAULT_SETTINGS, ...saved, hud: migrateHud(saved.hud) }, legacyHotkey: hotkey ?? null }
-}
-
-/** Drops the old all-games hotkey once it has been moved to the backend. */
-export async function clearLegacyHotkey(): Promise<void> {
-  const s = await getStore()
-  await s.set('settings', useStore.getState().settings)
 }
 
 export async function loadUserData(gameId: string): Promise<GameUserData> {
@@ -34,15 +25,35 @@ export async function loadUserData(gameId: string): Promise<GameUserData> {
   return { ...EMPTY_USER_DATA, ...((await s.get<Partial<GameUserData>>(`game:${gameId}`)) ?? {}) }
 }
 
-/** Saves settings and the current game's user data whenever they change. */
+export async function loadSession(gameId: string): Promise<MapSession> {
+  const s = await getStore()
+  const saved = await s.get<Partial<MapSession>>(`session:${gameId}`)
+  return { ...EMPTY_SESSION, mapView: legacyMapView(gameId), ...(saved ?? {}) }
+}
+
+/** The map view older versions kept in the web view's local storage. */
+function legacyMapView(gameId: string): SavedMapView | null {
+  try {
+    const v = JSON.parse(localStorage.getItem(`game-maps:view:${gameId}`) ?? 'null') as SavedMapView | null
+    return v && Array.isArray(v.center) && v.center.length === 2 && Number.isFinite(v.zoom) ? v : null
+  } catch {
+    return null
+  }
+}
+
+const SESSION_KEYS = Object.keys(EMPTY_SESSION) as (keyof MapSession)[]
+
+/** Saves the current game's user data and map session whenever they change. */
 export function startPersisting(): () => void {
   return useStore.subscribe((state, prev) => {
-    if (state.settings !== prev.settings) {
-      void getStore().then((s) => s.set('settings', state.settings))
+    if (!state.game || state.game !== prev.game) return
+    const gameId = state.game.id
+    if (state.user !== prev.user) {
+      void getStore().then((s) => s.set(`game:${gameId}`, state.user))
     }
-    if (state.game && state.user !== prev.user && state.game === prev.game) {
-      const key = `game:${state.game.id}`
-      void getStore().then((s) => s.set(key, state.user))
+    if (SESSION_KEYS.some((k) => state[k] !== prev[k])) {
+      const session = selectSession(state)
+      void getStore().then((s) => s.set(`session:${gameId}`, session))
     }
   })
 }

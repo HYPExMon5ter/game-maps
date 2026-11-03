@@ -56,7 +56,7 @@ export function Slider({
   format,
   onChange,
 }: {
-  label: string
+  label: ReactNode
   value: number
   min: number
   max: number
@@ -84,15 +84,28 @@ export function Slider({
 }
 
 /** On/off switch. Put it inside a `<label>` (clicking the text toggles it) or give it `label`. */
-export function Switch({ checked, onChange, label, className = '' }: { checked: boolean; onChange: (v: boolean) => void; label?: string; className?: string }) {
+export function Switch({
+  checked,
+  onChange,
+  label,
+  disabled,
+  className = '',
+}: {
+  checked: boolean
+  onChange: (v: boolean) => void
+  label?: string
+  disabled?: boolean
+  className?: string
+}) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
       aria-label={label}
+      disabled={disabled}
       onClick={() => onChange(!checked)}
-      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
+      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-40 ${
         checked ? 'bg-accent' : 'bg-white/18'
       } ${className}`}
     >
@@ -101,14 +114,59 @@ export function Switch({ checked, onChange, label, className = '' }: { checked: 
   )
 }
 
-export function Toggle({ label, checked, onChange, hint }: { label: string; checked: boolean; onChange: (v: boolean) => void; hint?: string }) {
+export function Toggle({
+  label,
+  checked,
+  onChange,
+  hint,
+  disabled,
+}: {
+  label: ReactNode
+  checked: boolean
+  onChange: (v: boolean) => void
+  hint?: ReactNode
+  disabled?: boolean
+}) {
   return (
-    <label className="flex cursor-pointer items-start justify-between gap-3 py-1">
+    <label className={`flex items-start justify-between gap-3 py-1 ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
       <span>
         <span className="block text-[13px]">{label}</span>
         {hint && <span className="block text-[11px] text-ink-faint">{hint}</span>}
       </span>
-      <Switch checked={checked} onChange={onChange} />
+      <Switch checked={checked} onChange={onChange} disabled={disabled} />
     </label>
+  )
+}
+
+/** A choice between a few options, as a row of buttons. */
+export function Segmented<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string
+  value: T
+  options: { id: T; label: string; title?: string }[]
+  onChange: (value: T) => void
+}) {
+  return (
+    <div className="inline-flex shrink-0 rounded-lg bg-black/30 p-0.5" role="radiogroup" aria-label={label}>
+      {options.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          role="radio"
+          title={o.title}
+          aria-checked={value === o.id}
+          className={`rounded-md px-2.5 py-1 text-[12px] font-semibold transition-colors ${
+            value === o.id ? 'bg-accent text-accent-ink' : 'text-ink-dim hover:text-ink'
+          }`}
+          onClick={() => onChange(o.id)}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
   )
 }

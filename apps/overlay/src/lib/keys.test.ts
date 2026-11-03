@@ -25,3 +25,10 @@ describe('keys', () => {
     expect(hotkeyLabel({ action: 'toggle_map', vk: 0x4d, ctrl: true, shift: true })).toBe('Ctrl + Shift + M')
   })
 })
+
+describe('Backspace', () => {
+  it('binds and reads as itself', () => {
+    expect(vkFromCode('Backspace')).toBe(0x08)
+    expect(vkLabel(0x08)).toBe('Backspace')
+  })
+})

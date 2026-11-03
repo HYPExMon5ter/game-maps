@@ -21,6 +21,21 @@ async function runTeleport(fn: () => Promise<void>, what: string) {
   } catch (e) {
     notify(`Teleport failed: ${String(e)}`, 'error')
   }
+  void refreshBackSteps()
+}
+
+/** Updates how many teleports can be undone (shown on the Return button). */
+export async function refreshBackSteps() {
+  try {
+    useStore.getState().setBackSteps(await backend.teleportBackSteps())
+  } catch {
+    // Backend unavailable (e.g. the app is shutting down): keep the last count.
+  }
+}
+
+/** Returns to where the player was before their last teleport. */
+export function teleportBack() {
+  return runTeleport(() => backend.teleportBack(), 'where you were')
 }
 
 /** Height added above an item's exact position so the player lands on its floor, not in it. */
@@ -39,6 +54,7 @@ export function teleportToMapPoint(ll: LngLat) {
   return runTeleport(() => backend.teleport({ kind: 'position', position: pos, snap_to_ground: true }), 'map location')
 }
 
+/** Teleports next to a live entity (player, companion, golf cart, ...). */
 export function teleportToPlayer(id: string, name: string) {
   return runTeleport(() => backend.teleport({ kind: 'player', id }), name)
 }

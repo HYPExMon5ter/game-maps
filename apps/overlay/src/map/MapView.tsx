@@ -6,14 +6,18 @@ import { events } from '../lib/backend'
 import type { Pin } from '../lib/game'
 import { LiveMarkerFilter, markerName } from '../lib/markers'
 import { findMover } from '../lib/movers'
+import { resolveTracked } from '../lib/tracking'
 import { bearingOf, mapBounds, mapCenter, toLngLat, zoomToFit, type LngLat, type Projection } from '../lib/projection'
-import type { Marker } from '../lib/protocol'
+import { CREATURE_COLORS, creatureName, visibleCreatures } from '../lib/creatures'
+import { PING_MS, useSyncStore, type Ping } from '../lib/sync/sync'
+import type { Creature, Marker } from '../lib/protocol'
 import { steppedZoom } from '../lib/zoom'
 import { isCategoryVisible, selectAllPins, selectViewLayer, useStore } from '../state/store'
 import { badgeKey, ensureBadge } from './badges'
 import { mapHandle } from './handle'
 import { PlayerMarkers } from './players'
-import { buildStyle, CAVES_LAYER } from './style'
+import { applyPinDisplay, buildStyle, CAVES_LAYER } from './style'
+import { useGameSetting, useSettings } from '../settings/store'
 
 export interface MapContextMenuEvent {
   lngLat: LngLat
@@ -107,7 +111,7 @@ export function MapView({ variant, onContextMenu, fitPadding = NO_PADDING }: Pro
       style: buildStyle(game, gameMap, window.location.origin),
       center: [center.lng, center.lat],
       // Full map: fitted below; mini-map: the user's zoom.
-      zoom: miniBaseZoom(p) + (full ? 0 : useStore.getState().settings.hud.zoom),
+      zoom: miniBaseZoom(p) + (full ? 0 : useSettings.getState().ui.hud.zoom),
       minZoom: zoomToFit(p, 256),
       maxZoom: gameMap.tiles.maxZoom,
       renderWorldCopies: false,
@@ -125,19 +129,35 @@ export function MapView({ variant, onContextMenu, fitPadding = NO_PADDING }: Pro
     if (full) {
       fitIsland(m, p, fitPaddingRef.current)
       mapHandle.current = m
-      m.on('click', 'pins', (e) => {
+      for (const layer of ['pins', 'pin-dots']) {
+        m.on('click', layer, (e) => {
+          if (e.defaultPrevented) return // a badge on top already took the click
+          const id = e.features?.[0]?.properties?.id as string | undefined
+          if (id) useStore.getState().selectPin(id)
+          e.preventDefault()
+        })
+        m.on('mouseenter', layer, () => (m.getCanvas().style.cursor = 'pointer'))
+        m.on('mouseleave', layer, () => (m.getCanvas().style.cursor = ''))
+      }
+      m.on('click', 'markers', (e) => {
+        if (e.defaultPrevented) return
         const id = e.features?.[0]?.properties?.id as string | undefined
-        if (id) useStore.getState().selectPin(id)
+        if (id) useStore.getState().selectLive(id)
         e.preventDefault()
       })
+      m.on('mouseenter', 'markers', () => (m.getCanvas().style.cursor = 'pointer'))
+      m.on('mouseleave', 'markers', () => (m.getCanvas().style.cursor = ''))
       m.on('click', (e) => {
-        if (!e.defaultPrevented) useStore.getState().selectPin(null)
+        // Player and companion markers are HTML elements and handle their own clicks.
+        if (e.defaultPrevented || (e.originalEvent.target as HTMLElement | null)?.closest('.player-remote')) return
+        useStore.getState().selectPin(null)
+        useStore.getState().selectLive(null)
       })
-      m.on('mouseenter', 'pins', () => (m.getCanvas().style.cursor = 'pointer'))
-      m.on('mouseleave', 'pins', () => (m.getCanvas().style.cursor = ''))
       m.on('contextmenu', (e) => contextMenuRef.current?.({ lngLat: e.lngLat, x: e.point.x, y: e.point.y }))
       m.on('dragstart', () => {
-        if (useStore.getState().settings.followPlayer) useStore.getState().setSettings({ followPlayer: false })
+        const s = useStore.getState()
+        if (s.followPlayer) s.setFollowPlayer(false)
+        if (s.followId) s.setFollow(null)
       })
     }
     return () => {
@@ -149,7 +169,10 @@ export function MapView({ variant, onContextMenu, fitPadding = NO_PADDING }: Pro
 
   useRefitOnResize(map, variant, containerRef, fitPadding)
   usePinsLayer(map)
+  usePinDisplay(map)
   useLiveMarkers(map)
+  useCreatures(map)
+  usePings(map)
   useLayerShading(map)
   useTrackLine(map)
   usePlayers(map, variant)
@@ -164,8 +187,8 @@ export function MapView({ variant, onContextMenu, fitPadding = NO_PADDING }: Pro
 
 
 /**
- * Keeps the island fitted when the screen changes (resolution, monitor, ultrawide,
- * panel or interface size). Pans and zooms the user made at the same size are kept.
+ * Full map view: reopens where it was left (position and zoom, saved per game), or
+ * fitted to the island the first time. Resizing keeps the center instead of jumping.
  */
 function useRefitOnResize(map: MlMap | null, variant: 'full' | 'mini', containerRef: React.RefObject<HTMLDivElement | null>, padding: Insets) {
   const { top, right, bottom, left } = padding
@@ -175,16 +198,22 @@ function useRefitOnResize(map: MlMap | null, variant: 'full' | 'mini', container
     if (!map || !el || !gameMap || variant !== 'full') return
     const pad = { top, right, bottom, left }
     let last = `${el.clientWidth}x${el.clientHeight}`
-    fitIsland(map, gameMap.projection, pad)
+    const saved = useStore.getState().mapView
+    if (saved) map.jumpTo(saved)
+    else fitIsland(map, gameMap.projection, pad)
+    const save = () => useStore.getState().setMapView({ center: map.getCenter().toArray() as [number, number], zoom: map.getZoom() })
+    map.on('moveend', save)
     const ro = new ResizeObserver(() => {
       const size = `${el.clientWidth}x${el.clientHeight}`
       if (size === last || el.clientWidth === 0 || el.clientHeight === 0) return
       last = size
-      map.resize()
-      if (!useStore.getState().settings.followPlayer) fitIsland(map, gameMap.projection, pad)
+      map.resize() // keeps the center
     })
     ro.observe(el)
-    return () => ro.disconnect()
+    return () => {
+      ro.disconnect()
+      map.off('moveend', save)
+    }
   }, [map, variant, containerRef, top, right, bottom, left])
 }
 
@@ -196,12 +225,14 @@ function usePinsLayer(map: MlMap | null) {
   const selected = useStore((s) => s.selectedPinId)
   const showFound = useStore((s) => s.showFound)
   const viewLayer = useStore(selectViewLayer)
-  const pins = useMemo(() => selectAllPins({ gamePins, user }), [gamePins, user])
+  const friendPins = useStore((s) => s.friendPins)
+  const pins = useMemo(() => selectAllPins({ gamePins, user, friendPins }), [gamePins, user, friendPins])
 
   useEffect(() => {
     if (!map || !game || !gameMap) return
     let cancelled = false
     const categories = new Map(game.categories.map((c) => [c.id, c]))
+    const rank = new Map(game.categories.map((c, i) => [c.id, i]))
     const found = new Set(user.found)
     const visible: { pin: Pin; key: string; color: string; icon: string }[] = []
     for (const pin of pins) {
@@ -218,7 +249,7 @@ function usePinsLayer(map: MlMap | null) {
       const source = map.getSource<GeoJSONSource>('pins')
       source?.setData({
         type: 'FeatureCollection',
-        features: visible.map(({ pin, key }) => {
+        features: visible.map(({ pin, key, color }) => {
           const ll = toLngLat(gameMap.projection, pin.position)
           return {
             type: 'Feature',
@@ -226,10 +257,13 @@ function usePinsLayer(map: MlMap | null) {
             properties: {
               id: pin.id,
               icon: key,
+              color,
+              rank: rank.get(pin.category) ?? game.categories.length,
               name: pin.name,
               found: found.has(pin.id),
               selected: pin.id === selected,
-              otherLayer: (pin.layer ?? 'surface') !== viewLayer && pin.id !== selected,
+              // Entrances connect both layers, so they stay fully visible on either.
+              otherLayer: (pin.layer ?? 'surface') !== viewLayer && pin.id !== selected && !categories.get(pin.category)?.entrance,
             },
           }
         }),
@@ -239,6 +273,16 @@ function usePinsLayer(map: MlMap | null) {
       cancelled = true
     }
   }, [map, game, gameMap, pins, user, selected, showFound, viewLayer])
+}
+
+/** Applies the user's pin size and declutter settings. */
+function usePinDisplay(map: MlMap | null) {
+  const gameMap = useStore((s) => s.map)
+  const size = useSettings((s) => s.ui.pinSize)
+  const declutter = useSettings((s) => s.ui.declutter)
+  useEffect(() => {
+    if (map && gameMap) applyPinDisplay(map, gameMap, { size, declutter })
+  }, [map, gameMap, size, declutter])
 }
 
 /** Color of live GPS marker badges, distinct from every pin category. */
@@ -287,6 +331,70 @@ function useLiveMarkers(map: MlMap | null) {
   }, [map, game, gameMap, filter])
 }
 
+/** Creatures around the player, refreshed with each snapshot. */
+function useCreatures(map: MlMap | null) {
+  const gameMap = useStore((s) => s.map)
+  const gameId = useStore((s) => s.game?.id)
+  const show = useGameSetting(gameId, 'showCreatures')
+  const animals = useGameSetting(gameId, 'showAnimals')
+  useEffect(() => {
+    if (!map || !gameMap) return
+    let last: Creature[] | undefined
+    const apply = (creatures: Creature[] = []) => {
+      if (creatures === last) return
+      last = creatures
+      map.getSource<GeoJSONSource>('creatures')?.setData({
+        type: 'FeatureCollection',
+        features: visibleCreatures(creatures, show, animals).map((c) => {
+          const ll = toLngLat(gameMap.projection, c.position)
+          return {
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [ll.lng, ll.lat] },
+            properties: { id: c.id, name: creatureName(c.name), color: CREATURE_COLORS[c.kind] },
+          }
+        }),
+      })
+    }
+    apply(useStore.getState().snapshot?.creatures)
+    return useStore.subscribe((s, prev) => {
+      if (s.snapshot !== prev.snapshot) apply(s.snapshot?.creatures)
+    })
+  }, [map, gameMap, show, animals])
+}
+
+/** Spots players pinged, fading out over `PING_MS`. */
+function usePings(map: MlMap | null) {
+  const gameMap = useStore((s) => s.map)
+  useEffect(() => {
+    if (!map || !gameMap) return
+    const apply = (pings: Ping[]) => {
+      const now = Date.now()
+      map.getSource<GeoJSONSource>('pings')?.setData({
+        type: 'FeatureCollection',
+        features: pings.map((p) => {
+          const ll = toLngLat(gameMap.projection, p.position)
+          return {
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [ll.lng, ll.lat] },
+            properties: { label: p.from ?? 'You', fade: Math.max(0.15, 1 - (now - p.at) / PING_MS) },
+          }
+        }),
+      })
+    }
+    apply(useSyncStore.getState().pings)
+    const unsubscribe = useSyncStore.subscribe((s) => apply(s.pings))
+    // Pings fade with age: redraw while any are up.
+    const timer = setInterval(() => {
+      const { pings } = useSyncStore.getState()
+      if (pings.length) apply(pings)
+    }, 1000)
+    return () => {
+      unsubscribe()
+      clearInterval(timer)
+    }
+  }, [map, gameMap])
+}
+
 /** Underground view: dims the surface imagery and shows the cave layouts on top. */
 function useLayerShading(map: MlMap | null) {
   const underground = useStore(selectViewLayer) === 'caves'
@@ -305,26 +413,31 @@ function useTrackLine(map: MlMap | null) {
   const snapshot = useStore((s) => s.snapshot)
   const gamePins = useStore((s) => s.gamePins)
   const user = useStore((s) => s.user)
+  const route = useStore((s) => s.route)
 
   useEffect(() => {
     if (!map || !gameMap) return
     const source = map.getSource<GeoJSONSource>('track')
     const from = snapshot?.local?.position
-    let to = null
-    if (tracked?.kind === 'pin') to = selectAllPins({ gamePins, user }).find((p) => p.id === tracked.id)?.position
-    if (tracked?.kind === 'player') to = findMover(snapshot, tracked.id)?.position
+    const to = tracked ? resolveTracked(tracked, snapshot).position : undefined
     if (!from || !to) {
       source?.setData({ type: 'FeatureCollection', features: [] })
       return
     }
-    const a = toLngLat(gameMap.projection, from)
-    const b = toLngLat(gameMap.projection, to)
+    // The walking route when there is one, else a straight line.
+    const points = route && route.corners.length >= 2 ? [from, ...route.corners.slice(1), to] : [from, to]
     source?.setData({
       type: 'Feature',
-      geometry: { type: 'LineString', coordinates: [[a.lng, a.lat], [b.lng, b.lat]] },
+      geometry: {
+        type: 'LineString',
+        coordinates: points.map((p) => {
+          const ll = toLngLat(gameMap.projection, p)
+          return [ll.lng, ll.lat]
+        }),
+      },
       properties: {},
     })
-  }, [map, gameMap, tracked, snapshot, gamePins, user])
+  }, [map, gameMap, tracked, snapshot, gamePins, user, route])
 }
 
 function usePlayers(map: MlMap | null, variant: 'full' | 'mini') {
@@ -333,36 +446,42 @@ function usePlayers(map: MlMap | null, variant: 'full' | 'mini') {
 
   useEffect(() => {
     if (!map || !gameMap) return
-    const pm = new PlayerMarkers(map, gameMap.projection, variant === 'mini')
+    const pm = new PlayerMarkers(map, gameMap.projection, variant === 'mini', variant === 'full' ? (id) => useStore.getState().selectLive(id) : undefined)
     markers.current = pm
     const apply = () => {
-      const { snapshot, settings } = useStore.getState()
+      const { snapshot, followPlayer } = useStore.getState()
+      const { hud } = useSettings.getState().ui
       pm.update(snapshot)
       const local = snapshot?.local
       if (variant === 'mini') {
-        const zoom = miniBaseZoom(gameMap.projection) + settings.hud.zoom
+        const zoom = miniBaseZoom(gameMap.projection) + hud.zoom
         if (!local) return map.jumpTo({ zoom })
         const center = toLngLat(gameMap.projection, local.position)
         const heading = local.forward ? bearingOf(gameMap.projection, local.forward) : null
         map.jumpTo({
           center: [center.lng, center.lat],
           zoom,
-          bearing: settings.hud.rotateWithPlayer && heading !== null ? heading : 0,
+          bearing: hud.rotateWithPlayer && heading !== null ? heading : 0,
         })
         return
       }
-      if (!local) return
-      const center = toLngLat(gameMap.projection, local.position)
-      if (settings.followPlayer) {
+      const followed = useStore.getState().followId
+      const target = followed ? findMover(snapshot, followed)?.position : followPlayer ? local?.position : undefined
+      if (target) {
+        const center = toLngLat(gameMap.projection, target)
         map.jumpTo({ center: [center.lng, center.lat] })
       }
     }
     apply()
     const unsubscribe = useStore.subscribe((s, prev) => {
-      if (s.snapshot !== prev.snapshot || s.settings !== prev.settings) apply()
+      if (s.snapshot !== prev.snapshot || s.followPlayer !== prev.followPlayer || s.followId !== prev.followId) apply()
+    })
+    const unsubscribeHud = useSettings.subscribe((s, prev) => {
+      if (s.ui.hud !== prev.ui.hud) apply()
     })
     return () => {
       unsubscribe()
+      unsubscribeHud()
       pm.remove()
       markers.current = null
     }
@@ -375,9 +494,9 @@ function useMiniZoomKeys(map: MlMap | null, variant: 'full' | 'mini') {
   useEffect(() => {
     if (!map || !gameMap || variant !== 'mini') return
     const unlisten = events.mapZoom((steps) => {
-      const { settings, setHud } = useStore.getState()
+      const { ui, setHud } = useSettings.getState()
       const base = miniBaseZoom(gameMap.projection)
-      const zoom = steppedZoom(base + settings.hud.zoom, steps, map.getMinZoom(), map.getMaxZoom())
+      const zoom = steppedZoom(base + ui.hud.zoom, steps, map.getMinZoom(), map.getMaxZoom())
       setHud({ zoom: zoom - base })
     })
     return () => void unlisten.then((f) => f())

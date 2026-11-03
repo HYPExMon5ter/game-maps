@@ -7,10 +7,12 @@
 mod agent;
 mod diff;
 mod filelog;
+mod focus;
 mod hook;
 mod hotkeys;
 mod pipe;
 mod provider;
+mod walk;
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -18,7 +20,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use game_maps_protocol::LogLevel;
-use il2cpp::{Runtime, Unity};
+use unity_runtime::{Runtime, Unity};
 use windows::core::HSTRING;
 use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, HMODULE};
 use windows::Win32::System::LibraryLoader::{DisableThreadLibraryCalls, FreeLibraryAndExitThread, GetModuleFileNameW};
@@ -79,41 +81,53 @@ fn run() {
     };
     filelog::write(concat!("agent ", env!("CARGO_PKG_VERSION"), " starting"));
 
-    // Metadata lookups below don't allocate managed objects, so they're safe before
-    // this thread is attached to the runtime.
     let Some(rt) = wait_for_runtime() else {
-        filelog::write("IL2CPP runtime not found; exiting");
+        filelog::write("no Unity scripting runtime found; exiting");
         return;
     };
-    let unity = match Unity::new(&rt) {
-        Ok(u) => u,
-        Err(e) => {
-            filelog::write(&format!("not a supported Unity runtime: {e}"));
-            return;
-        }
-    };
-    let provider = provider::detect(&rt);
-    let mut targets = hook::ENGINE_TARGETS.to_vec();
-    if let Some(p) = &provider {
-        targets.extend_from_slice(p.frame_hooks());
-    }
-
+    filelog::write(&format!("{} runtime found", rt.kind()));
     let (tx, rx) = tokio::sync::mpsc::channel(256);
-    let shared = SHARED.get_or_init(|| Shared::new(rt, unity, provider, tx));
-    // Attached only while installing hooks. This thread then just serves the pipe and
-    // never touches managed objects; staying attached could make the runtime wait for
-    // it when the game shuts down.
-    let (installed, errors) = {
+
+    // Attached only while resolving members and installing hooks (Mono's class loading
+    // and JIT need an attached thread). This thread then just serves the pipe and never
+    // touches managed objects; staying attached could make the runtime wait for it when
+    // the game shuts down.
+    let (shared, installed, errors, quit_hook, input_guarded) = {
+        let thread = rt.attach_thread();
+        let resolved = Unity::new(&rt).map(|unity| (unity, provider::detect(&rt)));
+        drop(thread);
+        let (unity, provider) = match resolved {
+            Ok(r) => r,
+            Err(e) => {
+                filelog::write(&format!("not a supported Unity runtime: {e}"));
+                return;
+            }
+        };
+        let mut targets = hook::ENGINE_TARGETS.to_vec();
+        if let Some(p) = &provider {
+            targets.extend_from_slice(p.frame_hooks());
+        }
+        let shared = SHARED.get_or_init(|| Shared::new(rt, unity, provider, tx));
         let _thread = shared.rt.attach_thread();
-        hook::install(&shared.rt, &targets)
+        let (installed, errors) = hook::install(&shared.rt, &targets);
+        let input_guarded = focus::install_input_guard(&shared.rt);
+        (shared, installed, errors, hook::install_quit_hook(&shared.rt), input_guarded)
     };
     for e in &errors {
         filelog::write(&format!("frame hook skipped: {e}"));
         shared.log(LogLevel::Debug, format!("frame hook skipped: {e}"));
     }
-    if let Err(e) = hook::install_quit_hook(&shared.rt) {
+    if let Err(e) = quit_hook {
         shared.log(LogLevel::Warn, format!("quit hook unavailable: {e}"));
     }
+    if let Err(e) = focus::install_minimize_guard() {
+        shared.log(LogLevel::Warn, format!("minimize guard unavailable: {e}"));
+    }
+    if let Err(e) = focus::install_input_filters() {
+        shared.log(LogLevel::Warn, format!("input filters unavailable: {e}"));
+    }
+    shared.log(LogLevel::Info, format!("input guard: {input_guarded} Input functions"));
+    shared.log(LogLevel::Info, format!("navigation (routes): {}", shared.unity.has_navigation()));
     if installed.is_empty() {
         shared.log(LogLevel::Error, "no frame hook could be installed; live features unavailable");
     } else {
@@ -144,7 +158,7 @@ fn wait_for_runtime() -> Option<Runtime> {
     loop {
         match Runtime::load() {
             Ok(rt) => return Some(rt),
-            Err(il2cpp::Error::DomainNotReady | il2cpp::Error::NotIl2Cpp) if Instant::now() < deadline => {
+            Err(unity_runtime::Error::DomainNotReady | unity_runtime::Error::NoRuntime) if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(250));
             }
             Err(_) => return None,

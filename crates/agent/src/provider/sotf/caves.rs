@@ -11,7 +11,7 @@
 
 use std::ffi::c_void;
 
-use il2cpp::{read_object_array, Class, Field, Il2CppObject, Method, Runtime, Unity, Vector3};
+use unity_runtime::{Class, Field, ListLayout, ManagedObject, Method, Runtime, Unity, Vector3};
 
 /// Axis-aligned bounds (min, max).
 pub type Aabb = (Vector3, Vector3);
@@ -49,7 +49,7 @@ impl Caves {
     ///
     /// # Safety
     /// Main thread only.
-    pub unsafe fn systems(&self, rt: &Runtime, unity: &Unity) -> Vec<*mut Il2CppObject> {
+    pub unsafe fn systems(&self, rt: &Runtime, unity: &Unity) -> Vec<*mut ManagedObject> {
         unity.find_objects(rt, self.class, true).unwrap_or_default()
     }
 
@@ -57,7 +57,7 @@ impl Caves {
     ///
     /// # Safety
     /// Main thread only; `systems` from [`Caves::systems`] this frame.
-    pub unsafe fn containing(&self, rt: &Runtime, systems: &[*mut Il2CppObject], p: Vector3) -> Option<*mut Il2CppObject> {
+    pub unsafe fn containing(&self, rt: &Runtime, systems: &[*mut ManagedObject], p: Vector3) -> Option<*mut ManagedObject> {
         systems.iter().copied().find(|&s| {
             let mut point = p;
             let mut args = [&mut point as *mut Vector3 as *mut c_void];
@@ -69,7 +69,7 @@ impl Caves {
     ///
     /// # Safety
     /// `system` must be a live cave system.
-    pub unsafe fn area(&self, system: *mut Il2CppObject) -> i32 {
+    pub unsafe fn area(&self, system: *mut ManagedObject) -> i32 {
         self.area.get(system)
     }
 
@@ -78,7 +78,7 @@ impl Caves {
     ///
     /// # Safety
     /// Main thread only; `systems` from [`Caves::systems`] this frame.
-    pub unsafe fn activate(&self, rt: &Runtime, systems: &[*mut Il2CppObject], target: Option<*mut Il2CppObject>) -> Result<(), String> {
+    pub unsafe fn activate(&self, rt: &Runtime, systems: &[*mut ManagedObject], target: Option<*mut ManagedObject>) -> Result<(), String> {
         for &s in systems {
             if Some(s) != target && self.is_active.get::<bool>(s) {
                 rt.invoke(&self.forced_exit, s, &mut []).map_err(|e| format!("leaving cave failed: {e}"))?;
@@ -96,14 +96,12 @@ impl Caves {
     ///
     /// # Safety
     /// Main thread only; `system` must be a live cave system.
-    pub unsafe fn extent_bounds(&self, rt: &Runtime, unity: &Unity, system: *mut Il2CppObject) -> Option<Aabb> {
+    pub unsafe fn extent_bounds(&self, rt: &Runtime, unity: &Unity, system: *mut ManagedObject) -> Option<Aabb> {
         let (field, collider, get_bounds) = (self.extents?, self.collider?, self.collider_bounds.as_ref()?);
-        let list: *mut Il2CppObject = field.get(system);
-        let class = rt.class_of(list)?;
-        let (items, size) = (rt.field(class, "_items").ok()?, rt.field(class, "_size").ok()?);
-        let count = (size.get::<i32>(list).max(0) as usize).min(4096);
+        let list: *mut ManagedObject = field.get(system);
+        let layout = ListLayout::of(rt, list).ok()?;
         let mut bounds: Option<Aabb> = None;
-        for e in read_object_array(items.get(list), count) {
+        for e in layout.elements(list, 4096) {
             if !unity.is_alive(e) || !rt.class_of(e).is_some_and(|c| rt.is_assignable(collider, c)) {
                 continue;
             }

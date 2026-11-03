@@ -70,6 +70,21 @@ pub struct LocalPlayer {
     /// Camera facing direction (unit-ish vector), if the game exposes it.
     pub forward: Option<Vec3>,
     pub layer: WorldLayer,
+    /// The game's main camera, for drawing waypoints over the game.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<CameraView>,
+}
+
+/// Where the game's camera is and what it sees.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CameraView {
+    pub position: Vec3,
+    pub forward: Vec3,
+    pub up: Vec3,
+    /// Vertical field of view, degrees.
+    pub fov_y: f32,
+    /// Width / height of the camera's image.
+    pub aspect: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -115,6 +130,46 @@ pub struct WorldSnapshot {
     pub others: Vec<RemotePlayer>,
     #[serde(default)]
     pub markers: Vec<Marker>,
+    /// Creatures the game has active around the player (its own loading distance).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub creatures: Vec<Creature>,
+    /// The multiplayer session the player is in; `None` in single player or when the
+    /// game doesn't expose one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<MultiplayerSession>,
+}
+
+/// A multiplayer session, as every player in it sees it: lets copies of the app in the
+/// same game find each other.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MultiplayerSession {
+    /// The same for everyone in the session (e.g. the Steam lobby), different elsewhere.
+    pub id: String,
+    /// This player's name as the others see it.
+    pub player_name: Option<String>,
+}
+
+/// What a creature is to the player.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CreatureKind {
+    /// Attacks players (cannibals, mutants).
+    Hostile,
+    /// Wildlife.
+    Animal,
+    /// On the player's side (companions).
+    Friendly,
+}
+
+/// A creature near the player.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Creature {
+    /// Stable while the creature is around.
+    pub id: String,
+    pub kind: CreatureKind,
+    /// What it is, as the game names it (e.g. "Fingers", "Deer").
+    pub name: String,
+    pub position: Vec3,
 }
 
 /// What a hotkey does. Kept as an enum so new actions stay type-checked on both ends.
@@ -125,6 +180,8 @@ pub enum HotkeyAction {
     /// Zoom the mini-map in or out (the full map handles its own keys while focused).
     ZoomIn,
     ZoomOut,
+    /// Return to where the player was before their last teleport.
+    TeleportBack,
 }
 
 /// A key binding using Windows virtual-key codes.
@@ -226,6 +283,36 @@ pub enum AgentMessage {
     TeleportResult { request_id: u32, ok: bool, error: Option<String> },
     Log { level: LogLevel, message: String },
     ExportResult { request_id: u32, export: Option<WorldExport>, error: Option<String> },
+    PathResult { request_id: u32, path: Option<PathInfo>, error: Option<String> },
+    RouteCheckResult { request_id: u32, check: Option<RouteCheck>, error: Option<String> },
+    GroundProbeResult { request_id: u32, points: Option<Vec<GroundPoint>>, error: Option<String> },
+}
+
+/// Which legs of a route can't be walked right now (see `AppMessage::CheckRoute`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RouteCheck {
+    /// Indices `i` of blocked legs, from `points[i]` to `points[i + 1]`.
+    pub blocked: Vec<u32>,
+    /// Legs checked, from the start: long routes are checked within a time budget.
+    pub checked: u32,
+}
+
+/// The ground under a probed point (see `AppMessage::ProbeGround`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct GroundPoint {
+    /// Height of the floor nearest the point, if there's one close by.
+    pub y: Option<f32>,
+    /// Whether the camera can see that floor point (nothing solid in between).
+    pub visible: bool,
+}
+
+/// A walking route (see `AppMessage::FindPath`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PathInfo {
+    /// Corner points from the player to the destination.
+    pub corners: Vec<Vec3>,
+    /// False when the destination can't be reached; the route ends as close as it gets.
+    pub complete: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -238,6 +325,13 @@ pub enum AppMessage {
     Teleport { request_id: u32, target: TeleportTarget },
     /// Scan the loaded world for items and points of interest (slow; dev tooling).
     ExportWorld { request_id: u32 },
+    /// A walking route from the player to `to` on the game's navigation mesh.
+    FindPath { request_id: u32, to: Vec3 },
+    /// Checks, against the world as it is now, that a player can walk from each point
+    /// to the next (points on the floor, about a meter apart).
+    CheckRoute { request_id: u32, points: Vec<Vec3> },
+    /// Snaps points near the player to the floor and tells which the camera can see.
+    ProbeGround { request_id: u32, points: Vec<Vec3> },
     /// Unhook and unload the agent from the game process.
     Detach,
 }
@@ -274,6 +368,7 @@ mod tests {
                     position: Vec3::new(1.0, 2.0, 3.0),
                     forward: Some(Vec3::new(0.0, 0.0, 1.0)),
                     layer: WorldLayer::Caves,
+                    camera: None,
                 }),
                 others: vec![RemotePlayer {
                     id: "7".into(),
@@ -289,11 +384,19 @@ mod tests {
                     icon: Some("RobbyLogo".into()),
                     position: Vec3::new(3.0, 4.0, 5.0),
                 }],
+                creatures: vec![Creature { id: "actor:1".into(), kind: CreatureKind::Hostile, name: "Fingers".into(), position: Vec3::new(6.0, 7.0, 8.0) }],
+                session: Some(MultiplayerSession { id: "lobby:1".into(), player_name: Some("A".into()) }),
             }),
             AgentMessage::HotkeyPressed { action: HotkeyAction::ToggleMap },
             AgentMessage::HotkeyPressed { action: HotkeyAction::ZoomOut },
             AgentMessage::TeleportResult { request_id: 3, ok: false, error: Some("not in world".into()) },
             AgentMessage::Log { level: LogLevel::Warn, message: "x".into() },
+            AgentMessage::RouteCheckResult { request_id: 6, check: Some(RouteCheck { blocked: vec![2, 3], checked: 9 }), error: None },
+            AgentMessage::GroundProbeResult {
+                request_id: 7,
+                points: Some(vec![GroundPoint { y: Some(1.5), visible: true }, GroundPoint { y: None, visible: false }]),
+                error: None,
+            },
             AgentMessage::ExportResult {
                 request_id: 4,
                 export: Some(WorldExport {
@@ -337,6 +440,8 @@ mod tests {
             },
             AppMessage::Teleport { request_id: 2, target: TeleportTarget::Player { id: "7".into() } },
             AppMessage::ExportWorld { request_id: 5 },
+            AppMessage::CheckRoute { request_id: 6, points: vec![Vec3::new(1.0, 2.0, 3.0), Vec3::new(2.0, 2.0, 3.0)] },
+            AppMessage::ProbeGround { request_id: 7, points: vec![Vec3::new(1.0, 2.0, 3.0)] },
             AppMessage::Detach,
         ];
         for msg in msgs {

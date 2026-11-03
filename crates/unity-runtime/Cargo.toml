@@ -1,6 +1,6 @@
 [package]
-name = "il2cpp"
-description = "Name-based access to a running Unity IL2CPP runtime from inside the process"
+name = "unity-runtime"
+description = "Name-based access to a running Unity scripting runtime (IL2CPP or Mono) from inside the process"
 edition.workspace = true
 version.workspace = true
 license.workspace = true

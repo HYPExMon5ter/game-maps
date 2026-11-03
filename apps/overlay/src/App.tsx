@@ -1,29 +1,39 @@
 import { Component, useEffect, useState, type ReactNode } from 'react'
+import { pinsReached } from './lib/autoFound'
+import { resolveTracked } from './lib/tracking'
+import { findPin, refreshBackSteps } from './lib/actions'
+import { caveAt, caveIndex, caveRoute } from './lib/caveNav'
+import { nearestEntrance, routeDestination } from './lib/route'
+import type { Vec3 } from './lib/protocol'
 import { startAgentLogBuffer } from './lib/agentLogs'
 import { backend, events } from './lib/backend'
 import { loadGame } from './lib/game'
 import { matchesHotkey } from './lib/keys'
 import { steppedZoom } from './lib/zoom'
 import { mapHandle } from './map/handle'
-import { clearLegacyHotkey, loadSettings, loadUserData, startPersisting } from './state/persist'
-import { selectMapHotkey, useStore } from './state/store'
+import { useSync } from './lib/sync/sync'
+import { loadSession, loadUserData, startPersisting } from './state/persist'
+import { selectAllPins, useStore } from './state/store'
 import type { Hotkey } from './lib/protocol'
 import { FullMap } from './ui/FullMap'
-import { minimapSize } from './lib/minimap'
-import { COMPASS_HEIGHT, Hud, HUD_GAP } from './ui/Hud'
+import { HUD_MARGIN, hudSize } from './lib/hudLayout'
+import { Hud } from './ui/Hud'
+import { gameSettings } from './settings/model'
+import { mapHotkey, useSettings } from './settings/store'
+import { startSettings } from './settings/sync'
 
 /** A new map pack arrived while the full map was open. */
 let reloadWhenClosed = false
 
 function useBackendSync() {
   useEffect(() => {
-    const { setStatus, setMode, setSnapshot, setSettings, setMapHotkeys, setZoomKeys } = useStore.getState()
+    const { setStatus, setMode, setSnapshot, notify } = useStore.getState()
     const cleanups: Promise<() => void>[] = [
+      startSettings(),
       events.status(setStatus),
-      // Hotkeys may be changed from the launcher too.
-      events.appSettings((s) => {
-        setMapHotkeys(s.map_hotkeys)
-        setZoomKeys(s.zoom_keys)
+      events.teleportBack((error) => {
+        void refreshBackSteps()
+        if (useStore.getState().mode !== 'hidden') notify(error ? `Teleport back failed: ${error}` : 'Teleported back', error ? 'error' : 'info')
       }),
       events.snapshot((s) => setSnapshot(s.local || s.others.length ? s : null)),
       events.overlayMode(async (mode) => {
@@ -31,6 +41,7 @@ function useBackendSync() {
         if (mode !== 'open' && reloadWhenClosed) return window.location.reload()
         // Snapshots are only streamed while visible; catch up immediately.
         if (mode !== 'hidden') setSnapshot(await backend.lastSnapshot())
+        if (mode === 'open') void refreshBackSteps()
         if (mode === 'open') requestAnimationFrame(() => mapHandle.current?.resize())
       }),
       startAgentLogBuffer(),
@@ -42,23 +53,107 @@ function useBackendSync() {
         else window.location.reload()
       }),
     ]
-    let stopPersist: (() => void) | null = null
+    const stopPersist = startPersisting()
     void (async () => {
-      const [{ settings, legacyHotkey }, appSettings] = await Promise.all([loadSettings(), backend.appSettings()])
-      setSettings(settings)
-      setMapHotkeys(appSettings.map_hotkeys)
-      setZoomKeys(appSettings.zoom_keys)
-      stopPersist = startPersisting()
-      if (legacyHotkey) void migrateLegacyHotkey(legacyHotkey)
       setStatus(await backend.status())
       setMode(await backend.overlayMode())
       setSnapshot(await backend.lastSnapshot())
     })()
     return () => {
-      stopPersist?.()
+      stopPersist()
       cleanups.forEach((p) => void p.then((f) => f()))
     }
   }, [])
+}
+
+/** How often the route to the tracked target is recomputed. */
+const ROUTE_INTERVAL_MS = 1500
+
+/**
+ * Keeps the walking route to the tracked target current while it's shown (map open,
+ * or waypoint in the game). One navigation query in the game every 1.5 s.
+ */
+function useRoute() {
+  const tracked = useStore((s) => s.tracked)
+  const enabled = useSettings((s) => s.ui.showRoute)
+  const waypoint = useSettings((s) => s.ui.hud.waypoint)
+  const shown = useStore((s) => s.mode === 'open' || (s.mode === 'pinned' && waypoint))
+  const canRoute = useStore((s) => s.status?.state === 'connected')
+  useEffect(() => {
+    const { setRoute } = useStore.getState()
+    if (!tracked || !enabled || !shown || !canRoute) {
+      setRoute(null)
+      return
+    }
+    let cancelled = false
+    const update = async () => {
+      const s = useStore.getState()
+      let target = resolveTracked(tracked, s.snapshot).position
+      const local = s.snapshot?.local
+      const game = s.game
+      if (!target || !local || !game) return
+      // Underground: route on the cave's floor grid (the game's pathfinding doesn't
+      // cover caves), to the target if it's in this cave, else to the way out.
+      if (local.layer === 'caves') {
+        const cave = caveAt(await caveIndex(game.id), local.position)
+        if (cave) {
+          const inCave = (p: Vec3) => caveAt([cave], p, 8) !== undefined
+          const dest = inCave(target)
+            ? target
+            : nearestEntrance(local.position, selectAllPins(s), game.categories, (pin) => inCave(pin.position))?.position
+          const corners = dest ? await caveRoute(game.id, cave, local.position, dest, backend.checkRoute) : null
+          if (cancelled) return
+          if (corners) {
+            setRoute({ corners, complete: true })
+            return
+          }
+        }
+      }
+      if (tracked.kind === 'pin') {
+        const pin = findPin(tracked.id)
+        if (pin) target = routeDestination(pin, local.layer === 'caves', selectAllPins(s), game.categories)
+      }
+      try {
+        const route = await backend.findPath(target)
+        if (!cancelled) setRoute(route)
+      } catch {
+        if (!cancelled) setRoute(null) // no navigation mesh here, or no way there
+      }
+    }
+    // Rerouting around blocks can outlast the interval: skip ticks while one runs.
+    let running = false
+    const tick = async () => {
+      if (running) return
+      running = true
+      try {
+        await update()
+      } finally {
+        running = false
+      }
+    }
+    void tick()
+    const id = setInterval(() => void tick(), ROUTE_INTERVAL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [tracked, enabled, shown, canRoute])
+}
+
+/** Marks collectibles found as the player passes them (see `lib/autoFound`). */
+function useAutoFound() {
+  useEffect(
+    () =>
+      useStore.subscribe((s, prev) => {
+        const local = s.snapshot?.local
+        if (s.snapshot === prev.snapshot || !local || !s.game || !s.map || !gameSettings(useSettings.getState().ui, s.game.id).autoFound) return
+        const reached = pinsReached(s.gamePins, s.game.categories, new Set(s.user.found), local, s.map.projection, s.game.unitsPerMeter)
+        if (reached.length === 0) return
+        s.markFound(reached.map((p) => p.id))
+        if (s.mode !== 'hidden') s.notify(`Found: ${reached.map((p) => p.name).join(', ')}`)
+      }),
+    [],
+  )
 }
 
 /** Loads the detected game, or the first available one so the map can be browsed offline. */
@@ -71,8 +166,8 @@ function useGameLoader() {
       const id = detected ?? current ?? (await backend.listGames())[0]?.id
       if (!id || id === current) return
       try {
-        const [{ game, pins }, user] = await Promise.all([loadGame(id), loadUserData(id)])
-        if (!cancelled) useStore.getState().setGame(game, pins, user)
+        const [{ game, pins }, user, session] = await Promise.all([loadGame(id), loadUserData(id), loadSession(id)])
+        if (!cancelled) useStore.getState().setGame(game, pins, user, session)
       } catch (e) {
         useStore.getState().notify(`Could not load map: ${String(e)}`, 'error')
       }
@@ -83,36 +178,26 @@ function useGameLoader() {
   }, [detected, current])
 }
 
-/**
- * Older versions kept one map hotkey for all games in the UI settings. Applies it to
- * every game without its own key, once (the UI settings no longer store it).
- */
-async function migrateLegacyHotkey(hotkey: Hotkey) {
-  const [games, current] = await Promise.all([backend.listGames(), backend.appSettings()])
-  let latest = current
-  for (const game of games) {
-    if (!latest.map_hotkeys[game.id]) latest = await backend.setMapHotkey(game.id, hotkey)
-  }
-  useStore.getState().setMapHotkeys(latest.map_hotkeys)
-  await clearLegacyHotkey()
-}
-
 /** Keeps the backend's HUD window geometry in line with what the HUD shows. */
 function useHudSync() {
-  const hud = useStore((s) => s.settings.hud)
+  const hud = useSettings((s) => s.ui.hud)
   const tracking = useStore((s) => s.tracked !== null)
   useEffect(() => {
-    const minimap = hud.minimap
-    const size = minimapSize(hud, window.screen)
-    const width = minimap ? size.width : 280
-    const height = (minimap ? size.height : 0) + (tracking ? COMPASS_HEIGHT + (minimap ? HUD_GAP : 0) : 0)
-    void backend.setPinConfig({ enabled: minimap || tracking, corner: hud.corner, width, height: Math.max(height, 1), margin: 24 })
+    const { width, height } = hudSize(hud.minimap, tracking, hud)
+    void backend.setPinConfig({
+      enabled: hud.minimap || tracking,
+      corner: hud.corner,
+      width,
+      height,
+      margin: HUD_MARGIN,
+      fullscreen: tracking && hud.waypoint,
+    })
   }, [hud, tracking])
 }
 
 /** Steps of a zoom key binding (+1 in, -1 out), or 0 if `e` isn't one. */
 function zoomKeySteps(e: KeyboardEvent): number {
-  const keys = useStore.getState().zoomKeys
+  const keys = useSettings.getState().app?.zoom_keys
   if (!keys) return 0
   const matches = (slots: (Hotkey | null)[]) => slots.some((h) => h && matchesHotkey(e, h))
   return matches(keys.zoom_in) ? 1 : matches(keys.zoom_out) ? -1 : 0
@@ -134,7 +219,7 @@ function useOverlayKeys() {
         document.getElementById('pin-search')?.focus()
         return
       }
-      const hotkey = selectMapHotkey(useStore.getState())
+      const hotkey = mapHotkey(useSettings.getState().app, useStore.getState().game)
       if (e.key === 'Escape' || (hotkey && matchesHotkey(e, hotkey))) {
         e.preventDefault()
         void backend.closeOverlay()
@@ -155,6 +240,9 @@ function useOverlayKeys() {
 
 export default function App() {
   useBackendSync()
+  useAutoFound()
+  useRoute()
+  useSync()
   useGameLoader()
   useHudSync()
   useOverlayKeys()

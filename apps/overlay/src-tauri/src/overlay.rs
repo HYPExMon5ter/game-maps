@@ -43,11 +43,15 @@ pub struct PinConfig {
     pub height: u32,
     /// Distance from the screen edges in logical pixels.
     pub margin: u32,
+    /// Cover the game's whole screen (still click-through), so waypoints can be drawn
+    /// over the game; the HUD then places itself in its corner.
+    #[serde(default)]
+    pub fullscreen: bool,
 }
 
 impl Default for PinConfig {
     fn default() -> Self {
-        Self { enabled: false, corner: Corner::TopRight, width: 320, height: 320, margin: 24 }
+        Self { enabled: false, corner: Corner::TopRight, width: 320, height: 320, margin: 24, fullscreen: false }
     }
 }
 
@@ -209,7 +213,7 @@ fn apply_with(app: &AppHandle, next: OverlayMode, return_focus: bool) {
                 let _ = win.show();
             }
             let pin = *state(app).pin.lock().unwrap();
-            if let Some((mx, my, mw, mh, scale)) = target_monitor(app, &win) {
+            if let Some((mx, my, mw, mh, scale)) = target_monitor(app, &win).filter(|_| !pin.fullscreen) {
                 let w = (pin.width as f64 * scale).round() as i32;
                 let h = (pin.height as f64 * scale).round() as i32;
                 let margin = (pin.margin as f64 * scale).round() as i32;
@@ -220,6 +224,9 @@ fn apply_with(app: &AppHandle, next: OverlayMode, return_focus: bool) {
                     Corner::BottomRight => (mx + mw as i32 - w - margin, my + mh as i32 - h - margin),
                 };
                 place(app, &win, x, y, w.max(1) as u32, h.max(1) as u32);
+            } else if let Some((mx, my, mw, mh, _)) = target_monitor(app, &win) {
+                // Waypoints: cover the game's screen; the HUD places itself in its corner.
+                place(app, &win, mx, my, mw, mh);
             }
         }
     }
@@ -308,17 +315,19 @@ fn front(app: &AppHandle, game_pid: u32) -> Front {
 
 fn sync_with_game(app: &AppHandle) {
     let mode = mode(app);
-    if mode == OverlayMode::Hidden {
-        return;
-    }
     // No game attached (map opened from the tray): nothing to follow.
     let Some((pid, _)) = *state(app).game.lock().unwrap() else { return };
     if !injector::is_alive(pid) {
         *state(app).game.lock().unwrap() = None;
-        apply_with(app, OverlayMode::Hidden, false);
+        if mode != OverlayMode::Hidden {
+            apply_with(app, OverlayMode::Hidden, false);
+        }
         return;
     }
     match (mode, front(app, pid)) {
+        // A game attached (app start, game start, reconnect): bring the mini-map and
+        // tracking HUD back once the game is in front, as it was left.
+        (OverlayMode::Hidden, Front::Ours) if state(app).pin.lock().unwrap().enabled => apply(app, OverlayMode::Pinned),
         (OverlayMode::Open, Front::Other) => {
             // The HUD must not appear over the app the user switched to.
             *state(app).suspended.lock().unwrap() = true;

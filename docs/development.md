@@ -19,6 +19,13 @@ bun run app:dev      # builds the agent DLL, then starts the app with hot reload
 In development builds, map data is read from `games/<id>/` in the repository instead
 of downloaded map packs, and the app never updates itself.
 
+To try playing together without a multiplayer game, set a room in the overlay's dev
+tools console (focus the open map, **Ctrl+Shift+I**):
+`localStorage.setItem('game-maps:sync-room', 'any-name')`, then reload. Another copy
+of the app (or a page using Trystero with app id `game-maps-overlay`, password and
+room `<game id>/any-name`) in the same room connects to it. Remove the item when
+done.
+
 ## Checks
 
 These are the same checks [CI](../.github/workflows/ci.yml) runs once on every pull request (and again before every release):
@@ -38,7 +45,7 @@ cd apps/overlay && bun run lint && bun run build && bun run test
 | `apps/overlay/src-tauri` | Tauri backend: game detection, injector, agent link, overlay window, map packs, updater, settings |
 | `apps/overlay/src` | React UI: the map overlay (`App.tsx`, `map/`, `ui/`) and the launcher window (`launcher/`) |
 | `crates/agent` | The agent loaded into the game: frame hook, pipe server, per-game providers |
-| `crates/il2cpp` | Name-based access to a Unity IL2CPP runtime from inside the process |
+| `crates/unity-runtime` | Name-based access to a Unity scripting runtime (IL2CPP or Mono) from inside the process |
 | `crates/protocol` | Messages between the app and the agent (versioned) |
 | `games/<id>` | Per-game definition (`game.json`), pins, and generated tiles and icons |
 | `tools/mapgen` | Builds map tiles and icons from game files |
@@ -63,8 +70,7 @@ python -m venv .venv
 ```
 
 Pins and cave layouts come from an in-game export. Start a **new** game (so nothing
-has been picked up yet), open the map's **Settings → Diagnostics → Export world
-data** (about 30 seconds; it scans every cave), then:
+has been picked up yet), open **Settings → Advanced → Export world data** (about 30 seconds; it scans every cave), then:
 
 ```sh
 python -I tools/pins/sotf.py --out games/sons-of-the-forest "%LOCALAPPDATA%/com.gamemaps.overlay/exports/<export>.json"
@@ -72,6 +78,19 @@ python -I tools/pins/sotf.py --out games/sons-of-the-forest "%LOCALAPPDATA%/com.
 ```
 
 Re-run these after a game update that moves things, then publish the map.
+
+### Sunkenland
+
+Everything comes from the game files; no in-game step. The map is drawn on the GPU
+(moderngl, any OpenGL 4.3 GPU) and takes a few minutes.
+
+```sh
+.venv/Scripts/python -I tools/mapgen/sunkenland.py --game "D:/SteamLibrary/steamapps/common/Sunkenland" --out games/sunkenland
+.venv/Scripts/python -I tools/mapgen/sunkenland.py --game "D:/SteamLibrary/steamapps/common/Sunkenland" --export-world world.json
+python -I tools/pins/sunkenland.py --out games/sunkenland world.json
+```
+
+Add `--preview-only` for a quick 2048 px `preview.png`.
 
 ## Adding a game
 
@@ -81,6 +100,7 @@ Re-run these after a game update that moves things, then publish the map.
    until the game has a provider (step 4).
 2. Generate tiles, icons and `pins.json` into `games/<id>/`.
 3. Add the `game.json` to `bundle.resources` in `apps/overlay/src-tauri/tauri.conf.json`.
-4. For live location and teleport, add a provider in `crates/agent/src/provider/`.
+4. For live location and teleport, add a provider in `crates/agent/src/provider/` and
+   register it in `provider::detect`. IL2CPP and Mono games use the same runtime API.
    Without one, the game works as a static map.
 5. Publish its map pack and release the app. The launcher lists the game automatically.

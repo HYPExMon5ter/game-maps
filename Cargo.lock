@@ -1284,9 +1284,9 @@ version = "0.2.0"
 dependencies = [
  "base64 0.23.1",
  "game-maps-protocol",
- "il2cpp",
  "minhook",
  "tokio",
+ "unity-runtime",
  "windows",
 ]
 
@@ -1916,14 +1916,6 @@ checksum = "cb68373c0d6620ef8105e855e7745e18b0d00d3bdb07fb532e434244cdb9a714"
 dependencies = [
  "icu_normalizer",
  "icu_properties",
-]
-
-[[package]]
-name = "il2cpp"
-version = "0.2.0"
-dependencies = [
- "thiserror 2.0.21",
- "windows",
 ]
 
 [[package]]
@@ -4883,6 +4875,14 @@ name = "unicode-segmentation"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
+
+[[package]]
+name = "unity-runtime"
+version = "0.2.0"
+dependencies = [
+ "thiserror 2.0.21",
+ "windows",
+]
 
 [[package]]
 name = "untrusted"

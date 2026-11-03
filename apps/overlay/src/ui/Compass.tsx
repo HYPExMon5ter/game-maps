@@ -1,9 +1,8 @@
 import { ArrowDown, ArrowUp, X } from 'lucide-react'
-import { findPin } from '../lib/actions'
-import { compassReading, formatDistance } from '../lib/compass'
-import { findMover } from '../lib/movers'
-import type { Vec3 } from '../lib/protocol'
+import { compassReading, formatDistance, formatHeight } from '../lib/compass'
+import { resolveTracked } from '../lib/tracking'
 import { useStore } from '../state/store'
+import { useSettings } from '../settings/store'
 
 const NEARBY_METERS = 4
 
@@ -16,19 +15,10 @@ export function Compass({ compact = false, interactive = true }: { compact?: boo
   const snapshot = useStore((s) => s.snapshot)
   useStore((s) => s.user) // custom pin edits
   const setTracked = useStore((s) => s.setTracked)
+  const units = useSettings((s) => s.ui.units)
   if (!tracked || !game || !map) return null
 
-  let name = ''
-  let target: Vec3 | undefined
-  if (tracked.kind === 'pin') {
-    const pin = findPin(tracked.id)
-    name = pin?.name ?? ''
-    target = pin?.position
-  } else {
-    const p = findMover(snapshot, tracked.id)
-    name = p?.name ?? 'Player'
-    target = p?.position
-  }
+  const { name, position: target } = resolveTracked(tracked, snapshot)
 
   const reading = local && target ? compassReading(map.projection, local, target, game.unitsPerMeter) : null
   const nearby = reading !== null && reading.distance < NEARBY_METERS
@@ -61,11 +51,11 @@ export function Compass({ compact = false, interactive = true }: { compact?: boo
             'You are here'
           ) : (
             <>
-              <span className="tabular-nums">{formatDistance(reading.distance)}</span>
+              <span className="tabular-nums">{formatDistance(reading.distance, units)}</span>
               {Math.abs(reading.rise) >= 5 && (
                 <span className="flex items-center tabular-nums text-ink-faint">
                   {reading.rise > 0 ? <ArrowUp className="size-3" /> : <ArrowDown className="size-3" />}
-                  {Math.round(Math.abs(reading.rise))} m
+                  {formatHeight(Math.abs(reading.rise), units)}
                 </span>
               )}
             </>

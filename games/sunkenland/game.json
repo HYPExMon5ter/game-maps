@@ -1,0 +1,152 @@
+{
+  "id": "sunkenland",
+  "name": "Sunkenland",
+  "process": "Sunkenland.exe",
+  "steamAppId": 2080690,
+  "liveFeatures": true,
+  "engine": "unity-mono",
+  "unitsPerMeter": 1,
+  "defaultHotkeys": [
+    {
+      "action": "toggle_map",
+      "vk": 77
+    }
+  ],
+  "maps": [
+    {
+      "id": "world",
+      "name": "World",
+      "layers": [
+        "surface"
+      ],
+      "background": "#163a5c",
+      "tiles": {
+        "url": "tiles/surface/{z}/{x}/{y}.webp",
+        "tileSize": 256,
+        "minNativeZoom": 3,
+        "maxNativeZoom": 9,
+        "maxZoom": 12
+      },
+      "projection": {
+        "east": "x",
+        "north": "z",
+        "up": "y",
+        "minEast": -4200,
+        "maxEast": 1800,
+        "minNorth": -4300,
+        "maxNorth": 1700,
+        "tileZoom": 3,
+        "tileX": 3,
+        "tileY": 3
+      }
+    }
+  ],
+  "categories": [
+    {
+      "id": "location",
+      "name": "Locations",
+      "color": "#f2c94c",
+      "icon": "game:Island",
+      "visible": true
+    },
+    {
+      "id": "trader",
+      "name": "Traders",
+      "color": "#27ae60",
+      "icon": "game:icon trade",
+      "visible": true
+    },
+    {
+      "id": "companion",
+      "name": "Companions",
+      "color": "#bb6bd9",
+      "icon": "builtin:pin",
+      "visible": true
+    },
+    {
+      "id": "captive",
+      "name": "Captives",
+      "color": "#eb5757",
+      "icon": "game:Cage",
+      "visible": true
+    },
+    {
+      "id": "research",
+      "name": "Research & Blueprints",
+      "color": "#2f80ed",
+      "icon": "game:ICON RESEARCH",
+      "visible": true
+    },
+    {
+      "id": "fragment",
+      "name": "Map Fragments",
+      "color": "#9b51e0",
+      "icon": "game:icon map",
+      "visible": true,
+      "autoFound": true
+    },
+    {
+      "id": "airdrop",
+      "name": "Airdrop Platforms",
+      "color": "#f2994a",
+      "icon": "game:icon radio",
+      "visible": true
+    },
+    {
+      "id": "supply",
+      "name": "Supply Crates",
+      "color": "#d4a373",
+      "icon": "game:Box-Outline-Icon",
+      "visible": true
+    },
+    {
+      "id": "valuable",
+      "name": "Safes & Military Crates",
+      "color": "#ff8a65",
+      "icon": "game:Box-Outline-Icon",
+      "visible": false
+    },
+    {
+      "id": "ore",
+      "name": "Ore & Mining",
+      "color": "#8d7b6a",
+      "icon": "game:icon chiop pickaxe",
+      "visible": false
+    },
+    {
+      "id": "fish",
+      "name": "Fish",
+      "color": "#56ccf2",
+      "icon": "game:icon fish",
+      "visible": false
+    },
+    {
+      "id": "forage",
+      "name": "Plants & Foraging",
+      "color": "#6fcf97",
+      "icon": "builtin:pin",
+      "visible": false
+    },
+    {
+      "id": "container",
+      "name": "Other Containers",
+      "color": "#a3b13a",
+      "icon": "game:Box-Outline-Icon",
+      "visible": false
+    },
+    {
+      "id": "hazard",
+      "name": "Radiation",
+      "color": "#ff5252",
+      "icon": "builtin:pin",
+      "visible": true
+    },
+    {
+      "id": "custom",
+      "name": "My Pins",
+      "color": "#ffffff",
+      "icon": "builtin:pin",
+      "visible": true
+    }
+  ]
+}

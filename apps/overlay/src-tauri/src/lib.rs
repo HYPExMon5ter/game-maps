@@ -15,7 +15,7 @@ mod updates;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use game_maps_protocol::{Hotkey, HotkeyAction, TeleportTarget, WorldSnapshot};
+use game_maps_protocol::{GroundPoint, Hotkey, HotkeyAction, PathInfo, RouteCheck, TeleportTarget, Vec3, WorldSnapshot};
 use tauri::http::{header, Response, StatusCode};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -56,6 +56,59 @@ fn get_last_snapshot(link: State<'_, Arc<AgentLink>>) -> Option<WorldSnapshot> {
 #[tauri::command]
 async fn teleport(link: State<'_, Arc<AgentLink>>, target: TeleportTarget) -> Result<(), String> {
     link.inner().clone().teleport(target).await
+}
+
+/// A walking route from the player to `to` on the game's navigation mesh.
+#[tauri::command]
+async fn find_path(link: State<'_, Arc<AgentLink>>, to: Vec3) -> Result<PathInfo, String> {
+    let result = link.inner().clone().find_path(to).await;
+    if let Err(e) = &result {
+        // Routes are requested every 1.5 s: log each distinct failure once.
+        static LAST: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+        let mut last = LAST.lock().unwrap();
+        if last.as_deref() != Some(e.as_str()) {
+            log::info!("route unavailable: {e}");
+            *last = Some(e.clone());
+        }
+    }
+    result
+}
+
+/// Which legs of a route (floor points about a meter apart) can't be walked right now.
+#[tauri::command]
+async fn check_route(link: State<'_, Arc<AgentLink>>, points: Vec<Vec3>) -> Result<RouteCheck, String> {
+    link.inner().clone().check_route(points).await
+}
+
+/// The floor under points near the player, and whether the game camera sees them.
+#[tauri::command]
+async fn probe_ground(link: State<'_, Arc<AgentLink>>, points: Vec<Vec3>) -> Result<Vec<GroundPoint>, String> {
+    link.inner().clone().probe_ground(points).await
+}
+
+/// Returns the player to where they were before their last teleport.
+#[tauri::command]
+async fn teleport_back(link: State<'_, Arc<AgentLink>>) -> Result<(), String> {
+    link.inner().clone().teleport_back().await
+}
+
+/// How many teleports "teleport back" can undo.
+#[tauri::command]
+fn teleport_back_steps(link: State<'_, Arc<AgentLink>>) -> usize {
+    link.teleport_back_steps()
+}
+
+/// Sets the teleport back key (all games); `None` turns it off.
+#[tauri::command]
+fn set_back_key(app: AppHandle, link: State<'_, Arc<AgentLink>>, registry: State<'_, Registry>, key: Option<Hotkey>) -> Result<AppSettings, String> {
+    if key.as_ref().is_some_and(|h| h.action != HotkeyAction::TeleportBack) {
+        return Err("the key must be bound to teleport back".into());
+    }
+    let saved = settings::update(&app, |s| s.back_key = key)?;
+    if let Some(game) = link.status().game_id.and_then(|id| registry.0.iter().find(|g| g.id == id)) {
+        link.apply_hotkeys(&game.id, saved.hotkeys(game));
+    }
+    Ok(saved)
 }
 
 /// Dev tooling: scans the loaded world and saves it as JSON under `exports/`.
@@ -394,6 +447,12 @@ pub fn run() {
             get_status,
             get_last_snapshot,
             teleport,
+            teleport_back,
+            find_path,
+            check_route,
+            probe_ground,
+            teleport_back_steps,
+            set_back_key,
             export_world,
             get_overlay_mode,
             open_map,

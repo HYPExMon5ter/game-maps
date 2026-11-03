@@ -13,10 +13,10 @@ use std::time::{Duration, Instant};
 
 use game_maps_protocol::{
     decode_line, encode_line, pipe_name, AgentMessage, AppMessage, Capabilities, Hotkey, HotkeyAction, LogLevel, TeleportTarget,
-    WorldExport, WorldSnapshot, PROTOCOL_VERSION,
+    GroundPoint, PathInfo, RouteCheck, Vec3, WorldExport, WorldSnapshot, PROTOCOL_VERSION,
 };
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
 use tokio::sync::{mpsc, oneshot, Notify};
@@ -28,11 +28,20 @@ use crate::settings::{self, HookMode};
 
 const SNAPSHOT_HZ: u32 = 30;
 const TELEPORT_TIMEOUT: Duration = Duration::from_secs(5);
+const PATH_TIMEOUT: Duration = Duration::from_secs(3);
+/// Route checks and ground probes take a frame or two in the game.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+/// How often the UI gets a snapshot while the map is hidden.
+const HIDDEN_SNAPSHOT_INTERVAL: Duration = Duration::from_millis(500);
+/// Places remembered for "teleport back" (most recent last).
+const TELEPORT_HISTORY: usize = 20;
 /// A world export scans every loaded object and every cave on the game's main thread.
 const EXPORT_TIMEOUT: Duration = Duration::from_secs(600);
 /// How long to keep trying to reach a freshly injected agent (it waits for the game's
 /// scripting runtime, which can take a while during game startup).
 const CONNECT_AFTER_INJECT: Duration = Duration::from_secs(180);
+/// How long an outdated agent may take to unhook and unload after being told to detach.
+const AGENT_UNLOAD_TIMEOUT: Duration = Duration::from_secs(15);
 
 const ERROR_FILE_NOT_FOUND: i32 = 2;
 const ERROR_PIPE_BUSY: i32 = 231;
@@ -74,6 +83,10 @@ struct Inner {
     status: LinkStatus,
     snapshot: Option<WorldSnapshot>,
     sender: Option<mpsc::UnboundedSender<AppMessage>>,
+    /// Where the player was before each teleport this session (most recent last).
+    teleported_from: Vec<Vec3>,
+    /// Last snapshot sent to the UI while the map was hidden.
+    hidden_sent_at: Option<Instant>,
 }
 
 /// Per-process hooking decisions.
@@ -97,9 +110,36 @@ pub struct AgentLink {
     control: Mutex<Control>,
     /// Wakes the link loop early (connect requests, hook mode changes).
     wake: Notify,
-    pending: Mutex<HashMap<u32, oneshot::Sender<Result<(), String>>>>,
-    pending_exports: Mutex<HashMap<u32, oneshot::Sender<Result<WorldExport, String>>>>,
+    teleports: Pending<()>,
+    exports: Pending<WorldExport>,
+    paths: Pending<PathInfo>,
+    route_checks: Pending<RouteCheck>,
+    ground_probes: Pending<Vec<GroundPoint>>,
     next_request: AtomicU32,
+}
+
+/// Requests waiting for the agent's answer, by request id.
+struct Pending<T>(Mutex<HashMap<u32, oneshot::Sender<Result<T, String>>>>);
+
+impl<T> Default for Pending<T> {
+    fn default() -> Self {
+        Self(Mutex::new(HashMap::new()))
+    }
+}
+
+impl<T> Pending<T> {
+    /// Hands the agent's answer to whoever is waiting for it (unless they gave up).
+    fn resolve(&self, request_id: u32, result: Option<T>, error: Option<String>, fallback: &str) {
+        if let Some(tx) = self.0.lock().unwrap().remove(&request_id) {
+            let _ = tx.send(result.ok_or_else(|| error.unwrap_or_else(|| fallback.into())));
+        }
+    }
+
+    fn fail_all(&self, error: &str) {
+        for (_, tx) in self.0.lock().unwrap().drain() {
+            let _ = tx.send(Err(error.into()));
+        }
+    }
 }
 
 pub struct LinkConfig {
@@ -115,11 +155,16 @@ impl AgentLink {
                 status: LinkStatus { state: LinkState::WaitingForGame, game_id: None, pid: None, capabilities: None, message: None },
                 snapshot: None,
                 sender: None,
+                teleported_from: Vec::new(),
+                hidden_sent_at: None,
             }),
             control: Mutex::new(Control::default()),
             wake: Notify::new(),
-            pending: Mutex::new(HashMap::new()),
-            pending_exports: Mutex::new(HashMap::new()),
+            teleports: Pending::default(),
+            exports: Pending::default(),
+            paths: Pending::default(),
+            route_checks: Pending::default(),
+            ground_probes: Pending::default(),
             next_request: AtomicU32::new(1),
         });
         let l = link.clone();
@@ -186,43 +231,81 @@ impl AgentLink {
         }
     }
 
+    /// Teleports the player, remembering where they were for [`AgentLink::teleport_back`].
     pub async fn teleport(&self, target: TeleportTarget) -> Result<(), String> {
-        let request_id = self.next_request.fetch_add(1, Ordering::Relaxed);
-        let (tx, rx) = oneshot::channel();
-        {
-            let inner = self.inner.lock().unwrap();
-            let sender = inner.sender.as_ref().ok_or("not connected to the game")?;
-            if !inner.status.capabilities.is_some_and(|c| c.teleport) {
-                return Err("teleport is not supported for this game".into());
+        let from = self.inner.lock().unwrap().snapshot.as_ref().and_then(|s| s.local.as_ref()).map(|l| l.position);
+        self.send_teleport(target).await?;
+        if let Some(from) = from {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.teleported_from.len() == TELEPORT_HISTORY {
+                inner.teleported_from.remove(0);
             }
-            self.pending.lock().unwrap().insert(request_id, tx);
-            sender.send(AppMessage::Teleport { request_id, target }).map_err(|_| "connection closed")?;
+            inner.teleported_from.push(from);
         }
-        match tokio::time::timeout(TELEPORT_TIMEOUT, rx).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err("connection closed".into()),
-            Err(_) => {
-                self.pending.lock().unwrap().remove(&request_id);
-                Err("the game did not respond".into())
-            }
+        Ok(())
+    }
+
+    /// Returns the player to where they were before their last teleport. Each call goes
+    /// one teleport further back.
+    pub async fn teleport_back(&self) -> Result<(), String> {
+        let from = self.inner.lock().unwrap().teleported_from.pop().ok_or("no teleport to go back from")?;
+        let result = self.send_teleport(TeleportTarget::Position { position: from, snap_to_ground: false }).await;
+        if result.is_err() {
+            self.inner.lock().unwrap().teleported_from.push(from);
         }
+        result
+    }
+
+    /// How many teleports can be undone with [`AgentLink::teleport_back`].
+    pub fn teleport_back_steps(&self) -> usize {
+        self.inner.lock().unwrap().teleported_from.len()
+    }
+
+    async fn send_teleport(&self, target: TeleportTarget) -> Result<(), String> {
+        if !self.inner.lock().unwrap().status.capabilities.is_some_and(|c| c.teleport) {
+            return Err("teleport is not supported for this game".into());
+        }
+        self.request(&self.teleports, TELEPORT_TIMEOUT, |request_id| AppMessage::Teleport { request_id, target }).await
     }
 
     /// Asks the agent to scan the loaded world for items and points of interest.
     pub async fn export_world(&self) -> Result<WorldExport, String> {
+        self.request(&self.exports, EXPORT_TIMEOUT, |request_id| AppMessage::ExportWorld { request_id }).await
+    }
+
+    /// A walking route from the player to `to` on the game's navigation mesh.
+    pub async fn find_path(&self, to: Vec3) -> Result<PathInfo, String> {
+        self.request(&self.paths, PATH_TIMEOUT, |request_id| AppMessage::FindPath { request_id, to }).await
+    }
+
+    /// Which legs of a route (floor points about a meter apart) can't be walked now.
+    pub async fn check_route(&self, points: Vec<Vec3>) -> Result<RouteCheck, String> {
+        self.request(&self.route_checks, PROBE_TIMEOUT, |request_id| AppMessage::CheckRoute { request_id, points }).await
+    }
+
+    /// The floor under points near the player, and whether the camera sees them.
+    pub async fn probe_ground(&self, points: Vec<Vec3>) -> Result<Vec<GroundPoint>, String> {
+        self.request(&self.ground_probes, PROBE_TIMEOUT, |request_id| AppMessage::ProbeGround { request_id, points }).await
+    }
+
+    /// Sends the message `make` builds for a new request id and waits for its answer.
+    async fn request<T>(&self, pending: &Pending<T>, timeout: Duration, make: impl FnOnce(u32) -> AppMessage) -> Result<T, String> {
         let request_id = self.next_request.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         {
             let inner = self.inner.lock().unwrap();
             let sender = inner.sender.as_ref().ok_or("not connected to the game")?;
-            self.pending_exports.lock().unwrap().insert(request_id, tx);
-            sender.send(AppMessage::ExportWorld { request_id }).map_err(|_| "connection closed")?;
+            pending.0.lock().unwrap().insert(request_id, tx);
+            if sender.send(make(request_id)).is_err() {
+                pending.0.lock().unwrap().remove(&request_id);
+                return Err("connection closed".into());
+            }
         }
-        match tokio::time::timeout(EXPORT_TIMEOUT, rx).await {
+        match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err("connection closed".into()),
             Err(_) => {
-                self.pending_exports.lock().unwrap().remove(&request_id);
+                pending.0.lock().unwrap().remove(&request_id);
                 Err("the game did not respond".into())
             }
         }
@@ -355,9 +438,17 @@ impl AgentLink {
         ] {
             let _ = tx.send(msg);
         }
-        self.inner.lock().unwrap().sender = Some(tx);
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.sender = Some(tx);
+            // Places from another game process (or world) are meaningless here.
+            if inner.status.pid != Some(pid) {
+                inner.teleported_from.clear();
+            }
+        }
 
         let mut end = SessionEnd::Disconnected;
+        let mut replaced_module = None;
         loop {
             tokio::select! {
                 msg = rx.recv() => {
@@ -373,6 +464,7 @@ impl AgentLink {
                             log::info!("replacing outdated agent {agent_version} ({module:?}) with {expected_module}");
                             let _ = write_half.write_all(&encode_line(&AppMessage::Detach)).await;
                             end = SessionEnd::AgentReplaced;
+                            replaced_module = module;
                             break;
                         }
                         Ok(msg) => self.handle(app, game, pid, msg),
@@ -387,16 +479,29 @@ impl AgentLink {
             inner.sender = None;
             inner.snapshot = None;
         }
-        for (_, tx) in self.pending.lock().unwrap().drain() {
-            let _ = tx.send(Err("connection closed".into()));
-        }
-        for (_, tx) in self.pending_exports.lock().unwrap().drain() {
-            let _ = tx.send(Err("connection closed".into()));
-        }
+        self.teleports.fail_all("connection closed");
+        self.exports.fail_all("connection closed");
+        self.paths.fail_all("connection closed");
+        self.route_checks.fail_all("connection closed");
+        self.ground_probes.fail_all("connection closed");
         let _ = app.emit("world-snapshot", WorldSnapshot::default());
         if end == SessionEnd::AgentReplaced {
-            // Give the old agent time to unhook and unload before injecting again.
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            // Inject the new agent only once the old one has unhooked and unloaded: a copy
+            // injected earlier sees the old one still loaded and exits.
+            let deadline = Instant::now() + AGENT_UNLOAD_TIMEOUT;
+            loop {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                let gone = match &replaced_module {
+                    Some(m) => injector::module_loaded(pid, m) != Some(true),
+                    None => true,
+                };
+                if gone || Instant::now() > deadline || !injector::is_alive(pid) {
+                    if !gone {
+                        log::warn!("outdated agent {replaced_module:?} did not unload in time");
+                    }
+                    break;
+                }
+            }
         }
         end
     }
@@ -415,24 +520,37 @@ impl AgentLink {
                 self.set_status(app, LinkStatus { state, game_id: Some(game.id.clone()), pid: Some(pid), capabilities: Some(capabilities), message });
             }
             AgentMessage::Snapshot(snap) => {
-                self.inner.lock().unwrap().snapshot = Some(snap.clone());
-                if overlay::is_visible(app) {
+                let mut inner = self.inner.lock().unwrap();
+                inner.snapshot = Some(snap.clone());
+                // Hidden map: a slow trickle keeps background features (marking
+                // collectibles found) working without busy-updating the UI.
+                let send = overlay::is_visible(app) || inner.hidden_sent_at.is_none_or(|t| t.elapsed() >= HIDDEN_SNAPSHOT_INTERVAL);
+                if send {
+                    inner.hidden_sent_at = Some(Instant::now());
+                    drop(inner);
                     let _ = app.emit("world-snapshot", snap);
                 }
             }
             AgentMessage::HotkeyPressed { action: HotkeyAction::ToggleMap } => overlay::toggle(app),
             AgentMessage::HotkeyPressed { action: HotkeyAction::ZoomIn } => overlay::zoom(app, 1),
             AgentMessage::HotkeyPressed { action: HotkeyAction::ZoomOut } => overlay::zoom(app, -1),
-            AgentMessage::TeleportResult { request_id, ok, error } => {
-                if let Some(tx) = self.pending.lock().unwrap().remove(&request_id) {
-                    let _ = tx.send(if ok { Ok(()) } else { Err(error.unwrap_or_else(|| "teleport failed".into())) });
-                }
+            AgentMessage::HotkeyPressed { action: HotkeyAction::TeleportBack } => {
+                // Runs outside this handler: the result arrives through this same session.
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let link = app.state::<Arc<AgentLink>>().inner().clone();
+                    let result = link.teleport_back().await;
+                    if let Err(e) = &result {
+                        log::info!("teleport back: {e}");
+                    }
+                    let _ = app.emit("teleport-back", result.err());
+                });
             }
-            AgentMessage::ExportResult { request_id, export, error } => {
-                if let Some(tx) = self.pending_exports.lock().unwrap().remove(&request_id) {
-                    let _ = tx.send(export.ok_or_else(|| error.unwrap_or_else(|| "export failed".into())));
-                }
-            }
+            AgentMessage::TeleportResult { request_id, ok, error } => self.teleports.resolve(request_id, ok.then_some(()), error, "teleport failed"),
+            AgentMessage::PathResult { request_id, path, error } => self.paths.resolve(request_id, path, error, "no route"),
+            AgentMessage::RouteCheckResult { request_id, check, error } => self.route_checks.resolve(request_id, check, error, "route check failed"),
+            AgentMessage::GroundProbeResult { request_id, points, error } => self.ground_probes.resolve(request_id, points, error, "ground probe failed"),
+            AgentMessage::ExportResult { request_id, export, error } => self.exports.resolve(request_id, export, error, "export failed"),
             AgentMessage::Log { level, message } => {
                 match level {
                     LogLevel::Debug => log::debug!("[agent] {message}"),

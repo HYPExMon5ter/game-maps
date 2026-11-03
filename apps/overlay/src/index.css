@@ -67,7 +67,18 @@ body.launcher #root {
   pointer-events: none;
 }
 
+/* Full map: players and companions open their details on click. */
+.player-remote-clickable {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.player-remote-clickable:hover .player-remote-dot {
+  transform: scale(1.2);
+}
+
 .player-remote-dot {
+  transition: transform 120ms ease;
   width: 14px;
   height: 14px;
   border-radius: 999px;
@@ -92,4 +103,31 @@ body.launcher #root {
 
 .maplibregl-canvas:focus {
   outline: none;
+}
+
+/* Breadcrumb arrows: a glow that travels along the route, toward the destination. */
+@keyframes crumb-flow {
+  0%,
+  100% {
+    fill-opacity: 0.55;
+  }
+  30% {
+    fill-opacity: 1;
+  }
+}
+
+.crumb {
+  animation: crumb-flow 1.6s ease-in-out infinite;
+  transition: opacity 0.2s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .crumb {
+    animation: none;
+  }
+}
+
+/* Search fields draw their own clear button. */
+input[type='search']::-webkit-search-cancel-button {
+  appearance: none;
 }

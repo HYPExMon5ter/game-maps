@@ -9,17 +9,22 @@
 //! - `TheForest.UI.Multiplayer.ChatBox.IsChatOpen`: suppress hotkeys while typing.
 //! - `Sons.Areas.CaveSystem`: cave extents, forced enter/exit for teleports.
 //! - `Sons.Gameplay.GPS.GPSLocator._activeLocators`: live GPS markers (Kelvin, placed locators, vehicles).
+//! - `Sons.Ai.Vail.VailActorManager._activeActors`: creatures around the player.
+//! - `Sons.Multiplayer.CoopLobbyManager`, `GameServerManager`: the multiplayer session.
 
+mod astar;
 mod cave_scan;
 mod caves;
+mod creatures;
 mod export;
 mod gps;
+mod session;
 
 use std::ffi::c_void;
 use std::time::{Duration, Instant};
 
-use game_maps_protocol::{Capabilities, LocalPlayer, Marker, RemotePlayer, TeleportTarget, Vec3, WorldExport, WorldLayer, WorldSnapshot};
-use il2cpp::{read_object_array, read_string, Class, Color, Field, Il2CppObject, Method, Runtime, Vector3};
+use game_maps_protocol::{Capabilities, Creature, LocalPlayer, Marker, MultiplayerSession, PathInfo, RemotePlayer, TeleportTarget, Vec3, WorldExport, WorldLayer, WorldSnapshot};
+use unity_runtime::{read_string, Class, Color, Field, ListLayout, ManagedObject, Method, Physics, Runtime, Vector3};
 
 use super::{to_proto, to_unity, Cx, Provider};
 use crate::hook::{target, HookTarget, Shape};
@@ -34,6 +39,11 @@ const FRAME_HOOKS: &[HookTarget] = &[
 const REMOTE_REFRESH: Duration = Duration::from_millis(100);
 const LAYER_REFRESH: Duration = Duration::from_millis(250);
 const MARKER_REFRESH: Duration = Duration::from_millis(250);
+const CREATURE_REFRESH: Duration = Duration::from_millis(250);
+const SESSION_REFRESH: Duration = Duration::from_secs(2);
+/// Creatures farther than this from the player are left out (the game simulates some
+/// actors well beyond what matters around you).
+const CREATURE_RADIUS: f32 = 200.0;
 const MAX_PLAYERS: usize = 64;
 /// Height added above sampled terrain so teleports never land inside the ground.
 const GROUND_CLEARANCE: f32 = 1.0;
@@ -81,8 +91,13 @@ pub struct SonsOfTheForest {
     caves: Option<caves::Caves>,
     export_job: Option<ExportJob>,
     gps: Option<gps::GpsMarkers>,
+    creatures: Option<creatures::Creatures>,
+    session_members: Option<session::Session>,
+    astar: Option<astar::AStar>,
+    /// Route timings reported so far (the first few go to the log).
+    routes_logged: u32,
     /// `List<T>` field layout, resolved from the first list instance we see.
-    list_layout: Option<(Field, Field)>,
+    list_layout: Option<ListLayout>,
     notes: Vec<String>,
 
     last_layer_check: Option<Instant>,
@@ -90,8 +105,15 @@ pub struct SonsOfTheForest {
     last_remote_refresh: Option<Instant>,
     others: Vec<RemotePlayer>,
     logged_player_shape: bool,
+    /// Transforms of the remote players, from the last remote refresh.
+    remote_transforms: Vec<usize>,
     last_marker_refresh: Option<Instant>,
     markers: Vec<Marker>,
+    last_creature_refresh: Option<Instant>,
+    nearby: Vec<Creature>,
+    logged_creatures: bool,
+    last_session_refresh: Option<Instant>,
+    session: Option<MultiplayerSession>,
 }
 
 fn first_field(rt: &Runtime, class: Class, names: &[&str]) -> Option<Field> {
@@ -157,6 +179,20 @@ impl SonsOfTheForest {
         notes.push(format!("Cave systems: {}", caves.is_some()));
         let gps = gps::GpsMarkers::resolve(rt);
         notes.push(format!("GPS markers: {}", gps.is_some()));
+        let creatures = creatures::Creatures::resolve(rt);
+        notes.push(format!("Creatures: {}", creatures.is_some()));
+        let session_members = session::Session::resolve(rt);
+        notes.push(format!("Multiplayer session: {}", session_members.is_some()));
+        let astar = match astar::AStar::resolve(rt) {
+            Ok(a) => {
+                notes.push("Routes (A* Pathfinding): ok".into());
+                Some(a)
+            }
+            Err(e) => {
+                notes.push(format!("Routes (A* Pathfinding): unavailable ({e})"));
+                None
+            }
+        };
 
         Some(Self {
             local,
@@ -166,6 +202,10 @@ impl SonsOfTheForest {
             caves,
             export_job: None,
             gps,
+            creatures,
+            session_members,
+            astar,
+            routes_logged: 0,
             list_layout: None,
             notes,
             last_layer_check: None,
@@ -173,19 +213,25 @@ impl SonsOfTheForest {
             last_remote_refresh: None,
             others: Vec::new(),
             logged_player_shape: false,
+            remote_transforms: Vec::new(),
             last_marker_refresh: None,
             markers: Vec::new(),
+            last_creature_refresh: None,
+            nearby: Vec::new(),
+            logged_creatures: false,
+            last_session_refresh: None,
+            session: None,
         })
     }
 
-    unsafe fn local_instance(&self, cx: &Cx) -> *mut Il2CppObject {
+    unsafe fn local_instance(&self, cx: &Cx) -> *mut ManagedObject {
         match self.local.instance {
             Some(f) if f.is_static => cx.rt.static_value(f),
             _ => std::ptr::null_mut(),
         }
     }
 
-    unsafe fn local_transform(&self, cx: &Cx) -> *mut Il2CppObject {
+    unsafe fn local_transform(&self, cx: &Cx) -> *mut ManagedObject {
         let inst = self.local_instance(cx);
         cx.rt.read_field(self.local.transform, inst)
     }
@@ -205,7 +251,7 @@ impl SonsOfTheForest {
         let forward = self
             .local
             .camera
-            .map(|f| cx.rt.read_field::<*mut Il2CppObject>(f, inst))
+            .map(|f| cx.rt.read_field::<*mut ManagedObject>(f, inst))
             .and_then(|cam| cx.unity.rotation(cx.rt, cam).ok())
             .map(|q| to_proto(q.forward()));
 
@@ -220,36 +266,35 @@ impl SonsOfTheForest {
             self.layer = if in_caves || below_ground { WorldLayer::Caves } else { WorldLayer::Surface };
         }
 
-        Some(LocalPlayer { position, forward, layer: self.layer })
+        Some(LocalPlayer { position, forward, layer: self.layer, camera: None })
     }
 
-    unsafe fn refresh_remote(&mut self, cx: &Cx, local_transform: *mut Il2CppObject) {
+    unsafe fn refresh_remote(&mut self, cx: &Cx, local_transform: *mut ManagedObject) {
         let Some(r) = &self.remote else { return };
-        let tracker: *mut Il2CppObject = cx.rt.static_value(r.tracker_instance);
+        let tracker: *mut ManagedObject = cx.rt.static_value(r.tracker_instance);
         if !cx.unity.is_alive(tracker) {
             self.others.clear();
             return;
         }
-        let list: *mut Il2CppObject = cx.rt.read_field(r.all_players, tracker);
+        let list: *mut ManagedObject = cx.rt.read_field(r.all_players, tracker);
         if list.is_null() {
             self.others.clear();
             return;
         }
-        if self.list_layout.is_none() {
-            let Some(list_class) = cx.rt.class_of(list) else { return };
-            match (cx.rt.field(list_class, "_items"), cx.rt.field(list_class, "_size")) {
-                (Ok(items), Ok(size)) => self.list_layout = Some((items, size)),
-                _ => {
+        let layout = match self.list_layout {
+            Some(l) => l,
+            None => match ListLayout::of(cx.rt, list) {
+                Ok(l) => *self.list_layout.insert(l),
+                Err(_) => {
                     self.remote = None;
                     return;
                 }
-            }
-        }
-        let (items_f, size_f) = self.list_layout.unwrap();
-        let size = (size_f.get::<i32>(list).max(0) as usize).min(MAX_PLAYERS);
-        let items = read_object_array(items_f.get::<*mut Il2CppObject>(list), size);
+            },
+        };
+        let items = layout.elements(list, MAX_PLAYERS);
 
         let mut others = Vec::with_capacity(items.len());
+        let mut transforms = Vec::with_capacity(items.len());
         for elem in items {
             let Some(class) = cx.rt.class_of(elem) else { continue };
             if !cx.unity.is_alive(elem) {
@@ -266,6 +311,7 @@ impl SonsOfTheForest {
                 continue;
             };
             let Ok(transform) = cx.unity.game_object_transform(cx.rt, go) else { continue };
+            transforms.push(transform as usize);
             if transform == local_transform {
                 continue;
             }
@@ -275,7 +321,7 @@ impl SonsOfTheForest {
             let forward = cx.unity.rotation(cx.rt, transform).ok().map(|q| to_proto(q.forward()));
             let name = r
                 .name
-                .and_then(|f| read_string(f.get::<*mut Il2CppObject>(setup)))
+                .and_then(|f| read_string(f.get::<*mut ManagedObject>(setup)))
                 .filter(|n| !n.is_empty())
                 .unwrap_or_else(|| "Player".into());
             let color = r.color.map(|f| f.get::<Color>(setup).to_srgb8());
@@ -293,16 +339,50 @@ impl SonsOfTheForest {
             self.notes.push(format!("Remote players seen on first scan: {}", others.len()));
         }
         self.others = others;
+        self.remote_transforms = transforms;
     }
 
     unsafe fn refresh_markers(&mut self, cx: &Cx) {
+        let mut players: Vec<*mut ManagedObject> = self.remote_transforms.iter().map(|&t| t as *mut ManagedObject).collect();
+        players.push(self.local_transform(cx));
         let Some(gps) = self.gps.as_mut() else { return };
-        match gps.read(cx.rt, cx.unity) {
+        match gps.read(cx.rt, cx.unity, &players) {
             Ok(markers) => self.markers = markers,
             Err(e) => {
                 self.notes.push(format!("GPS markers disabled: {e}"));
                 self.gps = None;
                 self.markers.clear();
+            }
+        }
+    }
+
+    unsafe fn refresh_session(&mut self, cx: &Cx) {
+        let Some(members) = &self.session_members else { return };
+        let session = members.id(cx.rt).map(|id| MultiplayerSession { id, player_name: members.player_name(cx.rt) });
+        if session != self.session {
+            self.notes.push(match &session {
+                Some(s) => format!("Multiplayer session joined: {} as {:?}", s.id, s.player_name),
+                None => "Not in a multiplayer session".into(),
+            });
+            self.session = session;
+        }
+    }
+
+    unsafe fn refresh_creatures(&mut self, cx: &Cx, around: Vector3) {
+        let Some(creatures) = self.creatures.as_mut() else { return };
+        match creatures.read(cx.rt, cx.unity, around, CREATURE_RADIUS) {
+            Ok(found) => {
+                if !self.logged_creatures {
+                    self.logged_creatures = true;
+                    let names: Vec<String> = found.iter().map(|c| format!("{} ({:?})", c.name, c.kind)).collect();
+                    self.notes.push(format!("Creatures around on first read: {} [{}]", found.len(), names.join(", ")));
+                }
+                self.nearby = found;
+            }
+            Err(e) => {
+                self.notes.push(format!("Creatures disabled: {e}"));
+                self.creatures = None;
+                self.nearby.clear();
             }
         }
     }
@@ -350,6 +430,8 @@ impl Provider for SonsOfTheForest {
         if local.is_none() {
             self.others.clear();
             self.markers.clear();
+            self.nearby.clear();
+            self.session = None;
         } else {
             if self.last_remote_refresh.is_none_or(|t| now - t >= REMOTE_REFRESH) {
                 self.last_remote_refresh = Some(now);
@@ -360,8 +442,18 @@ impl Provider for SonsOfTheForest {
                 self.last_marker_refresh = Some(now);
                 self.refresh_markers(cx);
             }
+            if self.last_session_refresh.is_none_or(|t| now - t >= SESSION_REFRESH) {
+                self.last_session_refresh = Some(now);
+                self.refresh_session(cx);
+            }
+            if self.last_creature_refresh.is_none_or(|t| now - t >= CREATURE_REFRESH) {
+                self.last_creature_refresh = Some(now);
+                if let Some(p) = &local {
+                    self.refresh_creatures(cx, to_unity(p.position));
+                }
+            }
         }
-        WorldSnapshot { frame, local, others: self.others.clone(), markers: self.markers.clone() }
+        WorldSnapshot { frame, local, others: self.others.clone(), markers: self.markers.clone(), creatures: self.nearby.clone(), session: self.session.clone() }
     }
 
     unsafe fn teleport(&mut self, cx: &Cx, target: &TeleportTarget) -> Result<(), String> {
@@ -460,6 +552,34 @@ impl Provider for SonsOfTheForest {
             export.caves = scan.results;
         }
         Some(Ok(export))
+    }
+
+    unsafe fn solid_mask(&mut self, cx: &Cx, physics: &Physics, underground: bool) -> i32 {
+        // The world's static geometry only: players, characters, held items and pickups
+        // have layers of their own, and would block every route next to the player. In
+        // caves the terrain's collider spans the cave openings overhead (the cave scan
+        // leaves it out the same way).
+        let mut layers = vec!["Default", "TreeWS", "CullingMedium", "CullingFar", "CullingNone", "Prop", "BasicCollider", "Blocker"];
+        if !underground {
+            layers.push("Terrain");
+        }
+        physics.mask_of(cx.rt, &layers)
+    }
+
+    unsafe fn find_path(&mut self, cx: &Cx, from: Vec3, to: Vec3) -> Result<PathInfo, String> {
+        let astar = self.astar.as_mut().ok_or("the game's pathfinding was not found")?;
+        let started = Instant::now();
+        let route = astar.find(cx.rt, to_unity(from), to_unity(to));
+        if self.routes_logged < 5 {
+            self.routes_logged += 1;
+            let outcome = match &route {
+                Ok(r) => format!("{} corners, complete={}", r.corners.len(), r.complete),
+                Err(e) => e.clone(),
+            };
+            self.notes.push(format!("route in {:.1} ms: {outcome}", started.elapsed().as_secs_f64() * 1000.0));
+        }
+        let route = route?;
+        Ok(PathInfo { corners: route.corners.into_iter().map(to_proto).collect(), complete: route.complete })
     }
 
     unsafe fn input_blocked(&mut self, cx: &Cx) -> bool {

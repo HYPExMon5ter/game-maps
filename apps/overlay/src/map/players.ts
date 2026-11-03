@@ -18,9 +18,13 @@ function localElement(mini: boolean): HTMLElement {
   return el
 }
 
-function remoteElement(name: string, color: string): HTMLElement {
+function remoteElement(name: string, color: string, onClick?: () => void): HTMLElement {
   const el = document.createElement('div')
   el.className = 'player-remote'
+  if (onClick) {
+    el.classList.add('player-remote-clickable')
+    el.addEventListener('click', onClick)
+  }
   const dot = document.createElement('div')
   dot.className = 'player-remote-dot'
   dot.style.background = color
@@ -37,11 +41,14 @@ export class PlayerMarkers {
   #mini: boolean
   #local: Marker | null = null
   #remote = new Map<string, { marker: Marker; name: string; color: string }>()
+  #onSelect?: (id: string) => void
 
-  constructor(map: MlMap, projection: Projection, mini: boolean) {
+  /** `onSelect`: called with a player's or companion's id when its marker is clicked. */
+  constructor(map: MlMap, projection: Projection, mini: boolean, onSelect?: (id: string) => void) {
     this.#map = map
     this.#projection = projection
     this.#mini = mini
+    this.#onSelect = onSelect
   }
 
   update(snapshot: WorldSnapshot | null) {
@@ -68,7 +75,9 @@ export class PlayerMarkers {
         entry = undefined
       }
       if (!entry) {
-        const marker = new Marker({ element: remoteElement(other.name, color) }).setLngLat(ll).addTo(this.#map)
+        const id = other.id
+        const onClick = this.#onSelect && (() => this.#onSelect?.(id))
+        const marker = new Marker({ element: remoteElement(other.name, color, onClick) }).setLngLat(ll).addTo(this.#map)
         entry = { marker, name: other.name, color }
         this.#remote.set(other.id, entry)
       }
