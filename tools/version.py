@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -58,6 +57,26 @@ def set_cargo_version(version: str) -> None:
         f.write(text)
 
 
+def set_lock_version(version: str) -> None:
+    """Records the new version of the workspace's own packages in Cargo.lock.
+
+    They're the entries without a `source` (every package here takes the workspace
+    version). Done directly so it needs neither cargo nor its package index.
+    """
+    path = os.path.join(ROOT, "Cargo.lock")
+    with open(path, encoding="utf-8") as f:
+        blocks = f.read().split("[[package]]")
+    updated = 0
+    for i, block in enumerate(blocks[1:], start=1):
+        if "\nsource = " not in block:
+            blocks[i], n = re.subn(r'^version = "[^"]*"', f'version = "{version}"', block, count=1, flags=re.MULTILINE)
+            updated += n
+    if updated == 0:
+        raise SystemExit("could not find the workspace packages in Cargo.lock")
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("[[package]]".join(blocks))
+
+
 def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit(__doc__)
@@ -65,8 +84,7 @@ def main() -> None:
     set_json_version(TAURI_CONF, version)
     set_json_version(PACKAGE_JSON, version)
     set_cargo_version(version)
-    # Record the new workspace version in Cargo.lock.
-    subprocess.run(["cargo", "update", "--workspace", "--offline", "--quiet"], cwd=ROOT, check=True)
+    set_lock_version(version)
     print(version)
 
 
