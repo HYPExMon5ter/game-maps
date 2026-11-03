@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use game_maps_protocol::{AgentMessage, Capabilities, Hotkey, LogLevel, TeleportTarget, WorldSnapshot, PROTOCOL_VERSION};
+use game_maps_protocol::{AgentMessage, Capabilities, Hotkey, HotkeyAction, LogLevel, TeleportTarget, WorldSnapshot, PROTOCOL_VERSION};
 use il2cpp::{Runtime, Unity};
 use tokio::sync::mpsc;
 use windows::Win32::System::Threading::GetCurrentProcessId;
@@ -229,8 +229,10 @@ impl Shared {
             for action in st.hotkeys.poll(key) {
                 // The game owns the foreground right now; hand that right to the overlay
                 // so it can take focus when it opens.
-                unsafe {
-                    let _ = AllowSetForegroundWindow(ASFW_ANY);
+                if action == HotkeyAction::ToggleMap {
+                    unsafe {
+                        let _ = AllowSetForegroundWindow(ASFW_ANY);
+                    }
                 }
                 self.send(AgentMessage::HotkeyPressed { action });
             }

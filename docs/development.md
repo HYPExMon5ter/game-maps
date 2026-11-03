@@ -21,7 +21,7 @@ of downloaded map packs, and the app never updates itself.
 
 ## Checks
 
-These are the same checks [CI](../.github/workflows/ci.yml) runs on every pull request:
+These are the same checks [CI](../.github/workflows/ci.yml) runs once on every pull request (and again before every release):
 
 ```sh
 cargo clippy --workspace --all-targets -- -D warnings
@@ -77,7 +77,8 @@ Re-run these after a game update that moves things, then publish the map.
 
 1. Create `games/<id>/game.json`. Copy the Sons of the Forest one and adjust:
    `process` (the executable name), `steamAppId` (for the Play button),
-   `defaultHotkeys`, map projection and categories.
+   `defaultHotkeys`, map projection and categories. Set `liveFeatures` to `false`
+   until the game has a provider (step 4).
 2. Generate tiles, icons and `pins.json` into `games/<id>/`.
 3. Add the `game.json` to `bundle.resources` in `apps/overlay/src-tauri/tauri.conf.json`.
 4. For live location and teleport, add a provider in `crates/agent/src/provider/`.

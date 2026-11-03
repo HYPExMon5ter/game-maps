@@ -3,11 +3,13 @@ import { startAgentLogBuffer } from './lib/agentLogs'
 import { backend, events } from './lib/backend'
 import { loadGame } from './lib/game'
 import { matchesHotkey } from './lib/keys'
+import { steppedZoom } from './lib/zoom'
 import { mapHandle } from './map/handle'
 import { clearLegacyHotkey, loadSettings, loadUserData, startPersisting } from './state/persist'
 import { selectMapHotkey, useStore } from './state/store'
 import type { Hotkey } from './lib/protocol'
 import { FullMap } from './ui/FullMap'
+import { minimapSize } from './lib/minimap'
 import { COMPASS_HEIGHT, Hud, HUD_GAP } from './ui/Hud'
 
 /** A new map pack arrived while the full map was open. */
@@ -15,11 +17,14 @@ let reloadWhenClosed = false
 
 function useBackendSync() {
   useEffect(() => {
-    const { setStatus, setMode, setSnapshot, setSettings, setMapHotkeys } = useStore.getState()
+    const { setStatus, setMode, setSnapshot, setSettings, setMapHotkeys, setZoomKeys } = useStore.getState()
     const cleanups: Promise<() => void>[] = [
       events.status(setStatus),
       // Hotkeys may be changed from the launcher too.
-      events.appSettings((s) => setMapHotkeys(s.map_hotkeys)),
+      events.appSettings((s) => {
+        setMapHotkeys(s.map_hotkeys)
+        setZoomKeys(s.zoom_keys)
+      }),
       events.snapshot((s) => setSnapshot(s.local || s.others.length ? s : null)),
       events.overlayMode(async (mode) => {
         setMode(mode)
@@ -42,6 +47,7 @@ function useBackendSync() {
       const [{ settings, legacyHotkey }, appSettings] = await Promise.all([loadSettings(), backend.appSettings()])
       setSettings(settings)
       setMapHotkeys(appSettings.map_hotkeys)
+      setZoomKeys(appSettings.zoom_keys)
       stopPersist = startPersisting()
       if (legacyHotkey) void migrateLegacyHotkey(legacyHotkey)
       setStatus(await backend.status())
@@ -97,13 +103,25 @@ function useHudSync() {
   const tracking = useStore((s) => s.tracked !== null)
   useEffect(() => {
     const minimap = hud.minimap
-    const width = minimap ? hud.size : 280
-    const height = (minimap ? hud.size : 0) + (tracking ? COMPASS_HEIGHT + (minimap ? HUD_GAP : 0) : 0)
+    const size = minimapSize(hud, window.screen)
+    const width = minimap ? size.width : 280
+    const height = (minimap ? size.height : 0) + (tracking ? COMPASS_HEIGHT + (minimap ? HUD_GAP : 0) : 0)
     void backend.setPinConfig({ enabled: minimap || tracking, corner: hud.corner, width, height: Math.max(height, 1), margin: 24 })
   }, [hud, tracking])
 }
 
-/** M (or the configured key) and Esc close the full map while it has focus. */
+/** Steps of a zoom key binding (+1 in, -1 out), or 0 if `e` isn't one. */
+function zoomKeySteps(e: KeyboardEvent): number {
+  const keys = useStore.getState().zoomKeys
+  if (!keys) return 0
+  const matches = (slots: (Hotkey | null)[]) => slots.some((h) => h && matchesHotkey(e, h))
+  return matches(keys.zoom_in) ? 1 : matches(keys.zoom_out) ? -1 : 0
+}
+
+/**
+ * While the full map has focus: M (or the configured key) and Esc close it, and the
+ * zoom keys zoom it (the agent only sees keys while the game has focus).
+ */
 function useOverlayKeys() {
   const mode = useStore((s) => s.mode)
   useEffect(() => {
@@ -120,6 +138,14 @@ function useOverlayKeys() {
       if (e.key === 'Escape' || (hotkey && matchesHotkey(e, hotkey))) {
         e.preventDefault()
         void backend.closeOverlay()
+        return
+      }
+      const steps = zoomKeySteps(e)
+      const map = mapHandle.current
+      if (steps && map) {
+        e.preventDefault()
+        // Held keys repeat faster than an animation finishes; jump instead.
+        map.easeTo({ zoom: steppedZoom(map.getZoom(), steps, map.getMinZoom(), map.getMaxZoom()), duration: e.repeat ? 0 : 120 })
       }
     }
     window.addEventListener('keydown', onKey)

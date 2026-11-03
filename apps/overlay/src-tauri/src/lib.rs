@@ -27,7 +27,7 @@ use games::{AssetRoots, GameEntry};
 use link::{AgentLink, LinkConfig, LinkStatus};
 use mappacks::{MapPacks, PackStatus};
 use overlay::{OverlayMode, OverlayState, PinConfig};
-use settings::{AppSettings, HookMode, SettingsState};
+use settings::{AppSettings, HookMode, SettingsState, ZoomKeys};
 use updates::{UpdateState, Updates};
 
 /// Passed when started by Windows at login: stay in the tray.
@@ -157,6 +157,18 @@ fn set_map_hotkey(
         }
     })?;
     link.apply_hotkeys(&game_id, saved.hotkeys(game));
+    Ok(saved)
+}
+
+/// Sets the map zoom keys (all games), or with `None` restores the defaults.
+#[tauri::command]
+fn set_zoom_keys(app: AppHandle, link: State<'_, Arc<AgentLink>>, registry: State<'_, Registry>, keys: Option<ZoomKeys>) -> Result<AppSettings, String> {
+    let keys = keys.unwrap_or_default();
+    keys.validate()?;
+    let saved = settings::update(&app, |s| s.zoom_keys = keys)?;
+    if let Some(game) = link.status().game_id.and_then(|id| registry.0.iter().find(|g| g.id == id)) {
+        link.apply_hotkeys(&game.id, saved.hotkeys(game));
+    }
     Ok(saved)
 }
 
@@ -392,6 +404,7 @@ pub fn run() {
             get_app_settings,
             set_hook_mode,
             set_map_hotkey,
+            set_zoom_keys,
             set_auto_update,
             get_autostart,
             set_autostart,

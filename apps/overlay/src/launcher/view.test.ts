@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { GameEntry, PackStatus } from '../lib/backend'
 import type { LinkStatus } from '../lib/protocol'
-import { formatSize, gameView, packView, updateView } from './view'
+import { filterGames, formatSize, gameView, packView, updateView } from './view'
 
-const game: GameEntry = { id: 'sotf', name: 'Sons of the Forest', process: 'x.exe', steamAppId: 1, defaultHotkeys: [] }
+const game: GameEntry = { id: 'sotf', name: 'Sons of the Forest', process: 'x.exe', steamAppId: 1, defaultHotkeys: [], liveFeatures: true }
 const status = (s: Partial<LinkStatus>): LinkStatus => ({
   state: 'waiting_for_game',
   game_id: 'sotf',
@@ -72,4 +72,20 @@ describe('updateView', () => {
 it('formats sizes', () => {
   expect(formatSize(13 * 1024 * 1024)).toBe('13 MB')
   expect(formatSize(100)).toBe('1 KB')
+})
+
+describe('filterGames', () => {
+  const games: GameEntry[] = [game, { ...game, id: 'x', name: 'Another Island', liveFeatures: false }]
+  const ids = (q: string, f: Parameters<typeof filterGames>[2]) => filterGames(games, q, f).map((g) => g.id)
+
+  it('filters by live features', () => {
+    expect(ids('', 'all')).toEqual(['sotf', 'x'])
+    expect(ids('', 'live')).toEqual(['sotf'])
+    expect(ids('', 'map')).toEqual(['x'])
+  })
+
+  it('searches names, ignoring case and spaces around the query', () => {
+    expect(ids(' FOREST ', 'all')).toEqual(['sotf'])
+    expect(ids('island', 'live')).toEqual([])
+  })
 })

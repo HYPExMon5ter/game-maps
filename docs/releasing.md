@@ -42,10 +42,12 @@ the release and in the app's update prompt.
 
 The [Release workflow](../.github/workflows/release.yml) then:
 
-1. runs the tests,
-2. sets the version (`tools/version.py`), commits it to `master` and tags it,
-3. builds the installer and signs the update,
-4. publishes the release with `latest.json`, which the app's updater reads.
+1. runs the [CI checks](../.github/workflows/ci.yml) and, at the same time, sets the
+   version (`tools/version.py`) and builds and signs the installer into a draft release
+   with `latest.json`, which the app's updater reads,
+2. once both succeed, commits the version to `master`, tags it, and publishes the
+   release as the latest. If anything fails, the draft is deleted and nothing is
+   published.
 
 It takes about 15 minutes. The workflow only runs on `master`, and two releases never
 run at once.

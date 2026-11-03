@@ -1,9 +1,11 @@
 # Publishes a new app version. Start it with `python -I tools/release.py`, or from the
 # Actions tab: Release -> Run workflow.
 #
-# It bumps the version, runs the tests, commits and tags the bump on master, then
-# builds the signed installer and publishes it as the latest GitHub release. Installed
-# apps find it within 30 minutes and update (or ask, if automatic updates are off).
+# The checks (the CI workflow) and the signed installer build run in parallel. The
+# installer goes to a draft release, which only becomes public once the checks pass:
+# then the version bump is committed and tagged on master and the release is
+# published as the latest. Installed apps find it within 30 minutes and update (or
+# ask, if automatic updates are off). If anything fails, the draft is deleted.
 name: Release
 
 on:
@@ -24,10 +26,19 @@ permissions:
 concurrency:
   group: release
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  release:
+  checks:
+    if: github.ref == 'refs/heads/master'
+    uses: ./.github/workflows/ci.yml
+
+  build:
     if: github.ref == 'refs/heads/master'
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Check signing secrets
         shell: bash
@@ -44,35 +55,39 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: oven-sh/setup-bun@v2
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('apps/overlay/bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - name: Cache the NSIS toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/tauri
+          key: tauri-bundler-${{ runner.os }}-${{ hashFiles('apps/overlay/bun.lock') }}
+          restore-keys: tauri-bundler-${{ runner.os }}-
 
       - name: Install frontend dependencies
         working-directory: apps/overlay
         run: bun install --frozen-lockfile
 
-      - name: Test
-        shell: bash
-        run: |
-          # The app bundles the agent DLL, and its build checks that the file exists.
-          cargo build --release -p game-maps-agent
-          cargo test --workspace
-          python -I -m unittest discover -s tools/pins
-          python -I -m unittest discover -s tools/mappack
-          (cd apps/overlay && bun run test)
-
-      - name: Bump version
+      - name: Set version
         id: version
         shell: bash
         run: |
           version=$(python -I tools/version.py "${{ inputs.bump }}")
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # Nothing to commit when releasing the version already in the files.
-          git diff --quiet || git commit -am "Release $version"
-          git tag -a "v$version" -m "Game Maps $version"
-          git push origin HEAD:master "v$version"
+          # Committed by the publish job once the checks pass. Empty when releasing
+          # the version already in the files.
+          git diff > version.patch
 
-      - name: Build and publish
+      - uses: actions/upload-artifact@v4
+        with:
+          name: version-patch
+          path: version.patch
+          retention-days: 1
+
+      - name: Build installer into a draft release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -85,6 +100,49 @@ jobs:
           releaseName: Game Maps v${{ steps.version.outputs.version }}
           releaseBody: ${{ inputs.notes }}
           releaseCommitish: master
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
+
+  publish:
+    needs: [checks, build]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: version-patch
+
+      - name: Commit and tag the version
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -s version.patch ]; then
+            git apply version.patch
+            git commit -am "Release $VERSION"
+          fi
+          git tag -a "v$VERSION" -m "Game Maps $VERSION"
+          git push origin HEAD:master "v$VERSION"
+
+      - name: Publish the release
+        run: gh release edit "v$VERSION" --draft=false --latest
+
+  discard:
+    needs: [checks, build, publish]
+    if: failure() && needs.build.outputs.version != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: v${{ needs.build.outputs.version }}
+        # Only a draft: a published release with this tag (re-releasing an existing
+        # version) must never be deleted.
+        run: |
+          if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null)" = "true" ]; then
+            gh release delete "$TAG" --yes
+          fi

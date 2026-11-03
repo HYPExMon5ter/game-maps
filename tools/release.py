@@ -5,9 +5,9 @@
     python -I tools/release.py 1.0.0 "..."         # an exact version
 
 This starts the Release workflow on GitHub (same as pressing "Run workflow" on the
-Actions tab): it bumps the version, runs the tests, builds and signs the installer,
-and publishes the release from the latest commit on master. Commit and push your
-changes to master first. Needs the GitHub CLI, logged in.
+Actions tab): it runs the tests while it bumps the version and builds and signs the
+installer, then publishes the release from the latest commit on master. Commit and
+push your changes to master first. Needs the GitHub CLI, logged in.
 """
 from __future__ import annotations
 

@@ -10,9 +10,10 @@
   --color-ink: #e8edf2;
   --color-ink-dim: rgb(232 237 242 / 0.62);
   --color-ink-faint: rgb(232 237 242 / 0.38);
-  --color-accent: #ffd166;
-  --color-accent-ink: #1c1606;
-  --color-live: #38bdf8;
+  --color-accent: #9d4edd;
+  --color-accent-ink: #ffffff;
+  /* Connected and live-feature indicators. */
+  --color-live: #4ade80;
   --color-danger: #f87171;
 }
 

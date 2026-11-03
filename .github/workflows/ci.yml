@@ -1,45 +1,72 @@
-# Checks every pull request and push to master, so master is always releasable.
+# Checks every pull request once. It doesn't run again when the pull request is
+# merged: the merge result was already checked, and the Release workflow runs these
+# checks again before anything is published. Run it by hand from the Actions tab
+# (CI -> Run workflow) to check master directly.
+#
+# Rust, frontend and Python checks run as parallel jobs; only Rust needs Windows.
 name: CI
 
 on:
   pull_request:
-  push:
-    branches: [master]
+  workflow_dispatch:
+  workflow_call:
 
+# `github.workflow` is the caller's name when called, so a release never cancels CI.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  test:
+  rust:
     runs-on: windows-latest
+    env:
+      # Same build time, but less than half the build output to cache and restore.
+      CARGO_PROFILE_DEV_DEBUG: 0
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      # A pull request starts from master's cache (saved by releases and manual runs)
+      # and keeps its own for later pushes. GitHub evicts unused caches by itself.
       - uses: Swatinem/rust-cache@v2
+
+      - name: Stand in for the agent DLL
+        shell: bash
+        # The app's build script checks that every bundled file exists. Checks never
+        # bundle, so an empty file is enough and saves an optimized agent build.
+        run: mkdir -p target/release && touch target/release/game_maps_agent.dll
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --workspace
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/overlay
+    steps:
+      - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('apps/overlay/bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run build
+      - run: bun run test
 
-      - name: Install frontend dependencies
-        working-directory: apps/overlay
-        run: bun install --frozen-lockfile
-
-      - name: Rust
-        run: |
-          # The app bundles the agent DLL, and its build checks that the file exists.
-          cargo build --release -p game-maps-agent
-          cargo clippy --workspace --all-targets -- -D warnings
-          cargo test --workspace
-
-      - name: Python tools
-        run: |
-          python -I -m unittest discover -s tools/pins
-          python -I -m unittest discover -s tools/mappack
-
-      - name: Frontend
-        working-directory: apps/overlay
-        run: |
-          bun run lint
-          bun run build
-          bun run test
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          python3 -I -m unittest discover -s tools/pins
+          python3 -I -m unittest discover -s tools/mappack

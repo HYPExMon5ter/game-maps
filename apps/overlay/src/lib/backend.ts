@@ -11,14 +11,23 @@ export interface GameEntry {
   process: string
   steamAppId: number | null
   defaultHotkeys: Hotkey[]
+  /** Has live location and teleport; otherwise a static map. */
+  liveFeatures: boolean
 }
 
 export type HookMode = 'auto' | 'manual'
+
+/** Two slots per action; `null` turns a slot off. The same for every game. */
+export interface ZoomKeys {
+  zoom_in: [Hotkey | null, Hotkey | null]
+  zoom_out: [Hotkey | null, Hotkey | null]
+}
 
 export interface AppSettings {
   hook_modes: Record<string, HookMode>
   /** Per-game map hotkey; absent uses the game's default. */
   map_hotkeys: Record<string, Hotkey>
+  zoom_keys: ZoomKeys
   auto_update: boolean
 }
 
@@ -67,6 +76,8 @@ export const backend = {
   setHookMode: (gameId: string, mode: HookMode) => invoke<AppSettings>('set_hook_mode', { gameId, mode }),
   /** `null` resets to the game's default key. */
   setMapHotkey: (gameId: string, hotkey: Hotkey | null) => invoke<AppSettings>('set_map_hotkey', { gameId, hotkey }),
+  /** `null` restores the default zoom keys. */
+  setZoomKeys: (keys: ZoomKeys | null) => invoke<AppSettings>('set_zoom_keys', { keys }),
   setAutoUpdate: (enabled: boolean) => invoke<AppSettings>('set_auto_update', { enabled }),
   autostart: () => invoke<boolean>('get_autostart'),
   setAutostart: (enabled: boolean) => invoke<boolean>('set_autostart', { enabled }),
@@ -94,4 +105,6 @@ export const events = {
     listen<string>('map-pack-installed', (e) => cb(e.payload)),
   appSettings: (cb: (s: AppSettings) => void): Promise<UnlistenFn> => listen<AppSettings>('app-settings', (e) => cb(e.payload)),
   updateState: (cb: (s: UpdateState) => void): Promise<UnlistenFn> => listen<UpdateState>('update-state', (e) => cb(e.payload)),
+  /** A zoom key was pressed in the game while the mini-map is shown; `steps` is +1 or -1. */
+  mapZoom: (cb: (steps: number) => void): Promise<UnlistenFn> => listen<number>('map-zoom', (e) => cb(e.payload)),
 }
