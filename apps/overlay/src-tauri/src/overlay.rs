@@ -248,6 +248,14 @@ pub fn toggle(app: &AppHandle) {
     }
 }
 
+/// Zoom key pressed in the game: zooms the mini-map by `steps` (the full map has focus
+/// while open and handles its own keys).
+pub fn zoom(app: &AppHandle, steps: i32) {
+    if mode(app) == OverlayMode::Pinned {
+        let _ = app.emit_to(WINDOW_LABEL, "map-zoom", steps);
+    }
+}
+
 pub fn set_pin_config(app: &AppHandle, config: PinConfig) {
     *state(app).pin.lock().unwrap() = config;
     match (mode(app), config.enabled) {

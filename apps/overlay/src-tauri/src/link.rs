@@ -421,6 +421,8 @@ impl AgentLink {
                 }
             }
             AgentMessage::HotkeyPressed { action: HotkeyAction::ToggleMap } => overlay::toggle(app),
+            AgentMessage::HotkeyPressed { action: HotkeyAction::ZoomIn } => overlay::zoom(app, 1),
+            AgentMessage::HotkeyPressed { action: HotkeyAction::ZoomOut } => overlay::zoom(app, -1),
             AgentMessage::TeleportResult { request_id, ok, error } => {
                 if let Some(tx) = self.pending.lock().unwrap().remove(&request_id) {
                     let _ = tx.send(if ok { Ok(()) } else { Err(error.unwrap_or_else(|| "teleport failed".into())) });

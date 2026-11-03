@@ -83,6 +83,24 @@ export function Slider({
   )
 }
 
+/** On/off switch. Put it inside a `<label>` (clicking the text toggles it) or give it `label`. */
+export function Switch({ checked, onChange, label, className = '' }: { checked: boolean; onChange: (v: boolean) => void; label?: string; className?: string }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
+        checked ? 'bg-accent' : 'bg-white/18'
+      } ${className}`}
+    >
+      <span className={`size-4 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-[18px]' : 'translate-x-0.5'}`} />
+    </button>
+  )
+}
+
 export function Toggle({ label, checked, onChange, hint }: { label: string; checked: boolean; onChange: (v: boolean) => void; hint?: string }) {
   return (
     <label className="flex cursor-pointer items-start justify-between gap-3 py-1">
@@ -90,7 +108,7 @@ export function Toggle({ label, checked, onChange, hint }: { label: string; chec
         <span className="block text-[13px]">{label}</span>
         {hint && <span className="block text-[11px] text-ink-faint">{hint}</span>}
       </span>
-      <input type="checkbox" className="mt-0.5 size-4 accent-[var(--color-accent)]" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <Switch checked={checked} onChange={onChange} />
     </label>
   )
 }

@@ -2,11 +2,13 @@ import { Map as MlMap, type GeoJSONSource } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import './setup'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { events } from '../lib/backend'
 import type { Pin } from '../lib/game'
 import { LiveMarkerFilter, markerName } from '../lib/markers'
 import { findMover } from '../lib/movers'
 import { bearingOf, mapBounds, mapCenter, toLngLat, zoomToFit, type LngLat, type Projection } from '../lib/projection'
 import type { Marker } from '../lib/protocol'
+import { steppedZoom } from '../lib/zoom'
 import { isCategoryVisible, selectAllPins, selectViewLayer, useStore } from '../state/store'
 import { badgeKey, ensureBadge } from './badges'
 import { mapHandle } from './handle'
@@ -49,6 +51,11 @@ function usablePadding(p: Insets, width: number, height: number): Insets {
   const [left, right] = shrink(p.left, p.right, width)
   const [top, bottom] = shrink(p.top, p.bottom, height)
   return { top, right, bottom, left }
+}
+
+/** Mini-map zoom at the default `hud.zoom` of 0: about 1 screen pixel per world unit. */
+function miniBaseZoom(p: Projection): number {
+  return zoomToFit(p, p.maxEast - p.minEast)
 }
 
 /** Shows the whole island in the part of the map not covered by panels. */
@@ -99,8 +106,8 @@ export function MapView({ variant, onContextMenu, fitPadding = NO_PADDING }: Pro
       container,
       style: buildStyle(game, gameMap, window.location.origin),
       center: [center.lng, center.lat],
-      // Full map: fitted below; mini-map: about 1 screen pixel per world unit.
-      zoom: zoomToFit(p, p.maxEast - p.minEast),
+      // Full map: fitted below; mini-map: the user's zoom.
+      zoom: miniBaseZoom(p) + (full ? 0 : useStore.getState().settings.hud.zoom),
       minZoom: zoomToFit(p, 256),
       maxZoom: gameMap.tiles.maxZoom,
       renderWorldCopies: false,
@@ -146,6 +153,7 @@ export function MapView({ variant, onContextMenu, fitPadding = NO_PADDING }: Pro
   useLayerShading(map)
   useTrackLine(map)
   usePlayers(map, variant)
+  useMiniZoomKeys(map, variant)
   // MapLibre's CSS forces `position: relative` on its container, so size it from a wrapper.
   return (
     <div className="absolute inset-0">
@@ -331,15 +339,21 @@ function usePlayers(map: MlMap | null, variant: 'full' | 'mini') {
       const { snapshot, settings } = useStore.getState()
       pm.update(snapshot)
       const local = snapshot?.local
-      if (!local) return
-      const center = toLngLat(gameMap.projection, local.position)
       if (variant === 'mini') {
+        const zoom = miniBaseZoom(gameMap.projection) + settings.hud.zoom
+        if (!local) return map.jumpTo({ zoom })
+        const center = toLngLat(gameMap.projection, local.position)
         const heading = local.forward ? bearingOf(gameMap.projection, local.forward) : null
         map.jumpTo({
           center: [center.lng, center.lat],
+          zoom,
           bearing: settings.hud.rotateWithPlayer && heading !== null ? heading : 0,
         })
-      } else if (settings.followPlayer) {
+        return
+      }
+      if (!local) return
+      const center = toLngLat(gameMap.projection, local.position)
+      if (settings.followPlayer) {
         map.jumpTo({ center: [center.lng, center.lat] })
       }
     }
@@ -352,5 +366,20 @@ function usePlayers(map: MlMap | null, variant: 'full' | 'mini') {
       pm.remove()
       markers.current = null
     }
+  }, [map, gameMap, variant])
+}
+
+/** Zoom keys pressed in the game zoom the mini-map; the zoom is saved with the settings. */
+function useMiniZoomKeys(map: MlMap | null, variant: 'full' | 'mini') {
+  const gameMap = useStore((s) => s.map)
+  useEffect(() => {
+    if (!map || !gameMap || variant !== 'mini') return
+    const unlisten = events.mapZoom((steps) => {
+      const { settings, setHud } = useStore.getState()
+      const base = miniBaseZoom(gameMap.projection)
+      const zoom = steppedZoom(base + settings.hud.zoom, steps, map.getMinZoom(), map.getMaxZoom())
+      setHud({ zoom: zoom - base })
+    })
+    return () => void unlisten.then((f) => f())
   }, [map, gameMap, variant])
 }

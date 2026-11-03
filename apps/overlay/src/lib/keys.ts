@@ -23,6 +23,22 @@ const NAMED: Record<string, number> = {
   PageUp: 0x21,
   PageDown: 0x22,
   CapsLock: 0x14,
+  NumpadMultiply: 0x6a,
+  NumpadAdd: 0x6b,
+  NumpadSubtract: 0x6d,
+  NumpadDecimal: 0x6e,
+  NumpadDivide: 0x6f,
+}
+
+/** Labels for keys whose code name reads poorly. */
+const LABELS: Record<number, string> = {
+  0xbd: '-',
+  0xbb: '=',
+  0x6a: 'Num *',
+  0x6b: 'Num +',
+  0x6d: 'Num -',
+  0x6e: 'Num .',
+  0x6f: 'Num /',
 }
 
 /** VK code for a `KeyboardEvent.code`, or null if unsupported as a hotkey. */
@@ -42,6 +58,7 @@ export function vkLabel(vk: number): string {
   if ((vk >= 0x41 && vk <= 0x5a) || (vk >= 0x30 && vk <= 0x39)) return String.fromCharCode(vk)
   if (vk >= 0x60 && vk <= 0x69) return `Num ${vk - 0x60}`
   if (vk >= 0x70 && vk <= 0x87) return `F${vk - 0x6f}`
+  if (LABELS[vk]) return LABELS[vk]
   const name = Object.entries(NAMED).find(([, v]) => v === vk)?.[0]
   return name ?? `Key ${vk}`
 }

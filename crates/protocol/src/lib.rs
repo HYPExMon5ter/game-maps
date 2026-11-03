@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 /// Bumped on any incompatible change. Both sides refuse to talk across versions.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Name of the pipe an agent serves for a given game process id.
 pub fn pipe_name(pid: u32) -> String {
@@ -122,6 +122,9 @@ pub struct WorldSnapshot {
 #[serde(rename_all = "snake_case")]
 pub enum HotkeyAction {
     ToggleMap,
+    /// Zoom the mini-map in or out (the full map handles its own keys while focused).
+    ZoomIn,
+    ZoomOut,
 }
 
 /// A key binding using Windows virtual-key codes.
@@ -288,6 +291,7 @@ mod tests {
                 }],
             }),
             AgentMessage::HotkeyPressed { action: HotkeyAction::ToggleMap },
+            AgentMessage::HotkeyPressed { action: HotkeyAction::ZoomOut },
             AgentMessage::TeleportResult { request_id: 3, ok: false, error: Some("not in world".into()) },
             AgentMessage::Log { level: LogLevel::Warn, message: "x".into() },
             AgentMessage::ExportResult {
@@ -321,7 +325,10 @@ mod tests {
         let msgs = vec![
             AppMessage::Hello { protocol_version: PROTOCOL_VERSION },
             AppMessage::SetHotkeys {
-                hotkeys: vec![Hotkey { action: HotkeyAction::ToggleMap, vk: 0x4D, ctrl: false, shift: false, alt: false }],
+                hotkeys: vec![
+                    Hotkey { action: HotkeyAction::ToggleMap, vk: 0x4D, ctrl: false, shift: false, alt: false },
+                    Hotkey { action: HotkeyAction::ZoomIn, vk: 0x6B, ctrl: false, shift: false, alt: false },
+                ],
             },
             AppMessage::SetStreamRate { max_hz: 30 },
             AppMessage::Teleport {

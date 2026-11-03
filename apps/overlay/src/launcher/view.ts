@@ -47,6 +47,16 @@ export function gameView(game: GameEntry, status: LinkStatus | null, hookMode: H
   }
 }
 
+export type GameFilter = 'all' | 'live' | 'map'
+
+/** Games matching a search and a filter (`live`: live location and teleport, `map`: map only). */
+export function filterGames(games: GameEntry[], query: string, filter: GameFilter): GameEntry[] {
+  const q = query.trim().toLowerCase()
+  return games.filter(
+    (g) => (filter === 'all' || g.liveFeatures === (filter === 'live')) && (!q || g.name.toLowerCase().includes(q)),
+  )
+}
+
 export interface PackView {
   tone: 'idle' | 'error'
   text: string

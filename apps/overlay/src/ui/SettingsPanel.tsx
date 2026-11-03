@@ -1,9 +1,10 @@
 import { X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { agentLogs } from '../lib/agentLogs'
-import { backend } from '../lib/backend'
+import { maxMinimapSize, MIN_MINIMAP_SIZE } from '../lib/minimap'
+import { backend, type ZoomKeys } from '../lib/backend'
 import { MAX_UI_SCALE, MIN_UI_SCALE, useUiScale } from '../lib/uiScale'
-import type { AgentLog, Corner, Hotkey } from '../lib/protocol'
+import type { AgentLog, Corner, Hotkey, HotkeyAction } from '../lib/protocol'
 import { selectMapHotkey, useStore } from '../state/store'
 import { Button, Slider, Toggle } from './controls'
 import { HotkeyInput } from './HotkeyInput'
@@ -71,7 +72,7 @@ function HotkeyField() {
   const isDefault = useStore((s) => !s.game || !s.mapHotkeys[s.game.id])
   const setMapHotkeys = useStore((s) => s.setMapHotkeys)
   const notify = useStore((s) => s.notify)
-  const onChange = useCallback(
+  const set = useCallback(
     (hotkey: Hotkey | null) => {
       if (!game) return
       backend
@@ -85,8 +86,60 @@ function HotkeyField() {
   return (
     <div className="flex items-center justify-between gap-3 py-1">
       <span className="text-[13px]">Open / close map</span>
-      <HotkeyInput value={current} isDefault={isDefault} onChange={onChange} />
+      <HotkeyInput value={current} isDefault={isDefault} onChange={set} onReset={() => set(null)} />
     </div>
+  )
+}
+
+const ZOOM_ACTIONS: { action: HotkeyAction & keyof ZoomKeys; label: string }[] = [
+  { action: 'zoom_in', label: 'Zoom in' },
+  { action: 'zoom_out', label: 'Zoom out' },
+]
+
+/** Zoom keys for the full map and the mini-map: two per direction, each can be changed or turned off. */
+function ZoomKeyFields() {
+  const keys = useStore((s) => s.zoomKeys)
+  const setZoomKeys = useStore((s) => s.setZoomKeys)
+  const notify = useStore((s) => s.notify)
+  const save = useCallback(
+    (next: ZoomKeys | null) => {
+      backend
+        .setZoomKeys(next)
+        .then((saved) => setZoomKeys(saved.zoom_keys))
+        .catch((e: unknown) => notify(`Could not change the key: ${String(e)}`, 'error'))
+    },
+    [setZoomKeys, notify],
+  )
+  if (!keys) return null
+  const setSlot = (action: keyof ZoomKeys, slot: number, hotkey: Hotkey | null) => {
+    const slots: ZoomKeys[typeof action] = [...keys[action]]
+    slots[slot] = hotkey
+    save({ ...keys, [action]: slots })
+  }
+
+  return (
+    <>
+      {ZOOM_ACTIONS.map(({ action, label }) => (
+        <div key={action} className="flex items-center justify-between gap-3 py-1">
+          <span className="text-[13px]">{label}</span>
+          <div className="flex flex-col items-end gap-1.5">
+            {keys[action].map((hotkey, slot) => (
+              <HotkeyInput
+                key={slot}
+                action={action}
+                value={hotkey}
+                label={`${label} key ${slot + 1}`}
+                onChange={(h) => setSlot(action, slot, h)}
+                onClear={() => setSlot(action, slot, null)}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
+      <div className="flex justify-end">
+        <Button onClick={() => save(null)}>Reset zoom keys</Button>
+      </div>
+    </>
   )
 }
 
@@ -106,6 +159,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const setHud = useStore((s) => s.setHud)
   const status = useStore((s) => s.status)
   const [logs, setLogs] = useState<AgentLog[]>(agentLogs)
+  const maxSize = maxMinimapSize(window.screen)
 
   useEffect(() => {
     const id = setInterval(() => setLogs(agentLogs()), 1000)
@@ -126,6 +180,10 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
         <p className="text-[11px] text-ink-faint">
           Applies to {game?.name ?? 'this game'} only. The key still reaches the game, so your in-game GPS keeps working.
         </p>
+        <ZoomKeyFields />
+        <p className="text-[11px] text-ink-faint">
+          Zoom the open map, or the mini-map while playing. The mouse wheel also zooms the open map. Same keys for every game.
+        </p>
       </Section>
 
       <Section title="Full map">
@@ -137,7 +195,8 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       <Section title="While playing">
         <Toggle label="Mini-map" hint="Click-through map in a corner of the screen" checked={settings.hud.minimap} onChange={(minimap) => setHud({ minimap })} />
         <Toggle label="Rotate with view" checked={settings.hud.rotateWithPlayer} onChange={(rotateWithPlayer) => setHud({ rotateWithPlayer })} />
-        <Slider label="Mini-map size" value={settings.hud.size} min={180} max={520} step={10} format={(v) => `${v}px`} onChange={(size) => setHud({ size })} />
+        <Slider label="Mini-map width" value={Math.min(settings.hud.width, maxSize.width)} min={MIN_MINIMAP_SIZE} max={maxSize.width} step={10} format={(v) => `${v}px`} onChange={(width) => setHud({ width })} />
+        <Slider label="Mini-map height" value={Math.min(settings.hud.height, maxSize.height)} min={MIN_MINIMAP_SIZE} max={maxSize.height} step={10} format={(v) => `${v}px`} onChange={(height) => setHud({ height })} />
         <Slider label="Mini-map opacity" value={settings.hud.opacity} min={0.3} max={1} step={0.02} format={pct} onChange={(opacity) => setHud({ opacity })} />
         <div className="grid grid-cols-2 gap-1.5 pt-1">
           {CORNERS.map((c) => (

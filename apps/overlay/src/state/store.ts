@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { ZoomKeys } from '../lib/backend'
 import type { Category, GameDefinition, GameMap, Pin } from '../lib/game'
 import type { Corner, Hotkey, LinkStatus, OverlayMode, WorldLayer, WorldSnapshot } from '../lib/protocol'
 
@@ -6,8 +7,11 @@ export interface HudSettings {
   /** Keep a mini-map on screen while playing. */
   minimap: boolean
   corner: Corner
-  /** Mini-map edge length in logical pixels. */
-  size: number
+  /** Mini-map size in logical pixels (capped at half the screen, see `hudSize`). */
+  width: number
+  height: number
+  /** Mini-map zoom in levels relative to the default (about 1 screen pixel per world unit). */
+  zoom: number
   opacity: number
   /** Rotate the mini-map so the player's view direction points up. */
   rotateWithPlayer: boolean
@@ -38,7 +42,7 @@ export const DEFAULT_SETTINGS: Settings = {
   panelScale: 1,
   uiScale: null,
   followPlayer: false,
-  hud: { minimap: false, corner: 'top_right', size: 300, opacity: 0.92, rotateWithPlayer: false },
+  hud: { minimap: false, corner: 'top_right', width: 300, height: 300, zoom: 0, opacity: 0.92, rotateWithPlayer: false },
 }
 
 export const EMPTY_USER_DATA: GameUserData = { customPins: [], found: [], hiddenCategories: [], shownCategories: [] }
@@ -54,6 +58,8 @@ interface AppState {
   settings: Settings
   /** Per-game map hotkey overrides (owned by the backend, see `set_map_hotkey`). */
   mapHotkeys: Record<string, Hotkey>
+  /** Map zoom keys for all games (owned by the backend, see `set_zoom_keys`). */
+  zoomKeys: ZoomKeys | null
   selectedPinId: string | null
   tracked: TrackTarget | null
   query: string
@@ -68,6 +74,7 @@ interface AppState {
   setGame(game: GameDefinition, pins: Pin[], user: GameUserData): void
   setSettings(patch: Partial<Settings>): void
   setMapHotkeys(mapHotkeys: Record<string, Hotkey>): void
+  setZoomKeys(zoomKeys: ZoomKeys): void
   setHud(patch: Partial<HudSettings>): void
   selectPin(id: string | null): void
   setTracked(t: TrackTarget | null): void
@@ -95,6 +102,7 @@ export const useStore = create<AppState>((set) => ({
   user: EMPTY_USER_DATA,
   settings: DEFAULT_SETTINGS,
   mapHotkeys: {},
+  zoomKeys: null,
   selectedPinId: null,
   tracked: null,
   query: '',
@@ -108,6 +116,7 @@ export const useStore = create<AppState>((set) => ({
   setGame: (game, gamePins, user) => set({ game, map: game.maps[0] ?? null, gamePins, user, selectedPinId: null }),
   setSettings: (patch) => set((s) => ({ settings: { ...s.settings, ...patch } })),
   setMapHotkeys: (mapHotkeys) => set({ mapHotkeys }),
+  setZoomKeys: (zoomKeys) => set({ zoomKeys }),
   setHud: (patch) => set((s) => ({ settings: { ...s.settings, hud: { ...s.settings.hud, ...patch } } })),
   selectPin: (selectedPinId) => set({ selectedPinId }),
   setTracked: (tracked) => set({ tracked }),

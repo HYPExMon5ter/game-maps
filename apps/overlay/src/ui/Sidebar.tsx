@@ -7,7 +7,7 @@ import { glyphColor } from '../map/badges'
 import { groundDistance } from '../lib/projection'
 import { PinSearch } from '../lib/search'
 import { isCategoryVisible, selectAllPins, useStore } from '../state/store'
-import { Button } from './controls'
+import { Button, Switch } from './controls'
 
 export function CategoryIcon({ gameId, category, icon, color, size = 22 }: { gameId: string; category?: Category; icon?: string; color?: string; size?: number }) {
   const ref = icon ?? category?.icon ?? 'builtin:pin'
@@ -185,8 +185,8 @@ export function Sidebar({ onEditPin }: { onEditPin: (pin: Pin) => void }) {
       </div>
 
       <div className="flex items-center justify-between gap-2 border-t border-line p-3">
-        <label className="flex items-center gap-2 text-[12px] text-ink-dim">
-          <input type="checkbox" className="accent-[var(--color-accent)]" checked={showFound} onChange={(e) => setShowFound(e.target.checked)} />
+        <label className="flex cursor-pointer items-center gap-2 text-[12px] text-ink-dim">
+          <Switch checked={showFound} onChange={setShowFound} />
           Show found
         </label>
         <Button

@@ -59,15 +59,21 @@ the maps up to date.
 
 <img src="docs/images/launcher.png" alt="The Game Maps window" width="420" align="right">
 
-The **Game Maps window** shows each game's status and lets you:
+The **Game Maps window** lists your games, one line each, with their status. Search
+the list, or show only games with live features (**Live**) or without (**Map only**).
+On each game:
 
-- **Play:** start the game through Steam.
-- **Connect / Disconnect:** attach to or detach from the running game.
-- **Connect to game:** *Automatically* (as soon as it starts) or *Manually* (only when
-  you click Connect), per game.
-- **Key to open the map:** pick any key or combination, per game. You can also change
-  it from the map's settings.
-- **Start with Windows** and **Install updates automatically.**
+- **Play:** start the game through Steam. **Connect** attaches to it when it's running.
+- **Map** (map icon): open the map without the game.
+- The **arrow** shows more options:
+  - **Connect to game:** *Automatically* (as soon as it starts) or *Manually* (only
+    when you click Connect).
+  - **Key to open the map:** pick any key or combination. You can also change it from
+    the map's settings.
+  - **Map data:** whether the map is downloaded and up to date.
+
+The **gear** has **Start with Windows**, **Install updates automatically**, and update
+and log buttons.
 
 Closing the window keeps Game Maps running in the system tray. Quit it from the tray
 icon.
@@ -79,15 +85,17 @@ icon.
 | Action | How |
 |---|---|
 | Open / close the map | **M** (or your key) in game; **Esc** also closes it |
+| Zoom | Mouse wheel, or **Num +** / **Num -** (also **=** / **-**). The keys zoom the mini-map while you play too |
 | Search | **/** or **Ctrl+F** |
 | Add a pin, teleport, copy coordinates | Right-click the map |
 | Track, teleport to, or mark a pin found | Click the pin |
 | Switch between surface and caves | **Surface / Underground** in the top bar (follows you automatically) |
 | Find other players and companions | **Players** in the top bar |
 | Mini-map while playing | **Picture-in-picture** in the top bar |
-| Opacity, size, mini-map corner | **Settings** (gear icon) |
+| Opacity, size, mini-map size and corner, zoom keys | **Settings** (gear icon) |
 
-The map key still reaches the game, so the in-game GPS keeps working.
+The map and zoom keys still reach the game, so the in-game GPS keeps working. Each
+zoom key can be changed or turned off in **Settings**.
 
 ## Updates
 

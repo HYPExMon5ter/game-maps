@@ -21,6 +21,9 @@ pub struct GameEntry {
     pub steam_app_id: Option<u32>,
     #[serde(default)]
     pub default_hotkeys: Vec<Hotkey>,
+    /// Has an agent provider (live location, teleport); otherwise a static map.
+    #[serde(default)]
+    pub live_features: bool,
 }
 
 impl GameEntry {

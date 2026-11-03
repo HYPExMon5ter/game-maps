@@ -31,7 +31,7 @@ them. This page records the main design decisions and how the pieces fit togethe
 | Map data | Generated from the game's own files: tiles are rendered from the terrain data (`tools/mapgen`), pins come from an in-game world export (`tools/pins`). User pins are stored locally. | Uses the game's own data, so live positions and pins share one coordinate system by construction. |
 | Distribution | Map data ships as per-game map packs on a `maps` GitHub release, separate from the app. The app ships only `game.json`. | Map fixes reach users without an app release, and the installer stays small. |
 | Updates | Tauri updater against signed GitHub releases. Installs only while no game is running. | Never interrupts a session; signed updates can't be tampered with in transit. |
-| Hotkey | The agent watches for the configured key (default **M**) only while the game is focused, and doesn't consume it, so the in-game GPS still opens. | No global hook, no conflict when typing outside the game. |
+| Hotkeys | The agent watches for the configured keys (map: default **M**; zoom: **Num +/-** and **=/-**) only while the game is focused, and doesn't consume them, so the in-game GPS still opens. While the full map is open it has focus and handles the same keys itself. | No global hook, no conflict when typing outside the game. |
 
 ## Game model
 
@@ -43,6 +43,8 @@ in the folder is generated and published as a map pack.
 - `id`, `name`, `process` (executable name used for detection), `steamAppId`
   (optional, for the launcher's Play button).
 - `defaultHotkeys`: the key that opens the map, until the user picks another.
+- `liveFeatures`: whether the game has a provider (live location, teleport). The
+  launcher's **Live** / **Map only** filter uses it before the game is running.
 - `maps[]`: each map has its `tiles` (and optional per-layer `layerTiles`, e.g. caves)
   and a `projection` that maps world coordinates onto the tile grid.
 - `categories[]`: id, name, icon, color, default visibility.

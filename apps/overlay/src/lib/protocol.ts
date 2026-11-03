@@ -50,7 +50,7 @@ export interface WorldSnapshot {
   markers?: Marker[]
 }
 
-export type HotkeyAction = 'toggle_map'
+export type HotkeyAction = 'toggle_map' | 'zoom_in' | 'zoom_out'
 
 export interface Hotkey {
   action: HotkeyAction

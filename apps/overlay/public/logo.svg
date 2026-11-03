@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Dark tile and rim remain legible on light and dark taskbars. -->
+  <rect x="16" y="16" width="992" height="992" rx="208" fill="#0e1216" stroke="#64717d" stroke-width="24"/>
+  <!-- Warm paper with alternating edges and tones to describe three folds. -->
+  <path d="M176 432 400 352 624 432 848 352V736L624 816 400 736 176 816Z" fill="#f2dfad" stroke="#f2dfad" stroke-width="32" stroke-linejoin="round"/>
+  <path d="m400 352 224 80v384l-224-80Z" fill="#d8c28e"/>
+  <path d="m624 432 224-80v384l-224 80Z" fill="#f7e8bf"/>
+  <!-- Broad land shapes and a winding river read as geography at icon sizes. -->
+  <path d="m208 452 160-56 16 64-40 48-68-8-48 28-20-24Z" fill="#729c64"/>
+  <path d="m702 608 114-32v136l-128 46-40-32 20-64Z" fill="#729c64"/>
+  <path d="M176 544C248 504 294 514 344 546L400 574 474 626Q508 648 544 638L624 612 690 590Q722 578 752 554L848 492V562L788 602Q750 634 710 646L624 674 560 696Q506 716 462 686L400 642 314 604Q252 564 176 610Z" fill="#63afd0"/>
+  <!-- Fold seams sit over the geography, giving the paper its zig-zag depth. -->
+  <path d="M400 368V736M624 448V800" fill="none" stroke="#ab9365" stroke-width="24" stroke-linecap="round"/>
+  <!-- A simple broken trail leads across the map to the pin. -->
+  <path d="M248 680 300 602Q312 584 332 596L456 670Q472 680 488 666L560 606Q568 600 580 600H640V552" fill="none" stroke="#26352d" stroke-width="36" stroke-dasharray="44 64" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Original pin geometry, now vivid purple with its dark eye preserved. -->
+  <path d="M592 184H688L792 288V376L640 552 488 376V288Z" fill="#a855f7" stroke="#0e1216" stroke-width="56" stroke-linejoin="round"/>
+  <circle cx="640" cy="320" r="56" fill="#0e1216"/>
+</svg>

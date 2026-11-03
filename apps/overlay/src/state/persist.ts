@@ -3,6 +3,7 @@
 
 import { load, type Store } from '@tauri-apps/plugin-store'
 import type { Hotkey } from '../lib/protocol'
+import { migrateHud } from '../lib/minimap'
 import { DEFAULT_SETTINGS, EMPTY_USER_DATA, useStore, type GameUserData, type Settings } from './store'
 
 let store: Store | null = null
@@ -19,7 +20,7 @@ async function getStore(): Promise<Store> {
 export async function loadSettings(): Promise<{ settings: Settings; legacyHotkey: Hotkey | null }> {
   const s = await getStore()
   const { hotkey, ...saved } = (await s.get<Partial<Settings> & { hotkey?: Hotkey | null }>('settings')) ?? {}
-  return { settings: { ...DEFAULT_SETTINGS, ...saved, hud: { ...DEFAULT_SETTINGS.hud, ...saved.hud } }, legacyHotkey: hotkey ?? null }
+  return { settings: { ...DEFAULT_SETTINGS, ...saved, hud: migrateHud(saved.hud) }, legacyHotkey: hotkey ?? null }
 }
 
 /** Drops the old all-games hotkey once it has been moved to the backend. */
