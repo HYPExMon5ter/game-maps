@@ -2,9 +2,13 @@
 //! teleport routine live. Everything game-specific in the agent goes here.
 
 mod sotf;
+mod sunkenland;
 
-use game_maps_protocol::{Capabilities, TeleportTarget, Vec3, WorldExport, WorldSnapshot};
-use il2cpp::{Runtime, Unity, Vector3};
+use game_maps_protocol::{Capabilities, PathInfo, TeleportTarget, Vec3, WorldExport, WorldSnapshot};
+
+/// How far (world units) route ends may be from Unity's NavMesh.
+const NAVMESH_SNAP: f32 = 25.0;
+use unity_runtime::{Physics, Runtime, Unity, Vector3};
 
 use crate::hook::HookTarget;
 
@@ -54,6 +58,27 @@ pub trait Provider: Send {
         None
     }
 
+    /// A walking route from `from` to `to`. The default uses Unity's NavMesh; games with
+    /// their own pathfinding override it.
+    ///
+    /// # Safety
+    /// Must run on the game's main thread.
+    unsafe fn find_path(&mut self, cx: &Cx, from: Vec3, to: Vec3) -> Result<PathInfo, String> {
+        cx.unity
+            .find_path(cx.rt, to_unity(from), to_unity(to), NAVMESH_SNAP)
+            .map(|p| PathInfo { corners: p.corners.into_iter().map(to_proto).collect(), complete: p.complete })
+            .map_err(|e| e.to_string())
+    }
+
+    /// Layers that are solid ground and walls for route checks and ground probes, on the
+    /// surface or underground.
+    ///
+    /// # Safety
+    /// Must run on the game's main thread.
+    unsafe fn solid_mask(&mut self, cx: &Cx, physics: &Physics, _underground: bool) -> i32 {
+        default_solid_mask(cx, physics)
+    }
+
     /// Whether the game is capturing text input (chat), so hotkeys must not fire.
     ///
     /// # Safety
@@ -66,7 +91,22 @@ pub trait Provider: Send {
 /// Picks the provider for the running game, if one exists. Metadata lookups only;
 /// safe from any attached thread.
 pub fn detect(rt: &Runtime) -> Option<Box<dyn Provider>> {
-    sotf::SonsOfTheForest::detect(rt).map(|p| Box::new(p) as Box<dyn Provider>)
+    sotf::SonsOfTheForest::detect(rt)
+        .map(|p| Box::new(p) as Box<dyn Provider>)
+        .or_else(|| sunkenland::Sunkenland::detect(rt).map(|p| Box::new(p) as Box<dyn Provider>))
+}
+
+/// Layers games commonly use for things that aren't the world's solid geometry.
+const NON_SOLID_LAYERS: &[&str] = &[
+    "Water", "UI", "TransparentFX", "Player", "LocalPlayer", "Character", "Characters", "Ragdoll", "Held", "Inventory", "PickUp", "Pickup", "Camera", "HUD",
+];
+
+/// Everything but layers commonly used for players, characters, items, water and UI.
+///
+/// # Safety
+/// Must run on an attached thread.
+pub(crate) unsafe fn default_solid_mask(cx: &Cx, physics: &Physics) -> i32 {
+    physics.mask_without(cx.rt, NON_SOLID_LAYERS)
 }
 
 pub(crate) fn to_proto(v: Vector3) -> Vec3 {

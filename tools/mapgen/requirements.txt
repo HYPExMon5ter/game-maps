@@ -1,3 +1,6 @@
 UnityPy==1.25.4
 numpy>=2.0
 pillow>=11.0
+# Sunkenland: offscreen GPU rendering, and reading script fields of scene objects.
+moderngl==5.13.0
+TypeTreeGeneratorAPI==0.0.10

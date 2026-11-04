@@ -3,6 +3,7 @@
 import type { Hotkey } from './protocol'
 
 const NAMED: Record<string, number> = {
+  Backspace: 0x08,
   Tab: 0x09,
   Space: 0x20,
   Backquote: 0xc0,

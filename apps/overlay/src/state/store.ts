@@ -1,32 +1,7 @@
 import { create } from 'zustand'
-import type { ZoomKeys } from '../lib/backend'
 import type { Category, GameDefinition, GameMap, Pin } from '../lib/game'
-import type { Corner, Hotkey, LinkStatus, OverlayMode, WorldLayer, WorldSnapshot } from '../lib/protocol'
-
-export interface HudSettings {
-  /** Keep a mini-map on screen while playing. */
-  minimap: boolean
-  corner: Corner
-  /** Mini-map size in logical pixels (capped at half the screen, see `hudSize`). */
-  width: number
-  height: number
-  /** Mini-map zoom in levels relative to the default (about 1 screen pixel per world unit). */
-  zoom: number
-  opacity: number
-  /** Rotate the mini-map so the player's view direction points up. */
-  rotateWithPlayer: boolean
-}
-
-export interface Settings {
-  /** Opacity of the full map (the game shows through below 1). */
-  opacity: number
-  /** Fraction of the screen the full map panel uses. */
-  panelScale: number
-  /** Interface scale; null picks one from the screen size. */
-  uiScale: number | null
-  followPlayer: boolean
-  hud: HudSettings
-}
+import type { LinkStatus, OverlayMode, PathInfo, Vec3, WorldLayer, WorldSnapshot } from '../lib/protocol'
+import { DEFAULT_WORLD_INFO, EMPTY_INDEX, type WorldIndex, type WorldInfo } from './worlds'
 
 export interface GameUserData {
   customPins: Pin[]
@@ -35,14 +10,63 @@ export interface GameUserData {
   shownCategories: string[]
 }
 
-export type TrackTarget = { kind: 'pin'; id: string } | { kind: 'player'; id: string }
+/**
+ * A pin, a live entity (player, companion, live marker; see `lib/movers`), or a spot
+ * someone asked you to track.
+ */
+export type TrackTarget =
+  | { kind: 'pin'; id: string }
+  | { kind: 'live'; id: string }
+  | { kind: 'point'; name: string; position: Vec3; layer?: WorldLayer }
 
-export const DEFAULT_SETTINGS: Settings = {
-  opacity: 0.96,
-  panelScale: 1,
-  uiScale: null,
+/** Where the full map was looking. */
+export interface SavedMapView {
+  center: [number, number]
+  zoom: number
+}
+
+/**
+ * The map as it was left, per game: restored whenever that game's map loads (app
+ * start, game start, reconnects), so nothing is lost between sessions.
+ */
+export interface MapSession {
+  tracked: TrackTarget | null
+  selectedPinId: string | null
+  selectedLiveId: string | null
+  followId: string | null
+  /** The full map keeps the player centered. */
+  followPlayer: boolean
+  viewLayerOverride: WorldLayer | null
+  query: string
+  showFound: boolean
+  mapView: SavedMapView | null
+}
+
+export const EMPTY_SESSION: MapSession = {
+  tracked: null,
+  selectedPinId: null,
+  selectedLiveId: null,
+  followId: null,
   followPlayer: false,
-  hud: { minimap: false, corner: 'top_right', width: 300, height: 300, zoom: 0, opacity: 0.92, rotateWithPlayer: false },
+  viewLayerOverride: null,
+  query: '',
+  showFound: true,
+  mapView: null,
+}
+
+/** The current map session (see `MapSession`). */
+export function selectSession(s: MapSession): MapSession {
+  return {
+    tracked: s.tracked,
+    selectedPinId: s.selectedPinId,
+    selectedLiveId: s.selectedLiveId,
+    followId: s.followId,
+    followPlayer: s.followPlayer,
+    viewLayerOverride: s.viewLayerOverride,
+    query: s.query,
+    showFound: s.showFound,
+    mapView: s.mapView,
+  }
 }
 
 export const EMPTY_USER_DATA: GameUserData = { customPins: [], found: [], hiddenCategories: [], shownCategories: [] }
@@ -54,36 +78,56 @@ interface AppState {
   game: GameDefinition | null
   map: GameMap | null
   gamePins: Pin[]
+  /** Pins other players in the session share (see `lib/sync`). */
+  friendPins: Pin[]
+  /** Category filters for the game plus the current world's pins and found items. */
   user: GameUserData
-  settings: Settings
-  /** Per-game map hotkey overrides (owned by the backend, see `set_map_hotkey`). */
-  mapHotkeys: Record<string, Hotkey>
-  /** Map zoom keys for all games (owned by the backend, see `set_zoom_keys`). */
-  zoomKeys: ZoomKeys | null
+  /** The world whose data is shown (see `state/worlds`). */
+  world: WorldInfo
+  /** The game's known worlds. */
+  worldIndex: WorldIndex
+  /** How many teleports "teleport back" can undo. */
+  backSteps: number
+  /** Walking route to the tracked target, refreshed while tracking. */
+  route: PathInfo | null
   selectedPinId: string | null
+  /** Selected live entity (its details card is open). */
+  selectedLiveId: string | null
+  /** Live entity the full map keeps centered on (excludes `followPlayer`). */
+  followId: string | null
+  followPlayer: boolean
   tracked: TrackTarget | null
   query: string
   showFound: boolean
   /** Layer the map shows; null follows the player's current layer. */
   viewLayerOverride: WorldLayer | null
+  /** Where the full map was last looking (restored when it opens). */
+  mapView: SavedMapView | null
   toast: { id: number; text: string; tone: 'info' | 'error' } | null
 
   setStatus(s: LinkStatus): void
   setMode(m: OverlayMode): void
   setSnapshot(s: WorldSnapshot | null): void
-  setGame(game: GameDefinition, pins: Pin[], user: GameUserData): void
-  setSettings(patch: Partial<Settings>): void
-  setMapHotkeys(mapHotkeys: Record<string, Hotkey>): void
-  setZoomKeys(zoomKeys: ZoomKeys): void
-  setHud(patch: Partial<HudSettings>): void
+  setGame(game: GameDefinition, pins: Pin[], user: GameUserData, world: WorldInfo, index: WorldIndex, session: MapSession): void
+  /** Shows another world of the current game. */
+  setWorld(world: WorldInfo, index: WorldIndex, user: GameUserData, session: MapSession): void
+  setWorldIndex(index: WorldIndex): void
+  setBackSteps(steps: number): void
+  setRoute(route: PathInfo | null): void
   selectPin(id: string | null): void
+  selectLive(id: string | null): void
+  setFollow(id: string | null): void
+  setFollowPlayer(follow: boolean): void
   setTracked(t: TrackTarget | null): void
   setQuery(q: string): void
   setShowFound(v: boolean): void
   setViewLayer(layer: WorldLayer | null): void
+  setFriendPins(pins: Pin[]): void
+  setMapView(view: SavedMapView): void
   toggleCategory(id: string): void
   setAllCategories(visible: boolean): void
   toggleFound(id: string): void
+  markFound(ids: string[]): void
   upsertCustomPin(pin: Pin): void
   deleteCustomPin(id: string): void
   notify(text: string, tone?: 'info' | 'error'): void
@@ -99,30 +143,50 @@ export const useStore = create<AppState>((set) => ({
   game: null,
   map: null,
   gamePins: [],
+  friendPins: [],
   user: EMPTY_USER_DATA,
-  settings: DEFAULT_SETTINGS,
-  mapHotkeys: {},
-  zoomKeys: null,
+  world: DEFAULT_WORLD_INFO,
+  worldIndex: EMPTY_INDEX,
+  backSteps: 0,
+  route: null,
   selectedPinId: null,
+  selectedLiveId: null,
+  followId: null,
+  followPlayer: false,
   tracked: null,
   query: '',
   showFound: true,
   viewLayerOverride: null,
+  mapView: null,
   toast: null,
 
   setStatus: (status) => set({ status }),
   setMode: (mode) => set({ mode }),
-  setSnapshot: (snapshot) => set({ snapshot }),
-  setGame: (game, gamePins, user) => set({ game, map: game.maps[0] ?? null, gamePins, user, selectedPinId: null }),
-  setSettings: (patch) => set((s) => ({ settings: { ...s.settings, ...patch } })),
-  setMapHotkeys: (mapHotkeys) => set({ mapHotkeys }),
-  setZoomKeys: (zoomKeys) => set({ zoomKeys }),
-  setHud: (patch) => set((s) => ({ settings: { ...s.settings, hud: { ...s.settings.hud, ...patch } } })),
-  selectPin: (selectedPinId) => set({ selectedPinId }),
-  setTracked: (tracked) => set({ tracked }),
+  // A pinned surface/underground view lasts until the player changes layer themselves
+  // (enters or leaves a cave); then the map follows them again.
+  setSnapshot: (snapshot) =>
+    set((s) => {
+      const layer = snapshot?.local?.layer
+      const changed = layer !== undefined && s.snapshot?.local?.layer !== undefined && layer !== s.snapshot.local.layer
+      return { snapshot, viewLayerOverride: changed ? null : s.viewLayerOverride }
+    }),
+  setGame: (game, gamePins, user, world, worldIndex, session) =>
+    set({ game, map: game.maps[0] ?? null, gamePins, user, world, worldIndex, route: null, ...session }),
+  setWorld: (world, worldIndex, user, session) => set({ world, worldIndex, user, route: null, ...session }),
+  setWorldIndex: (worldIndex) => set({ worldIndex }),
+  setBackSteps: (backSteps) => set({ backSteps }),
+  setRoute: (route) => set({ route }),
+  selectPin: (selectedPinId) => set((s) => ({ selectedPinId, selectedLiveId: selectedPinId ? null : s.selectedLiveId })),
+  selectLive: (selectedLiveId) => set((s) => ({ selectedLiveId, selectedPinId: selectedLiveId ? null : s.selectedPinId })),
+  // Following yourself and following someone else exclude each other.
+  setFollow: (followId) => set((s) => ({ followId, followPlayer: followId ? false : s.followPlayer })),
+  setFollowPlayer: (followPlayer) => set((s) => ({ followPlayer, followId: followPlayer ? null : s.followId })),
+  setTracked: (tracked) => set({ tracked, route: null }),
   setQuery: (query) => set({ query }),
   setShowFound: (showFound) => set({ showFound }),
   setViewLayer: (viewLayerOverride) => set({ viewLayerOverride }),
+  setMapView: (mapView) => set({ mapView }),
+  setFriendPins: (friendPins) => set({ friendPins }),
   toggleCategory: (id) =>
     set((s) => {
       const visible = isCategoryVisible(s.game?.categories.find((c) => c.id === id), s.user)
@@ -144,6 +208,7 @@ export const useStore = create<AppState>((set) => ({
         user: { ...s.user, hiddenCategories: visible ? [] : ids, shownCategories: visible ? ids : [] },
       }
     }),
+  markFound: (ids) => set((s) => ({ user: { ...s.user, found: [...new Set([...s.user.found, ...ids])] } })),
   toggleFound: (id) =>
     set((s) => {
       const found = new Set(s.user.found)
@@ -177,13 +242,8 @@ export function selectViewLayer(s: Pick<AppState, 'viewLayerOverride' | 'snapsho
   return s.viewLayerOverride ?? (s.snapshot?.local?.layer === 'caves' ? 'caves' : 'surface')
 }
 
-/** The key that opens the current game's map: the user's choice or the game's default. */
-export function selectMapHotkey(s: Pick<AppState, 'game' | 'mapHotkeys'>): Hotkey | null {
-  if (!s.game) return null
-  return s.mapHotkeys[s.game.id] ?? s.game.defaultHotkeys[0] ?? null
-}
-
 /** Game pins plus the user's custom pins. */
-export function selectAllPins(s: Pick<AppState, 'gamePins' | 'user'>): Pin[] {
-  return s.user.customPins.length ? [...s.gamePins, ...s.user.customPins] : s.gamePins
+export function selectAllPins(s: Pick<AppState, 'gamePins' | 'user' | 'friendPins'>): Pin[] {
+  if (!s.user.customPins.length && !s.friendPins.length) return s.gamePins
+  return [...s.gamePins, ...s.user.customPins, ...s.friendPins]
 }

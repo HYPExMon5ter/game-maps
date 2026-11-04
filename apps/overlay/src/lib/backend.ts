@@ -2,7 +2,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import type { AgentLog, Hotkey, LinkStatus, OverlayMode, PinConfig, TeleportTarget, WorldSnapshot } from './protocol'
+import type { AgentLog, GroundPoint, Hotkey, LinkStatus, OverlayMode, PathInfo, PinConfig, RouteCheck, TeleportTarget, Vec3, WorldSnapshot } from './protocol'
 
 /** A supported game as bundled with the app (subset of `game.json`). */
 export interface GameEntry {
@@ -28,7 +28,18 @@ export interface AppSettings {
   /** Per-game map hotkey; absent uses the game's default. */
   map_hotkeys: Record<string, Hotkey>
   zoom_keys: ZoomKeys
+  /** Returns to where you were before your last teleport (all games); null = off. */
+  back_key: Hotkey | null
   auto_update: boolean
+  /** Monitor the map window is kept open on; null when it's off. */
+  map_window: string | null
+}
+
+export interface MonitorInfo {
+  name: string
+  width: number
+  height: number
+  primary: boolean
 }
 
 export interface RemotePack {
@@ -62,10 +73,20 @@ export const backend = {
   status: () => invoke<LinkStatus>('get_status'),
   lastSnapshot: () => invoke<WorldSnapshot | null>('get_last_snapshot'),
   teleport: (target: TeleportTarget) => invoke<void>('teleport', { target }),
+  /** Back to where the player was before their last teleport (one step per call). */
+  teleportBack: () => invoke<void>('teleport_back'),
+  /** A walking route from the player to `to`, on the game's navigation mesh. */
+  findPath: (to: Vec3) => invoke<PathInfo>('find_path', { to }),
+  /** Which legs of a route (floor points about a meter apart) can't be walked right now. */
+  checkRoute: (points: Vec3[]) => invoke<RouteCheck>('check_route', { points }),
+  /** The floor under points near the player, and whether the game camera sees them. */
+  probeGround: (points: Vec3[]) => invoke<GroundPoint[]>('probe_ground', { points }),
+  /** How many teleports `teleportBack` can undo. */
+  teleportBackSteps: () => invoke<number>('teleport_back_steps'),
   /** Dev tooling: scans the loaded world; resolves to the saved file path. */
   exportWorld: () => invoke<string>('export_world'),
   overlayMode: () => invoke<OverlayMode>('get_overlay_mode'),
-  openMap: () => invoke<void>('open_map'),
+  openMap: (gameId: string) => invoke<void>('open_map', { gameId }),
   closeOverlay: () => invoke<void>('close_overlay'),
   setPinConfig: (config: PinConfig) => invoke<void>('set_pin_config', { config }),
   listGames: () => invoke<GameEntry[]>('list_games'),
@@ -78,7 +99,14 @@ export const backend = {
   setMapHotkey: (gameId: string, hotkey: Hotkey | null) => invoke<AppSettings>('set_map_hotkey', { gameId, hotkey }),
   /** `null` restores the default zoom keys. */
   setZoomKeys: (keys: ZoomKeys | null) => invoke<AppSettings>('set_zoom_keys', { keys }),
+  /** `null` turns the teleport back key off. */
+  setBackKey: (key: Hotkey | null) => invoke<AppSettings>('set_back_key', { key }),
   setAutoUpdate: (enabled: boolean) => invoke<AppSettings>('set_auto_update', { enabled }),
+  /** Writes a UI error to the app's log. */
+  logUiError: (message: string) => invoke<void>('log_ui_error', { message }),
+  listMonitors: () => invoke<MonitorInfo[]>('list_monitors'),
+  /** Keeps the map window open on a monitor, or closes it (`null`). */
+  setMapWindow: (monitor: string | null) => invoke<AppSettings>('set_map_window', { monitor }),
   autostart: () => invoke<boolean>('get_autostart'),
   setAutostart: (enabled: boolean) => invoke<boolean>('set_autostart', { enabled }),
   connectGame: () => invoke<void>('connect_game'),
@@ -105,6 +133,10 @@ export const events = {
     listen<string>('map-pack-installed', (e) => cb(e.payload)),
   appSettings: (cb: (s: AppSettings) => void): Promise<UnlistenFn> => listen<AppSettings>('app-settings', (e) => cb(e.payload)),
   updateState: (cb: (s: UpdateState) => void): Promise<UnlistenFn> => listen<UpdateState>('update-state', (e) => cb(e.payload)),
+  /** The launcher asked for this game's map. */
+  showGame: (cb: (gameId: string) => void): Promise<UnlistenFn> => listen<string>('show-game', (e) => cb(e.payload)),
+  /** The teleport back key was used in the game; the payload is the error, if any. */
+  teleportBack: (cb: (error: string | null) => void): Promise<UnlistenFn> => listen<string | null>('teleport-back', (e) => cb(e.payload)),
   /** A zoom key was pressed in the game while the mini-map is shown; `steps` is +1 or -1. */
   mapZoom: (cb: (steps: number) => void): Promise<UnlistenFn> => listen<number>('map-zoom', (e) => cb(e.payload)),
 }

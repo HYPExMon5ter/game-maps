@@ -3,7 +3,12 @@
 The agent's world export (overlay app: Settings -> Diagnostics -> Export world data)
 includes a floor-height scan of every cave and bunker. This draws them, top-down and
 aligned with the surface map, into `games/sons-of-the-forest/tiles/caves`: walkable
-floors shaded by their relief, dark walls around them, transparent everywhere else.
+floors colored by height within their cave (warm at the top, cool at the bottom) with
+contour lines every few meters, dark walls around them, transparent everywhere else.
+
+It also writes each cave's walkable floors as a navigation grid (`nav/caves.json` plus
+`nav/cave-<area>.bin`), which the app routes on inside caves: the game's own
+pathfinding doesn't cover them.
 
 Usage:
     python -I tools/mapgen/sotf_caves.py --out games/sons-of-the-forest EXPORT.json [EXPORT.json ...]
@@ -37,9 +42,12 @@ MIN_HEADROOM_DM = 16
 MIN_NEIGHBORS = 3
 WALL_WIDTH = 2  # cells
 
-FLOOR_LIGHT = np.array((214, 196, 166), np.float32)
-FLOOR_DEEP = np.array((150, 128, 104), np.float32)
-WALL = np.array((34, 27, 24), np.float32)
+# Floor colors from the top of a cave to its bottom.
+FLOOR_HIGH = np.array((232, 210, 168), np.float32)
+FLOOR_MID = np.array((196, 160, 118), np.float32)
+FLOOR_LOW = np.array((96, 142, 150), np.float32)
+WALL = np.array((24, 19, 17), np.float32)
+CONTOUR_STEP = 2.5  # meters
 
 
 def neighbors(mask: np.ndarray) -> np.ndarray:
@@ -79,13 +87,17 @@ def walkable_floor(scan: dict) -> np.ndarray:
     return out
 
 
-def compose(scans: list[dict]) -> np.ndarray:
-    """All caves on the world grid (meters, NaN outside caves), row 0 = south."""
+def compose(scans: list[dict]) -> tuple[np.ndarray, np.ndarray]:
+    """All caves on the world grid, row 0 = south: floor heights (meters, NaN outside
+    caves) and each cell's height within its cave (0 = cave bottom, 1 = top)."""
     world = np.full((GRID, GRID), np.nan, np.float32)
+    relative = np.full((GRID, GRID), np.nan, np.float32)
     cell = WORLD_SIZE / GRID
     for scan in scans:
         floor = walkable_floor(scan)
         h, w = floor.shape
+        lo, hi = (np.nanpercentile(floor, 2), np.nanpercentile(floor, 98)) if (~np.isnan(floor)).any() else (0.0, 1.0)
+        rel = np.clip((floor - lo) / max(hi - lo, 1.0), 0, 1)
         # Cell centers -> world grid indices.
         xs = np.floor((scan["origin_x"] + (np.arange(w) + 0.5) * scan["cell"] - WORLD_MIN) / cell).astype(int)
         zs = np.floor((scan["origin_z"] + (np.arange(h) + 0.5) * scan["cell"] - WORLD_MIN) / cell).astype(int)
@@ -94,11 +106,13 @@ def compose(scans: list[dict]) -> np.ndarray:
         r, c, v = rows[inside], cols[inside], floor[inside]
         # Where caves overlap (stacked levels), keep the higher floor.
         current = world[r, c]
-        world[r, c] = np.where(np.isnan(current) | (v > current), v, current)
-    return world
+        higher = np.isnan(current) | (v > current)
+        world[r, c] = np.where(higher, v, current)
+        relative[r, c] = np.where(higher, rel[inside], relative[r, c])
+    return world, relative
 
 
-def render(world: np.ndarray) -> Image.Image:
+def render(world: np.ndarray, relative: np.ndarray) -> Image.Image:
     floor = ~np.isnan(world)
     heights = np.where(floor, world, 0.0)
     # Relief from the floor itself; fill outside with nearby heights so walls don't
@@ -106,17 +120,54 @@ def render(world: np.ndarray) -> Image.Image:
     shade = hillshade(np.where(floor, heights, np.nanmean(world) if floor.any() else 0.0), WORLD_SIZE / GRID)
     rgba = np.zeros((GRID, GRID, 4), np.float32)
     if floor.any():
-        lo, hi = np.nanpercentile(world, 2), np.nanpercentile(world, 98)
-        depth = np.clip((hi - heights) / max(hi - lo, 1.0), 0, 1)[..., None]
-        base = FLOOR_LIGHT * (1 - depth) + FLOOR_DEEP * depth
-        lit = base * (0.6 + 0.55 * shade[..., None])
+        # Height within each cave: top warm, middle tan, bottom cool, so levels and
+        # slopes read at a glance.
+        t = np.nan_to_num(relative, nan=0.5)[..., None]
+        upper = FLOOR_MID + (FLOOR_HIGH - FLOOR_MID) * np.clip(t * 2 - 1, 0, 1)
+        lower = FLOOR_LOW + (FLOOR_MID - FLOOR_LOW) * np.clip(t * 2, 0, 1)
+        base = np.where(t >= 0.5, upper, lower)
+        lit = base * (0.62 + 0.5 * shade[..., None])
+        # Contour lines where the floor crosses a multiple of CONTOUR_STEP.
+        level = np.floor(heights / CONTOUR_STEP)
+        edge = np.zeros(level.shape, bool)
+        edge[:, 1:] |= level[:, 1:] != level[:, :-1]
+        edge[1:, :] |= level[1:, :] != level[:-1, :]
+        lit = np.where((edge & floor)[..., None], lit * 0.72, lit)
         rgba[floor, :3] = lit[floor]
         rgba[floor, 3] = 255
     wall = dilate(floor, WALL_WIDTH) & ~floor
     rgba[wall, :3] = WALL
-    rgba[wall, 3] = 235
+    rgba[wall, 3] = 245
     img = Image.fromarray(np.clip(rgba, 0, 255).astype(np.uint8)[::-1], "RGBA")  # north up
     return img.convert("RGBa").resize((IMAGE_SIZE, IMAGE_SIZE), Image.BILINEAR).convert("RGBA")
+
+
+def write_nav(scans: list[dict], out_dir: str) -> None:
+    """Each cave's walkable floors for routing in the app: `nav/cave-<area>.bin` holds
+    int16 floor heights in decimeters, layers x rows (south first) x columns, with
+    NONE where a cell isn't walkable; `nav/caves.json` lists the grids."""
+    nav_dir = os.path.join(out_dir, "nav")
+    os.makedirs(nav_dir, exist_ok=True)
+    index = []
+    for scan in scans:
+        w, h, layers = scan["width"], scan["height"], scan["layers"]
+        floors = np.frombuffer(base64.b64decode(scan["floors"]), "<i2").reshape(layers, h, w)
+        room = np.frombuffer(base64.b64decode(scan["clearance"]), "<i2").reshape(layers, h, w)
+        walkable = np.where((floors != NONE) & (room >= MIN_HEADROOM_DM), floors, NONE).astype("<i2")
+        name = f"cave-{scan['area']}.bin"
+        walkable.tofile(os.path.join(nav_dir, name))
+        index.append({
+            "area": scan["area"],
+            "originX": scan["origin_x"],
+            "originZ": scan["origin_z"],
+            "cell": scan["cell"],
+            "width": w,
+            "height": h,
+            "layers": layers,
+            "file": name,
+        })
+    with open(os.path.join(nav_dir, "caves.json"), "w") as f:
+        json.dump({"version": 1, "caves": index}, f, indent=1)
 
 
 def main() -> int:
@@ -135,8 +186,9 @@ def main() -> int:
         print("no cave scans in the given exports", file=sys.stderr)
         return 1
 
-    world = compose(list(scans.values()))
-    img = render(world)
+    world, relative = compose(list(scans.values()))
+    img = render(world, relative)
+    write_nav(list(scans.values()), args.out)
     img.resize((1024, 1024), Image.BILINEAR).save(os.path.join(args.out, "preview-caves.png"))
     min_zoom, max_zoom = write_tiles(img, args.out, "caves")
     print(f"rendered {len(scans)} caves ({int((~np.isnan(world)).sum())} m2 of floor), tiles z{min_zoom}..{max_zoom}")

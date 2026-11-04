@@ -35,6 +35,10 @@ export interface Category {
   color: string
   icon: string
   visible: boolean
+  /** Collectibles: marked found automatically when the player passes them. */
+  autoFound?: boolean
+  /** Entrances to underground areas: routes to underground targets lead through them. */
+  entrance?: boolean
 }
 
 export interface GameDefinition {
@@ -58,6 +62,8 @@ export interface Pin {
   icon?: string
   color?: string
   custom?: boolean
+  /** A custom pin its owner shares with others in the multiplayer session. */
+  shared?: boolean
   /** Height is unknown (placed on the map); teleports resolve the ground height. */
   snapToGround?: boolean
 }
@@ -66,9 +72,28 @@ export async function loadGame(id: string): Promise<{ game: GameDefinition; pins
   const base = `${ASSET_BASE}/games/${encodeURIComponent(id)}`
   const [gameRes, pinsRes] = await Promise.all([fetch(`${base}/game.json`), fetch(`${base}/pins.json`)])
   if (!gameRes.ok) throw new Error(`game definition for "${id}" not found`)
-  const game = (await gameRes.json()) as GameDefinition
+  const game = withFriendsCategory((await gameRes.json()) as GameDefinition)
   const pins = pinsRes.ok ? (((await pinsRes.json()) as { pins: Pin[] }).pins ?? []) : []
   return { game, pins }
+}
+
+/** Category of the pins friends share in multiplayer (added to every game). */
+export const FRIENDS_CATEGORY = 'friends'
+
+/**
+ * Category of what the game itself puts on its map at runtime (flags, GPS markers,
+ * vehicles): no pins, but listed so it can be hidden like any other.
+ */
+export const GAME_MARKERS_CATEGORY = 'game-markers'
+
+/** Categories every game gets: friends' shared pins and the game's own markers. */
+function withFriendsCategory(game: GameDefinition): GameDefinition {
+  if (game.categories.some((c) => c.id === FRIENDS_CATEGORY)) return game
+  const added: Category[] = [
+    { id: GAME_MARKERS_CATEGORY, name: 'In-game markers', color: '#475569', icon: 'builtin:pin', visible: true },
+    { id: FRIENDS_CATEGORY, name: "Friends' pins", color: '#56ccf2', icon: 'builtin:pin', visible: true },
+  ]
+  return { ...game, categories: [...game.categories, ...added] }
 }
 
 export function tileUrl(game: GameDefinition, map: GameMap, tiles: TileSource = map.tiles): string {

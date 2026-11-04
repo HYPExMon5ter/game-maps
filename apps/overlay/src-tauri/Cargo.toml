@@ -24,6 +24,7 @@ tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2"
 log = "0.4"
 tokio = { version = "1", features = ["rt", "net", "io-util", "sync", "macros", "time"] }
+webview2-com = "0.39"
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
@@ -33,6 +34,7 @@ windows = { workspace = true, features = [
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",
     "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }

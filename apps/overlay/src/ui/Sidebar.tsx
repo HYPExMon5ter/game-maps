@@ -1,13 +1,16 @@
 import { Eye, EyeOff, MapPinPlus, Search, X } from 'lucide-react'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { customPinAtPlayer, flyToPin } from '../lib/actions'
 import { formatDistance } from '../lib/compass'
-import { iconUrl, LAYER_LABELS, type Category, type Pin } from '../lib/game'
+import { GAME_MARKERS_CATEGORY, iconUrl, LAYER_LABELS, type Category, type Pin } from '../lib/game'
 import { glyphColor } from '../map/badges'
 import { groundDistance } from '../lib/projection'
 import { PinSearch } from '../lib/search'
 import { isCategoryVisible, selectAllPins, useStore } from '../state/store'
 import { Button, Switch } from './controls'
+import { Progress, UnexploredNote } from './Progress'
+import { usePinFog } from '../state/fog'
+import { useSettings } from '../settings/store'
 
 export function CategoryIcon({ gameId, category, icon, color, size = 22 }: { gameId: string; category?: Category; icon?: string; color?: string; size?: number }) {
   const ref = icon ?? category?.icon ?? 'builtin:pin'
@@ -47,19 +50,26 @@ export function Sidebar({ onEditPin }: { onEditPin: (pin: Pin) => void }) {
   const selectPin = useStore((s) => s.selectPin)
   const map = useStore((s) => s.map)
   const local = useStore((s) => s.snapshot?.local ?? null)
+  const units = useSettings((s) => s.ui.units)
   const hasLocation = local !== null
+  const [view, setView] = useState<'categories' | 'progress'>('categories')
 
-  const pins = useMemo(() => selectAllPins({ gamePins, user }), [gamePins, user])
+  const friendPins = useStore((s) => s.friendPins)
+  const pins = useMemo(() => selectAllPins({ gamePins, user, friendPins }), [gamePins, user, friendPins])
   const index = useMemo(() => (game ? new PinSearch(pins, game.categories) : null), [pins, game])
-  const results = useMemo(() => {
+  const hiddenByFog = usePinFog()
+  const gameMarkers = useStore((s) => (s.snapshot?.markers ?? []).filter((m) => m.kind !== 'companion').length)
+  const search = useMemo(() => {
     if (!index || !query.trim()) return null
     const byId = new Map(pins.map((p) => [p.id, p]))
-    return index
+    const matches = index
       .search(query)
       .map((id) => byId.get(id))
       .filter((p): p is Pin => !!p)
-      .slice(0, 200)
-  }, [index, query, pins])
+    const shown = hiddenByFog ? matches.filter((p) => !hiddenByFog(p)) : matches
+    return { results: shown.slice(0, 200), unexplored: matches.length - shown.length }
+  }, [index, query, pins, hiddenByFog])
+  const results = search?.results ?? null
 
   const counts = useMemo(() => {
     const found = new Set(user.found)
@@ -88,6 +98,9 @@ export function Sidebar({ onEditPin }: { onEditPin: (pin: Pin) => void }) {
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-faint" />
           <input
             id="pin-search"
+            type="search"
+            autoComplete="off"
+            spellCheck={false}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={`Search ${pins.length.toLocaleString()} locations…  ( / )`}
@@ -110,9 +123,25 @@ export function Sidebar({ onEditPin }: { onEditPin: (pin: Pin) => void }) {
       </div>
 
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+        {results ? null : (
+          <div className="mb-1 flex rounded-lg bg-black/30 p-0.5 text-[12px] font-semibold" role="tablist" aria-label="Sidebar view">
+            {(['categories', 'progress'] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                role="tab"
+                aria-selected={view === v}
+                className={`flex-1 rounded-md py-1 ${view === v ? 'bg-white/15 text-ink' : 'text-ink-dim hover:text-ink'}`}
+                onClick={() => setView(v)}
+              >
+                {v === 'categories' ? 'Categories' : 'Progress'}
+              </button>
+            ))}
+          </div>
+        )}
         {results ? (
           <ul>
-            {results.length === 0 && <li className="px-2 py-6 text-center text-[13px] text-ink-faint">No matches</li>}
+            {results.length === 0 && !search?.unexplored && <li className="px-2 py-6 text-center text-[13px] text-ink-faint">No matches</li>}
             {results.map((pin) => {
               const cat = categories.get(pin.category)
               const dist = local && map ? groundDistance(map.projection, local.position, pin.position) / game.unitsPerMeter : null
@@ -127,12 +156,15 @@ export function Sidebar({ onEditPin }: { onEditPin: (pin: Pin) => void }) {
                         {pin.layer && pin.layer !== 'surface' ? ` · ${LAYER_LABELS[pin.layer]}` : ''}
                       </span>
                     </span>
-                    {dist !== null && <span className="text-[11px] tabular-nums text-ink-faint">{formatDistance(dist)}</span>}
+                    {dist !== null && <span className="text-[11px] tabular-nums text-ink-faint">{formatDistance(dist, units)}</span>}
                   </button>
                 </li>
               )
             })}
+            {!!search?.unexplored && <UnexploredNote count={search.unexplored} />}
           </ul>
+        ) : view === 'progress' ? (
+          <Progress onOpen={open} />
         ) : (
           <>
             <div className="flex items-center justify-between px-2 pb-1 pt-1">
@@ -145,7 +177,7 @@ export function Sidebar({ onEditPin }: { onEditPin: (pin: Pin) => void }) {
             <ul>
               {game.categories.map((cat) => {
                 const visible = isCategoryVisible(cat, user)
-                const c = counts.get(cat.id) ?? { total: 0, found: 0 }
+                const c = cat.id === GAME_MARKERS_CATEGORY ? { total: gameMarkers, found: 0 } : (counts.get(cat.id) ?? { total: 0, found: 0 })
                 return (
                   <li key={cat.id}>
                     <button

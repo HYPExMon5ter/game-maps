@@ -124,4 +124,14 @@ mod tests {
         assert_eq!(sotf.steam_app_id, Some(1326470));
         assert_eq!(sotf.hotkeys()[0].vk, 0x4D);
     }
+
+    #[test]
+    fn parses_sunkenland_game_json() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../games");
+        let games = load_registry(&path);
+        let game = games.iter().find(|g| g.id == "sunkenland").expect("sunkenland registered");
+        assert_eq!(game.process, "Sunkenland.exe");
+        assert_eq!(game.steam_app_id, Some(2080690));
+        assert!(game.live_features);
+    }
 }

@@ -1,17 +1,22 @@
-import { Copy, MapPinPlus, Zap } from 'lucide-react'
+import { Copy, MapPinPlus, Radio, Zap } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { newCustomPinAt, teleportToMapPoint } from '../lib/actions'
 import type { Pin } from '../lib/game'
 import { toWorld } from '../lib/projection'
+import { readyPeers, sendPing, useSyncStore } from '../lib/sync/sync'
 import { useUiScale } from '../lib/uiScale'
 import { MapView, type MapContextMenuEvent } from '../map/MapView'
-import { useStore } from '../state/store'
+import { selectViewLayer, useStore } from '../state/store'
 import { Compass } from './Compass'
+import { LiveDetails } from './LiveDetails'
 import { PinDetails } from './PinDetails'
 import { PinEditor } from './PinEditor'
 import { SettingsPanel } from './SettingsPanel'
 import { Sidebar } from './Sidebar'
+import { SyncRequests } from './SyncRequests'
 import { TopBar } from './TopBar'
+import { useSettings } from '../settings/store'
+import { IS_MAP_WINDOW } from '../lib/view'
 
 function ContextMenu({
   at,
@@ -28,6 +33,8 @@ function ContextMenu({
   const canTeleport = useStore((s) => s.status?.state === 'connected' && !!s.status.capabilities?.teleport)
   const map = useStore((s) => s.map)
   const notify = useStore((s) => s.notify)
+  const layer = useStore(selectViewLayer)
+  const together = useSyncStore((s) => readyPeers(s).length > 0)
   const world = map ? toWorld(map.projection, at.lngLat) : null
   const item = 'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] hover:bg-panel-raised disabled:opacity-40'
   return (
@@ -42,6 +49,11 @@ function ContextMenu({
       <button className={item} disabled={!canTeleport} onClick={() => (void teleportToMapPoint(at.lngLat), onClose())}>
         <Zap className="size-4" /> Teleport here
       </button>
+      {together && world && (
+        <button className={item} onClick={() => (sendPing(world, layer), onClose())}>
+          <Radio className="size-4" /> Ping here
+        </button>
+      )}
       {world && (
         <button
           className={item}
@@ -92,10 +104,12 @@ function panelPadding(uiScale: number) {
   }
 }
 
+/** The full map: over the game (sized and see-through per the settings), or filling the map window. */
 export function FullMap() {
-  const opacity = useStore((s) => s.settings.opacity)
-  const scale = useStore((s) => s.settings.panelScale)
+  const opacity = useSettings((s) => (IS_MAP_WINDOW ? 1 : s.ui.opacity))
+  const scale = useSettings((s) => (IS_MAP_WINDOW ? 1 : s.ui.panelScale))
   const hasSelection = useStore((s) => s.selectedPinId !== null)
+  const hasLiveSelection = useStore((s) => s.selectedLiveId !== null)
   const tracking = useStore((s) => s.tracked !== null)
   const [menu, setMenu] = useState<MapContextMenuEvent | null>(null)
   const [editing, setEditing] = useState<Pin | null>(null)
@@ -114,7 +128,8 @@ export function FullMap() {
         {/* Interface layer, scaled for the screen size; the map underneath is not. */}
         <div className="pointer-events-none absolute inset-0" style={{ zoom: uiScale }}>
           <div className="absolute inset-0 flex flex-col gap-3 p-3">
-            <div className="pointer-events-auto">
+            {/* Above the sidebar and cards: its menus open over them. */}
+            <div className="pointer-events-auto relative z-30">
               <TopBar onSettings={() => setSettingsOpen(!settingsOpen)} settingsOpen={settingsOpen} />
             </div>
             <div className="flex min-h-0 flex-1 gap-3">
@@ -125,7 +140,9 @@ export function FullMap() {
               <div className="flex min-h-0 flex-col items-end gap-3">
                 {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
                 {!settingsOpen && hasSelection && <PinDetails onEdit={setEditing} />}
+                {!settingsOpen && hasLiveSelection && <LiveDetails />}
                 <div className="flex-1" />
+                <SyncRequests />
                 {tracking && (
                   <div className="pointer-events-auto">
                     <Compass />

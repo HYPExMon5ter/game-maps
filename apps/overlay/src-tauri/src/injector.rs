@@ -12,7 +12,8 @@ use windows::core::{s, w};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM};
 use windows::Win32::System::Diagnostics::Debug::WriteProcessMemory;
 use windows::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+    CreateToolhelp32Snapshot, Module32FirstW, Module32NextW, Process32FirstW, Process32NextW, MODULEENTRY32W, PROCESSENTRY32W,
+    TH32CS_SNAPMODULE, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::Win32::System::Memory::{VirtualAllocEx, VirtualFreeEx, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE};
@@ -59,6 +60,28 @@ pub fn find_process(exe_name: &str) -> Option<u32> {
         }
         let _ = CloseHandle(snap);
         found
+    }
+}
+
+/// Whether process `pid` has a module (DLL) with this file name loaded. `None` if the
+/// module list can't be read.
+pub fn module_loaded(pid: u32, file_name: &str) -> Option<bool> {
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, pid).ok()?;
+        let _snap = HandleGuard(snap);
+        let mut entry = MODULEENTRY32W { dwSize: std::mem::size_of::<MODULEENTRY32W>() as u32, ..Default::default() };
+        if Module32FirstW(snap, &mut entry).is_err() {
+            return None;
+        }
+        loop {
+            let len = entry.szModule.iter().position(|&c| c == 0).unwrap_or(entry.szModule.len());
+            if String::from_utf16_lossy(&entry.szModule[..len]).eq_ignore_ascii_case(file_name) {
+                return Some(true);
+            }
+            if Module32NextW(snap, &mut entry).is_err() {
+                return Some(false);
+            }
+        }
     }
 }
 
@@ -196,6 +219,13 @@ mod tests {
         let name = exe.file_name().unwrap().to_string_lossy().into_owned();
         assert!(find_process(&name).is_some());
         assert!(find_process("definitely-not-running-xyz.exe").is_none());
+    }
+
+    #[test]
+    fn finds_own_modules() {
+        let pid = std::process::id();
+        assert_eq!(module_loaded(pid, "KERNEL32.DLL"), Some(true));
+        assert_eq!(module_loaded(pid, "definitely-not-loaded.dll"), Some(false));
     }
 
     #[test]

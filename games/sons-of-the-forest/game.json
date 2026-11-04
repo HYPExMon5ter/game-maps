@@ -57,70 +57,80 @@
       "name": "Caves",
       "color": "#bb6bd9",
       "icon": "game:Cave",
-      "visible": true
+      "visible": true,
+      "entrance": true
     },
     {
       "id": "bunker",
       "name": "Bunkers",
       "color": "#56ccf2",
       "icon": "game:BunkerIconOutline",
-      "visible": true
+      "visible": true,
+      "entrance": true
     },
     {
       "id": "weapon",
       "name": "Weapons",
       "color": "#eb5757",
       "icon": "game:KatanaIcon",
-      "visible": true
+      "visible": true,
+      "autoFound": true
     },
     {
       "id": "upgrade",
       "name": "Weapon Mods",
       "color": "#ff8a65",
       "icon": "game:LaserSightModIcon",
-      "visible": true
+      "visible": true,
+      "autoFound": true
     },
     {
       "id": "outfit",
       "name": "Outfits & Armor",
       "color": "#d4a373",
       "icon": "game:ClothingIcon",
-      "visible": true
+      "visible": true,
+      "autoFound": true
     },
     {
       "id": "tool",
       "name": "Tools & Gear",
       "color": "#f2994a",
       "icon": "game:ShovelIcon",
-      "visible": true
+      "visible": true,
+      "autoFound": true
     },
     {
       "id": "key",
       "name": "Key Items",
       "color": "#f2c94c",
       "icon": "game:KeycardAIcon",
-      "visible": true
+      "visible": true,
+      "autoFound": true
     },
     {
       "id": "blueprint",
       "name": "Blueprints",
       "color": "#2f80ed",
       "icon": "game:PaperIcon",
-      "visible": true
+      "visible": true,
+      "autoFound": true
     },
     {
       "id": "collectible",
       "name": "Notes & Collectibles",
       "color": "#9b51e0",
       "icon": "game:BookIcon",
-      "visible": true
+      "visible": true,
+      "autoFound": true
     },
     {
       "id": "ammo",
       "name": "Ammo & Explosives",
       "color": "#a3b13a",
       "icon": "game:AmmoIcon",
-      "visible": true
+      "visible": true,
+      "autoFound": true
     },
     {
       "id": "vehicle",
@@ -141,14 +151,16 @@
       "name": "Food & Medicine",
       "color": "#6fcf97",
       "icon": "game:CannedFoodIcon",
-      "visible": false
+      "visible": false,
+      "autoFound": true
     },
     {
       "id": "material",
       "name": "Crafting Materials",
       "color": "#8d7b6a",
       "icon": "game:RopeIcon",
-      "visible": false
+      "visible": false,
+      "autoFound": true
     },
     {
       "id": "custom",

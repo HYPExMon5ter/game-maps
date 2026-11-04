@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use game_maps_protocol::{ExportEntry, WorldExport};
-use il2cpp::{read_string, Class, Field, Il2CppObject, Method, Runtime};
+use unity_runtime::{read_string, Class, Field, ManagedObject, Method, Runtime};
 
 use super::caves::Caves;
 use super::{SonsOfTheForest, GAME_ID};
@@ -85,7 +85,7 @@ impl ItemLookup {
         let description = call(&self.ui_description);
         let icon = match (ui, self.ui_icon) {
             (Some(obj), Some(f)) => {
-                let tex: *mut Il2CppObject = f.get(obj);
+                let tex: *mut ManagedObject = f.get(obj);
                 (!tex.is_null()).then(|| object_name(rt, tex)).flatten()
             }
             _ => None,
@@ -95,7 +95,7 @@ impl ItemLookup {
 }
 
 /// `UnityEngine.Object.name` without a `Unity` handle (item data lives outside scenes).
-unsafe fn object_name(rt: &Runtime, obj: *mut Il2CppObject) -> Option<String> {
+unsafe fn object_name(rt: &Runtime, obj: *mut ManagedObject) -> Option<String> {
     let get_name = rt.method(rt.class("UnityEngine", "Object").ok()?, "get_name", 0).ok()?;
     read_string(rt.invoke(&get_name, obj, &mut []).ok()?)
 }
@@ -105,7 +105,7 @@ struct Exporter<'a, 'c> {
     game: &'a SonsOfTheForest,
     items: ItemLookup,
     /// Cave members and this frame's cave systems.
-    caves: Option<(Caves, Vec<*mut Il2CppObject>)>,
+    caves: Option<(Caves, Vec<*mut ManagedObject>)>,
     out: WorldExport,
 }
 
@@ -131,7 +131,7 @@ impl<'a, 'c> Exporter<'a, 'c> {
     }
 
     /// Every loaded object of `class` (active or not), as a component.
-    unsafe fn objects(&mut self, class: Class) -> Vec<*mut Il2CppObject> {
+    unsafe fn objects(&mut self, class: Class) -> Vec<*mut ManagedObject> {
         match self.cx.unity.find_objects(self.cx.rt, class, true) {
             Ok(v) => v,
             Err(e) => {
@@ -142,7 +142,7 @@ impl<'a, 'c> Exporter<'a, 'c> {
     }
 
     /// Builds an entry at `component`'s position. `None` if it has no live transform.
-    unsafe fn entry(&mut self, kind: &str, component: *mut Il2CppObject, at: Option<*mut Il2CppObject>) -> Option<ExportEntry> {
+    unsafe fn entry(&mut self, kind: &str, component: *mut ManagedObject, at: Option<*mut ManagedObject>) -> Option<ExportEntry> {
         let (rt, unity) = (self.cx.rt, self.cx.unity);
         let go = unity.component_game_object(rt, component).ok()?;
         let transform = match at {
@@ -222,7 +222,7 @@ impl<'a, 'c> Exporter<'a, 'c> {
         let objects = self.objects(class);
         self.out.notes.push(format!("VirtualPickupSwitcher: {}", objects.len()));
         for obj in objects {
-            let p: *mut Il2CppObject = pickup.get(obj);
+            let p: *mut ManagedObject = pickup.get(obj);
             if !self.cx.unity.is_alive(p) {
                 continue;
             }
@@ -257,7 +257,7 @@ impl<'a, 'c> Exporter<'a, 'c> {
             if let Some(f) = actor_id {
                 e.props.insert("world_actor_id".into(), f.get::<i32>(obj).to_string());
             }
-            if let Some(p) = tracked.as_ref().and_then(|m| rt.invoke(m, obj, &mut []).ok()).and_then(|b| rt.unbox::<il2cpp::Vector3>(b).ok()) {
+            if let Some(p) = tracked.as_ref().and_then(|m| rt.invoke(m, obj, &mut []).ok()).and_then(|b| rt.unbox::<unity_runtime::Vector3>(b).ok()) {
                 e.props.insert("tracked_position".into(), format!("{:.1},{:.1},{:.1}", p.x, p.y, p.z));
             }
             if let Some(icon) = icon_data.as_ref().and_then(|m| self.icon_name(m, obj)) {
@@ -268,7 +268,7 @@ impl<'a, 'c> Exporter<'a, 'c> {
     }
 
     /// Sprite name of a locator's current icon (`IconData._icon`).
-    unsafe fn icon_name(&self, get_icon_data: &Method, locator: *mut Il2CppObject) -> Option<String> {
+    unsafe fn icon_name(&self, get_icon_data: &Method, locator: *mut ManagedObject) -> Option<String> {
         let rt = self.cx.rt;
         let data = rt.invoke(get_icon_data, locator, &mut []).ok()?;
         let field = rt.field(rt.class_of(data)?, "_icon").ok()?;

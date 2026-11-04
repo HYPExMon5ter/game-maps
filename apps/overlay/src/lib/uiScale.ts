@@ -2,7 +2,7 @@
 // the same at 720p, 1440p ultrawide and 4K. The map itself is never scaled.
 
 import { useEffect, useState } from 'react'
-import { useStore } from '../state/store'
+import { useSettings } from '../settings/store'
 
 /** Viewport height (CSS px) the interface is designed for. */
 const BASE_HEIGHT = 1080
@@ -30,7 +30,7 @@ function useViewportHeight(): number {
 
 /** Current interface scale: the user's choice, or automatic for this screen. */
 export function useUiScale(): number {
-  const manual = useStore((s) => s.settings.uiScale)
+  const manual = useSettings((s) => s.ui.uiScale)
   const height = useViewportHeight()
   return manual ?? autoUiScale(height)
 }

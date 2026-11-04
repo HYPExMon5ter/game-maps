@@ -7,19 +7,21 @@ mod games;
 mod injector;
 mod launcher;
 mod link;
+mod map_window;
 mod mappacks;
 mod overlay;
+mod recovery;
 mod settings;
 mod updates;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use game_maps_protocol::{Hotkey, HotkeyAction, TeleportTarget, WorldSnapshot};
+use game_maps_protocol::{GroundPoint, Hotkey, HotkeyAction, PathInfo, RouteCheck, TeleportTarget, Vec3, WorldSnapshot};
 use tauri::http::{header, Response, StatusCode};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Listener, Manager, State};
+use tauri::{AppHandle, Emitter, Listener, Manager, State};
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_opener::OpenerExt as _;
 
@@ -58,6 +60,59 @@ async fn teleport(link: State<'_, Arc<AgentLink>>, target: TeleportTarget) -> Re
     link.inner().clone().teleport(target).await
 }
 
+/// A walking route from the player to `to` on the game's navigation mesh.
+#[tauri::command]
+async fn find_path(link: State<'_, Arc<AgentLink>>, to: Vec3) -> Result<PathInfo, String> {
+    let result = link.inner().clone().find_path(to).await;
+    if let Err(e) = &result {
+        // Routes are requested every 1.5 s: log each distinct failure once.
+        static LAST: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+        let mut last = LAST.lock().unwrap();
+        if last.as_deref() != Some(e.as_str()) {
+            log::info!("route unavailable: {e}");
+            *last = Some(e.clone());
+        }
+    }
+    result
+}
+
+/// Which legs of a route (floor points about a meter apart) can't be walked right now.
+#[tauri::command]
+async fn check_route(link: State<'_, Arc<AgentLink>>, points: Vec<Vec3>) -> Result<RouteCheck, String> {
+    link.inner().clone().check_route(points).await
+}
+
+/// The floor under points near the player, and whether the game camera sees them.
+#[tauri::command]
+async fn probe_ground(link: State<'_, Arc<AgentLink>>, points: Vec<Vec3>) -> Result<Vec<GroundPoint>, String> {
+    link.inner().clone().probe_ground(points).await
+}
+
+/// Returns the player to where they were before their last teleport.
+#[tauri::command]
+async fn teleport_back(link: State<'_, Arc<AgentLink>>) -> Result<(), String> {
+    link.inner().clone().teleport_back().await
+}
+
+/// How many teleports "teleport back" can undo.
+#[tauri::command]
+fn teleport_back_steps(link: State<'_, Arc<AgentLink>>) -> usize {
+    link.teleport_back_steps()
+}
+
+/// Sets the teleport back key (all games); `None` turns it off.
+#[tauri::command]
+fn set_back_key(app: AppHandle, link: State<'_, Arc<AgentLink>>, registry: State<'_, Registry>, key: Option<Hotkey>) -> Result<AppSettings, String> {
+    if key.as_ref().is_some_and(|h| h.action != HotkeyAction::TeleportBack) {
+        return Err("the key must be bound to teleport back".into());
+    }
+    let saved = settings::update(&app, |s| s.back_key = key)?;
+    if let Some(game) = link.status().game_id.and_then(|id| registry.0.iter().find(|g| g.id == id)) {
+        link.apply_hotkeys(&game.id, saved.hotkeys(game));
+    }
+    Ok(saved)
+}
+
 /// Dev tooling: scans the loaded world and saves it as JSON under `exports/`.
 /// Returns the file path. `tools/pins` turns exports into a game's pin data.
 #[tauri::command]
@@ -78,8 +133,10 @@ fn get_overlay_mode(app: AppHandle) -> OverlayMode {
     overlay::mode(&app)
 }
 
+/// Opens `game_id`'s map. A running game's map stays shown over any other.
 #[tauri::command]
-fn open_map(app: AppHandle) {
+fn open_map(app: AppHandle, game_id: String) {
+    let _ = app.emit("show-game", game_id);
     overlay::open(&app);
 }
 
@@ -175,6 +232,26 @@ fn set_zoom_keys(app: AppHandle, link: State<'_, Arc<AgentLink>>, registry: Stat
 #[tauri::command]
 fn set_auto_update(app: AppHandle, enabled: bool) -> Result<AppSettings, String> {
     settings::update(&app, |s| s.auto_update = enabled)
+}
+
+/// An error in a window's UI, for the log.
+#[tauri::command]
+fn log_ui_error(window: tauri::Window, message: String) {
+    log::error!("[ui:{}] {message}", window.label());
+}
+
+/// Monitors the map window can be put on. Async: monitor and window calls wait for the
+/// main thread, where synchronous commands run.
+#[tauri::command]
+async fn list_monitors(app: AppHandle) -> Vec<map_window::MonitorInfo> {
+    map_window::monitors(&app)
+}
+
+/// Keeps the map window open on `monitor` (by name), or closes it (`None`).
+#[tauri::command]
+async fn set_map_window(app: AppHandle, monitor: Option<String>) -> Result<AppSettings, String> {
+    map_window::apply(&app, monitor.as_deref())?;
+    settings::update(&app, |s| s.map_window = monitor)
 }
 
 #[tauri::command]
@@ -327,6 +404,7 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    recovery::log_panics();
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| launcher::show(app)))
         .plugin(
@@ -353,10 +431,15 @@ pub fn run() {
                 overlay::enforce_placement(window.app_handle());
             }
             launcher::WINDOW_LABEL => launcher::on_window_event(window, event),
+            map_window::WINDOW_LABEL => map_window::on_window_event(window, event),
             _ => {}
         })
         .setup(|app| {
             let handle = app.handle().clone();
+            recovery::protect_save_files(&handle);
+            for window in handle.webview_windows().values() {
+                recovery::watch_webview(window);
+            }
             let (paths, agent_dll) = resolve_paths(&handle);
             log::info!("Game Maps {} - games: {}, agent: {}", env!("CARGO_PKG_VERSION"), paths.games.display(), agent_dll.display());
             let registry = games::load_registry(&paths.games);
@@ -384,6 +467,7 @@ pub fn run() {
                 }
             });
 
+            map_window::restore(&handle);
             build_tray(app)?;
             if !std::env::args().any(|a| a == BACKGROUND_ARG) {
                 launcher::show(&handle);
@@ -394,6 +478,15 @@ pub fn run() {
             get_status,
             get_last_snapshot,
             teleport,
+            teleport_back,
+            log_ui_error,
+            list_monitors,
+            set_map_window,
+            find_path,
+            check_route,
+            probe_ground,
+            teleport_back_steps,
+            set_back_key,
             export_world,
             get_overlay_mode,
             open_map,

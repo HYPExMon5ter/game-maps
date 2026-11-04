@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { findMover, movers } from './movers'
+import { findMover, liveEntities, movers } from './movers'
 import type { WorldSnapshot } from './protocol'
 
 const snap: WorldSnapshot = {
@@ -22,5 +22,29 @@ describe('movers', () => {
   it('finds companions by id for tracking and teleports', () => {
     expect(findMover(snap, 'gps:1')?.position).toEqual({ x: 4, y: 5, z: 6 })
     expect(findMover(null, 'gps:1')).toBeUndefined()
+  })
+  it('includes live markers among live entities, named from their icon', () => {
+    expect(liveEntities(snap).map((m) => [m.id, m.name, m.kind])).toEqual([
+      ['p1', 'Alex', 'player'],
+      ['gps:1', 'Kelvin', 'companion'],
+      ['gps:2', 'Golf Cart', 'marker'],
+    ])
+    expect(findMover(snap, 'gps:2')?.icon).toBe('GolfCartIcon')
+  })
+  it('lists friendly creatures (Virginia) as companions, once', () => {
+    const withCreatures: WorldSnapshot = {
+      ...snap,
+      creatures: [
+        { id: 'actor:a', kind: 'friendly', name: 'Virginia', position: { x: 1, y: 1, z: 1 } },
+        { id: 'actor:b', kind: 'friendly', name: 'Kelvin', position: { x: 4, y: 5, z: 6 } },
+        { id: 'actor:c', kind: 'hostile', name: 'Fingers', position: { x: 0, y: 0, z: 0 } },
+      ],
+    }
+    expect(movers(withCreatures).map((m) => [m.id, m.name, m.kind])).toEqual([
+      ['p1', 'Alex', 'player'],
+      ['gps:1', 'Kelvin', 'companion'],
+      ['actor:a', 'Virginia', 'companion'],
+    ])
+    expect(findMover(withCreatures, 'actor:a')?.name).toBe('Virginia')
   })
 })

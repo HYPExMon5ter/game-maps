@@ -1,6 +1,6 @@
-// Mini-map size limits and saved-settings migration.
+// Mini-map size limits.
 
-import { DEFAULT_SETTINGS, type HudSettings } from '../state/store'
+import type { HudSettings } from '../settings/model'
 
 export const MIN_MINIMAP_SIZE = 160
 
@@ -15,11 +15,4 @@ export function maxMinimapSize(screen: Size): Size {
 export function minimapSize(hud: Pick<HudSettings, 'width' | 'height'>, screen: Size): Size {
   const max = maxMinimapSize(screen)
   return { width: Math.min(hud.width, max.width), height: Math.min(hud.height, max.height) }
-}
-
-/** Saved HUD settings with defaults filled in. Older versions had a square mini-map with one `size`. */
-export function migrateHud(saved: (Partial<HudSettings> & { size?: number }) | undefined): HudSettings {
-  const { size, ...rest } = saved ?? {}
-  const square = size === undefined ? {} : { width: size, height: size }
-  return { ...DEFAULT_SETTINGS.hud, ...square, ...rest }
 }

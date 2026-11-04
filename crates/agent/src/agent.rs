@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use game_maps_protocol::{AgentMessage, Capabilities, Hotkey, HotkeyAction, LogLevel, TeleportTarget, WorldSnapshot, PROTOCOL_VERSION};
-use il2cpp::{Runtime, Unity};
+use game_maps_protocol::{AgentMessage, CameraView, Vec3, Capabilities, Hotkey, HotkeyAction, LogLevel, TeleportTarget, WorldLayer, WorldSnapshot, PROTOCOL_VERSION};
+use unity_runtime::{Runtime, Unity};
 use tokio::sync::mpsc;
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
@@ -17,17 +17,27 @@ use windows::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, GetForeg
 
 use crate::diff::has_meaningful_change;
 use crate::hotkeys::{Hotkeys, KeyState};
-use crate::provider::{Cx, Provider};
+use crate::provider::{default_solid_mask, to_proto, to_unity, Cx, Provider};
 
 const DEFAULT_MAX_HZ: u32 = 30;
 const HEARTBEAT: Duration = Duration::from_secs(1);
 const PENDING_LOG_CAP: usize = 200;
+/// Main-thread time a route check may take in one frame.
+const ROUTE_CHECK_BUDGET: Duration = Duration::from_millis(3);
+/// Upper bounds on points per check/probe request (a long cave route is a few hundred).
+const MAX_CHECK_POINTS: usize = 4000;
+const MAX_PROBE_POINTS: usize = 64;
+/// Hits kept per ground probe ray.
+const PROBE_HITS: usize = 8;
 
 pub enum Command {
     SetHotkeys(Vec<Hotkey>),
     SetStreamRate(u32),
     Teleport { request_id: u32, target: TeleportTarget },
     ExportWorld { request_id: u32 },
+    FindPath { request_id: u32, to: Vec3 },
+    CheckRoute { request_id: u32, points: Vec<Vec3> },
+    ProbeGround { request_id: u32, points: Vec<Vec3> },
 }
 
 struct MainState {
@@ -41,11 +51,13 @@ struct MainState {
     last_sent: Option<WorldSnapshot>,
     /// Running world export: request id and start time.
     export: Option<(u32, Instant)>,
+    /// Solid layers for walk checks, on the surface and underground (resolved on first use).
+    solid_masks: Option<[i32; 2]>,
 }
 
 pub struct Shared {
     pub rt: Runtime,
-    unity: Unity,
+    pub unity: Unity,
     main: Mutex<MainState>,
     inbox: Mutex<Vec<Command>>,
     outbox: mpsc::Sender<AgentMessage>,
@@ -56,6 +68,13 @@ pub struct Shared {
     pub in_tick: AtomicU32,
     game: Option<&'static str>,
     capabilities: Capabilities,
+}
+
+fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
+    match result {
+        Ok(v) => (Some(v), None),
+        Err(e) => (None, Some(e)),
+    }
 }
 
 fn interval_for(max_hz: u32) -> Duration {
@@ -79,6 +98,7 @@ impl Shared {
                 last_sent_at: None,
                 last_sent: None,
                 export: None,
+                solid_masks: None,
             }),
             inbox: Mutex::new(Vec::new()),
             outbox,
@@ -135,12 +155,44 @@ impl Shared {
         let _ = self.outbox.try_send(msg);
     }
 
+    /// Runs `f` with the game's physics, using the solid layers for the layer the player
+    /// is in. Main thread only.
+    fn with_world<T>(&self, st: &mut MainState, cx: &Cx, f: impl FnOnce(&crate::walk::PhysicsWorld) -> T) -> Result<T, String> {
+        let physics = self.unity.physics().ok_or("this game has no physics queries")?;
+        let local = st.last_sent.as_ref().and_then(|s| s.local.as_ref()).ok_or("not in a world")?;
+        let underground = local.layer == WorldLayer::Caves;
+        let masks = match st.solid_masks {
+            Some(m) => m,
+            None => {
+                let m = match st.provider.as_mut() {
+                    Some(p) => unsafe { [p.solid_mask(cx, physics, false), p.solid_mask(cx, physics, true)] },
+                    None => unsafe { [default_solid_mask(cx, physics); 2] },
+                };
+                let layers = unsafe { physics.layer_names(cx.rt) };
+                self.log(LogLevel::Info, format!("walk checks: solid masks {:#010x}/{:#010x}, layers {layers:?}", m[0] as u32, m[1] as u32));
+                st.solid_masks = Some(m);
+                m
+            }
+        };
+        let hits = unsafe { physics.hit_buffer(cx.rt, PROBE_HITS) }.map_err(|e| e.to_string())?;
+        let world = crate::walk::PhysicsWorld { rt: cx.rt, physics, mask: masks[underground as usize], hits };
+        Ok(f(&world))
+    }
+
     /// Runs once per game frame on the main thread (from the frame hook).
     pub fn tick(&self) {
         if self.stopping.load(Ordering::Relaxed) {
             return;
         }
-        let Ok(mut st) = self.main.try_lock() else { return };
+        let mut st = match self.main.try_lock() {
+            Ok(st) => st,
+            // A tick panicked with the lock held (see `hook::run_tick`): carry on.
+            Err(std::sync::TryLockError::Poisoned(e)) => {
+                self.main.clear_poison();
+                e.into_inner()
+            }
+            Err(std::sync::TryLockError::WouldBlock) => return,
+        };
 
         // The hooked method may be shared by several components (identical code
         // folding) or run several times per frame; only do work once per frame.
@@ -157,7 +209,10 @@ impl Shared {
 
         for cmd in commands {
             match cmd {
-                Command::SetHotkeys(h) => st.hotkeys.set(h),
+                Command::SetHotkeys(h) => {
+                    crate::focus::set_hidden_hotkey(h.iter().find(|k| k.action == HotkeyAction::ToggleMap));
+                    st.hotkeys.set(h);
+                }
                 Command::SetStreamRate(hz) => st.min_interval = interval_for(hz),
                 Command::Teleport { request_id, target } => {
                     let result = match st.provider.as_mut() {
@@ -168,6 +223,45 @@ impl Shared {
                         self.log(LogLevel::Warn, format!("teleport failed: {e}"));
                     }
                     self.send(AgentMessage::TeleportResult { request_id, ok: result.is_ok(), error: result.err() });
+                }
+                Command::FindPath { request_id, to } => {
+                    // The latest snapshot is at most a heartbeat old: close enough for a route.
+                    let from = st.last_sent.as_ref().and_then(|s| s.local.as_ref()).map(|l| l.position);
+                    let result = match (from, st.provider.as_mut()) {
+                        (Some(from), Some(p)) => unsafe { p.find_path(&cx, from, to) }.map_err(|e| format!("no route: {e}")),
+                        (None, _) => Err("not in a world".into()),
+                        (_, None) => Err("routes are not supported for this game".into()),
+                    };
+                    let (path, error) = match result {
+                        Ok(p) => (Some(p), None),
+                        Err(e) => (None, Some(e)),
+                    };
+                    self.send(AgentMessage::PathResult { request_id, path, error });
+                }
+                Command::CheckRoute { request_id, points } => {
+                    let started = Instant::now();
+                    let result = self.with_world(st, &cx, |world| {
+                        let points: Vec<_> = points.iter().take(MAX_CHECK_POINTS).map(|&p| to_unity(p)).collect();
+                        crate::walk::check_route(world, &points, ROUTE_CHECK_BUDGET)
+                    });
+                    if let Ok((check, blocks)) = &result {
+                        if !blocks.is_empty() {
+                            let at: Vec<String> = blocks.iter().map(|b| format!("{:?} at ({:.1}, {:.1}, {:.1})", b.blocker, b.at.x, b.at.y, b.at.z)).collect();
+                            let ms = started.elapsed().as_secs_f32() * 1000.0;
+                            self.log(LogLevel::Info, format!("route check: {} of {} legs in {ms:.1} ms; blocked: {}", check.checked, points.len().saturating_sub(1), at.join(", ")));
+                        }
+                    }
+                    let (check, error) = split(result.map(|(check, _)| check));
+                    self.send(AgentMessage::RouteCheckResult { request_id, check, error });
+                }
+                Command::ProbeGround { request_id, points } => {
+                    let camera = unsafe { self.unity.main_camera(&self.rt) }.map(|c| c.position);
+                    let result = self.with_world(st, &cx, |world| {
+                        let points: Vec<_> = points.iter().take(MAX_PROBE_POINTS).map(|&p| to_unity(p)).collect();
+                        crate::walk::probe_ground(world, &points, camera)
+                    });
+                    let (points, error) = split(result);
+                    self.send(AgentMessage::GroundProbeResult { request_id, points, error });
                 }
                 Command::ExportWorld { request_id } => {
                     if st.export.is_some() {
@@ -245,7 +339,16 @@ impl Shared {
             return;
         }
         st.last_sample_at = Some(now);
-        let snap = unsafe { provider.snapshot(&cx, st.frame) };
+        let mut snap = unsafe { provider.snapshot(&cx, st.frame) };
+        if let Some(local) = snap.local.as_mut() {
+            local.camera = unsafe { self.unity.main_camera(&self.rt) }.map(|c| CameraView {
+                position: to_proto(c.position),
+                forward: to_proto(c.rotation.forward()),
+                up: to_proto(c.rotation.up()),
+                fov_y: c.fov_y,
+                aspect: c.aspect,
+            });
+        }
         let force = self.resend.swap(false, Ordering::SeqCst) || st.last_sent_at.is_none_or(|t| now - t >= HEARTBEAT);
         let changed = st.last_sent.as_ref().is_none_or(|prev| has_meaningful_change(prev, &snap));
         if (force || changed) && self.outbox.try_send(AgentMessage::Snapshot(snap.clone())).is_ok() {
