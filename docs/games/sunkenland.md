@@ -65,9 +65,15 @@ companions. Pins below sea level note their depth.
 | Teleport guards | `Global.code.player` (`PlayerCharacter`): `IsDead`, `drivingObject`, `seatObject`, `CurHelicopter` |
 | Other players | `WorldScene.code.allPlayerDummies` (includes the local player's `PlayerCharacter.playerDummy`), `PlayerDummy.myTransform`, `get_CharacterName()` / `cache_CharacterName` |
 | Companions | `WorldScene.code.Assistants`, `Assistant.TransformPosition`, `AssistantName` (Fusion `NetworkString`) / `DefaultName` |
+| Loaded world | `Mainframe.code.get_SaveManager()`: `get_IsCurrentWorldValid()`, `get_CurrentWorldGuid()`, `get_CurrentWorldName()`; when joining, `Mainframe.code.get_WorldManager()`: `get_WorldIdentifier()`, `get_WorldName()` |
+| Nearby creatures | `WorldScene.code.AllCharactersList` (`Character`; players and companions are other classes): `myTransform`, `get_IsDead()`, `Faction.IsFriendly`. `EnemyType` only names animals, sharks, mutants and bosses; ordinary enemies are `None`, often with no `Faction`, so anything alive and not friendly counts as hostile. Only characters near the player are spawned |
+| Enemy ships | `WorldScene.code.EnemyBoatComponents` (`Boat`): `TransformPosition`, `Destroied` |
+| Placed flags | `Buoy` objects (`FindObjectsOfType`, every 10 s, or 5 minutes if the search is slow; about 57 ms in a late-game world; no list holds them): `get_IsAI()` (the game's own), `get_BuoyName()`, `transformPosition`, `M_MarkerType` |
+| Map marks | `Global.code.uiCompass.get_MapMarks()`, a Fusion `NetworkDictionary`, walked through its enumerator |
+| Multiplayer session | `Fusion.NetworkRunner.get_Instances()`: the running runner's `get_IsSinglePlayer()`, `get_IsClient()`, `get_SessionInfo().get_Name()`; the player's name from `Steamworks.SteamFriends.GetPersonaName()` |
 | Boats, helicopters | `WorldScene.code.PlayerBoatComponents` (`TransformPosition`, `DisplayName`, `Destroied`), `Global.code.HelicopterControllers` |
 | Chat or console open (suppress hotkey) | `Global.code.uiCombat.uiInGameTextChat.<IsChatInputActive>k__BackingField`, `Mainframe.code.quantumConsole.<IsActive>k__BackingField` |
-| Frame hooks | `RenderPipelineManager.DoRenderLoop_Internal` (HDRP), `Global.Update`, `FPSPlayer.Update` |
+| Frame hooks | `RenderPipelineManager.DoRenderLoop_Internal` (HDRP), `Global.Update`, `FPSPlayer.Update`. These are JIT-compiled, and launches can leave no free memory near that code for a detour (`MH_ERROR_MEMORY_ALLOC`); the agent then ticks from its `PeekMessage` hook on the game's main thread (`crates/agent/src/hook.rs`) |
 
 The agent's Mono backend (`crates/unity-runtime/src/mono.rs`) uses the embedding API of
 `mono-2.0-bdwgc.dll`; frame hooks detour the JIT-compiled code of those methods.

@@ -20,8 +20,9 @@ other players, and teleport. Press a key and it's there.**
 - **Interactive map** of the whole world, built from the game's own files, with every
   cave, bunker, weapon, tool, key item and collectible pinned. Search and filter
   by category, and mark pins as found.
-- **Live location** of you, other players in multiplayer, and everything the in-game
-  GPS shows (companions, placed locators, moved vehicles).
+- **Live location** of you, other players in multiplayer, and what the game itself puts
+  on its map: companions, placed GPS locators and flags, moved vehicles. Hide these with
+  the **In-game markers** category.
 - **Teleport** anywhere on the map, to any pin, or to another player, including into
   caves and bunkers, and **teleport back** (Backspace) to where you were.
 - **Track** a pin, player, companion or vehicle with an on-screen compass and a
@@ -30,7 +31,7 @@ other players, and teleport. Press a key and it's there.**
 - **Walking routes** to what you track, on the surface and through caves, checked
   against the world as it is (blocked passages are avoided).
 - **Nearby creatures**: enemies, companions and animals around you on the map and
-  mini-map.
+  mini-map, including enemy ships in Sunkenland.
 - **Play together**: everyone on your server running Game Maps can ask each other to
   track something, ping spots on the map, and share custom pins. Peer to peer, no
   account or server.
@@ -38,15 +39,37 @@ other players, and teleport. Press a key and it's there.**
 - **Custom pins** with your own names, colors and icons.
 - **Picks up where you left off**: what you track, your selection and the map view
   are remembered.
+- **Per world**: each save, hosted world and joined world keeps its own found items,
+  pins, map state and explored areas.
+- **Fog of war**: only what you've explored is revealed, so the map doesn't spoil
+  anything. Hiding land and hiding pins are separate options, and the reveal distance is
+  yours to set.
+- **Progress**: how much of each category you've found, and what's left, nearest first.
+- **Map on a second monitor**: keep the full map open on another screen while you play.
+- **Danger alert and pings over the game**: arrows at the screen edge point toward
+  hostiles close by, with a count at the top, and friends' map pings show in the game.
+- **Recovers on its own**: if a connection or window fails it retries, and the map
+  keeps working without live features.
 - **No mod loader and no game files changed.** Works whether you host or join.
 - **Always current.** The app and its maps update themselves.
 
+<table>
+<tr>
+<td width="50%"><img src="docs/images/hud.png" alt="Mini-map, compass and waypoint over the game"><br><sub>Mini-map, compass and waypoint while you play</sub></td>
+<td width="50%"><img src="docs/images/pin-details.png" alt="A bunker's details with Track, Teleport and Mark found"><br><sub>Every pin says what's there; track it, teleport to it or mark it found</sub></td>
+</tr>
+<tr>
+<td><img src="docs/images/sunkenland.png" alt="The Sunkenland map"><br><sub>Sunkenland, drawn from the game's own world</sub></td>
+<td><img src="docs/images/fog-of-war.png" alt="Fog of war around the player"><br><sub>Fog of war: only what you've explored</sub></td>
+</tr>
+</table>
+
 ## Supported games
 
-| Game | Map | Live location | Teleport | Other players |
-|---|:---:|:---:|:---:|:---:|
-| Sons of the Forest | ✓ | ✓ | ✓ | ✓ |
-| Sunkenland | ✓ | ✓ | ✓ | ✓ |
+| Game | Map | Live location | Teleport | Other players | Nearby creatures | Separate worlds |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| Sons of the Forest | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Sunkenland | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 More games can be added; see [Adding a game](docs/development.md#adding-a-game).
 
@@ -59,7 +82,8 @@ More games can be added; see [Adding a game](docs/development.md#adding-a-game).
    **Run anyway**. The installer isn't code-signed yet.
 
 That's it. Game Maps downloads each game's map by itself and keeps both the app and
-the maps up to date.
+the maps up to date. To run it from source instead, see
+[Development](docs/development.md#run-the-app).
 
 ## Quick start
 
@@ -76,7 +100,8 @@ the list, or show only games with live features (**Live**) or without (**Map onl
 On each game:
 
 - **Play:** start the game through Steam. **Connect** attaches to it when it's running.
-- **Map** (map icon): open the map without the game.
+- **Map** (map icon): open that game's map without the game, to plan or look something
+  up. While a game is running, its own map is the one that opens.
 - The **arrow** shows whether the map is downloaded and up to date, and opens that
   game's settings.
 
@@ -102,11 +127,77 @@ icon.
 | Switch between surface and caves | **Surface / Underground** in the top bar (follows you automatically) |
 | Find other players and companions | **Players** in the top bar |
 | Mini-map while playing | **Picture-in-picture** in the top bar |
+| Switch world | World name in the top bar |
+| See what's left to find | **Progress** tab in the sidebar |
 | Keys, map and mini-map look, what the map shows | **Settings** (gear icon; type to search) |
 
 While Game Maps is connected, the game doesn't see the map key, so only this map
 opens (the in-game map works as usual when Game Maps isn't running). Each zoom key
 can be changed or turned off in **Settings**.
+
+### Pins and tracking
+
+Click a pin for what's there, then **Track** it, **Teleport**, or **Mark found**. Players,
+companions and vehicles work the same way, with **Follow** to keep them centered. While
+tracking, a compass and a waypoint show over the game, and a walking route shows on the
+map (Settings → Tracking turns either off). Hide a whole category with the eye next to
+it, and use **Show found** to leave out what you've collected. Collectibles are marked
+found when you walk up to them.
+
+### Worlds
+
+Game Maps sees which save or world you're in, hosted or joined, and keeps found items,
+custom pins, fog of war and the map view separate for each. The world name in the top bar
+lists the others, so you can look at them without loading them. A new game that hasn't
+been saved yet shows as *New game*, and its data moves to the save the first time you
+save.
+
+<img src="docs/images/progress.png" alt="The Progress tab" width="220" align="right">
+
+### Progress
+
+The **Progress** tab shows the share of this world's pins you've found and a bar for each
+category. Open a category to see what's left, nearest first, and click a row to go to it.
+
+### Fog of war
+
+On by default, under Settings → Full map → **Fog of war**. As you explore, the map opens
+up around you.
+
+- **Hide unexplored map** covers unexplored land; turned off, it's only shaded.
+- **Hide pins in unexplored areas** hides game pins there, on the map, in search and in
+  progress. Your own, found and tracked pins always show.
+- **Reveal distance** sets how far around you the map is revealed.
+- **Reset explored areas** starts this world over.
+
+<br clear="right">
+
+<img src="docs/images/settings.png" alt="Settings, on the Full map page" width="380" align="right">
+
+### Mini-map and alerts
+
+The mini-map sits in a corner of the screen and ignores the mouse. Pick its corner, size,
+opacity and rotation under Settings → **Mini-map**. **Hide for alerts** fades it out while
+danger markers or pings are on or next to it, so nothing is hidden behind it.
+
+The **Danger alert** (Settings → Map content) points toward hostiles within the alert
+distance, with a count at the top of the screen.
+
+### Second monitor
+
+Turn on **Map window on another monitor** under Settings → Full map, and pick the screen.
+It's an ordinary window that follows you live and works like the full map while you keep
+playing. Closing the window turns it off.
+
+### Playing together
+
+**Play together** is on by default (Settings → Multiplayer). Everyone in the same
+multiplayer session running Game Maps finds each other automatically, with no account or
+server.
+Right-click to ping a spot, share custom pins (they appear under **Friends' pins**), and
+ask each other to track something.
+
+<br clear="right">
 
 ## Updates
 
@@ -118,6 +209,17 @@ game starts.
 - **The app** installs new versions on its own as soon as no game is running. If you
   turn off *Install updates automatically*, it asks first instead.
 
+To check right now, use **Check for updates** under Settings → General. The arrow on a
+game in the Game Maps window shows its map's state, and a button to download it if it
+doesn't arrive on its own.
+
+Your pins, found items and settings stay through updates. They're in
+`%APPDATA%\com.gamemaps.overlay`, with a backup of each file from the last start. Map
+data, logs and exports are in `%LOCALAPPDATA%\com.gamemaps.overlay`.
+
+Publishing new map data, after a game update moves things, is covered in
+[Map data](docs/development.md#map-data) and [Releasing](docs/releasing.md#map-updates).
+
 ## Troubleshooting
 
 <details>
@@ -127,7 +229,7 @@ game starts.
   warns you if it detects exclusive fullscreen.
 - Check the game's status in the Game Maps window. It should say **Connected**. If
   hooking is set to *Manually*, click **Connect**.
-- If you changed the key, use the one shown under *Key to open the map*.
+- If you changed the key, use the one under Settings → Keys → *Open / close map*.
 </details>
 
 <details>
@@ -147,6 +249,23 @@ first download.
 </details>
 
 <details>
+<summary><b>The map opens but my position doesn't show</b></summary>
+
+Live features can stop after a game update or a failed connection. Game Maps keeps
+retrying, and meanwhile the map key still opens a plain map. Settings → Advanced →
+*Connection* shows what's happening. If a game update changed something Game Maps relies
+on, [open an issue](https://github.com/HYPExMon5ter/game-maps/issues/new/choose).
+</details>
+
+<details>
+<summary><b>The window went black or my pins look wrong</b></summary>
+
+A crashed window reloads, and Game Maps restarts itself if its web view stops, up to 3
+times in 10 minutes. After that, quit it from the tray and start it again. A damaged save
+file is moved aside at startup (`.corrupt-<time>`) and its last good copy restored.
+</details>
+
+<details>
 <summary><b>My antivirus flagged Game Maps</b></summary>
 
 Game Maps attaches to the running game to read your position, the same way other
@@ -159,7 +278,7 @@ source code is in this repository, and every release is built from it by
 <summary><b>Reporting a problem</b></summary>
 
 [Open an issue](https://github.com/HYPExMon5ter/game-maps/issues/new/choose) and
-attach the log from **Open logs** in the Game Maps window.
+attach the log from Settings → Advanced → **Log files**.
 </details>
 
 ## How it works
