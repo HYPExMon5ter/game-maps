@@ -1280,7 +1280,7 @@ dependencies = [
 
 [[package]]
 name = "game-maps-agent"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.23.1",
  "game-maps-protocol",
@@ -1292,7 +1292,7 @@ dependencies = [
 
 [[package]]
 name = "game-maps-overlay"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "game-maps-protocol",
  "log",
@@ -1318,7 +1318,7 @@ dependencies = [
 
 [[package]]
 name = "game-maps-protocol"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4879,7 +4879,7 @@ checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
 
 [[package]]
 name = "unity-runtime"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "thiserror 2.0.21",
  "windows",
