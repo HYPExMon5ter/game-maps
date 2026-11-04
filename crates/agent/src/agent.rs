@@ -184,7 +184,15 @@ impl Shared {
         if self.stopping.load(Ordering::Relaxed) {
             return;
         }
-        let Ok(mut st) = self.main.try_lock() else { return };
+        let mut st = match self.main.try_lock() {
+            Ok(st) => st,
+            // A tick panicked with the lock held (see `hook::run_tick`): carry on.
+            Err(std::sync::TryLockError::Poisoned(e)) => {
+                self.main.clear_poison();
+                e.into_inner()
+            }
+            Err(std::sync::TryLockError::WouldBlock) => return,
+        };
 
         // The hooked method may be shared by several components (identical code
         // folding) or run several times per frame; only do work once per frame.

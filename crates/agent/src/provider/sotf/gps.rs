@@ -29,6 +29,8 @@ pub struct GpsMarkers {
     list_layout: Option<ListLayout>,
     /// Icon sprite name per (locator, icon id); icons rarely change, names allocate.
     icon_names: HashMap<(usize, i32), Option<String>>,
+    /// Last summary written to the log.
+    debug: String,
 }
 
 // Raw object pointers are only dereferenced on the main thread.
@@ -45,6 +47,7 @@ impl GpsMarkers {
             position: rt.method(class, "Position", 0).ok()?,
             list_layout: None,
             icon_names: HashMap::new(),
+            debug: String::new(),
         })
     }
 
@@ -65,16 +68,22 @@ impl GpsMarkers {
         };
         let locators = layout.elements(list, MAX_LOCATORS);
 
+        let (mut unnamed, mut carried_count) = (0, 0);
         let mut markers = Vec::with_capacity(locators.len());
+        let total = locators.len();
         for locator in locators {
             if !unity.is_alive(locator) || self.is_active.is_some_and(|f| !f.get::<bool>(locator)) {
                 continue;
             }
             // Locators without a sprite are hidden duplicates (e.g. Kelvin has two).
-            let Some(icon) = self.icon_name(rt, unity, locator) else { continue };
+            let Some(icon) = self.icon_name(rt, unity, locator) else {
+                unnamed += 1;
+                continue;
+            };
             if !players.is_empty() {
                 let carried = unity.component_transform(rt, locator).and_then(|t| unity.is_within(rt, t, players, CARRIED_DEPTH));
                 if carried.unwrap_or(false) {
+                    carried_count += 1;
                     continue;
                 }
             }
@@ -88,6 +97,14 @@ impl GpsMarkers {
                 icon: Some(icon),
                 position: to_proto(pos),
             });
+        }
+        // Why locators are or aren't shown, when that changes.
+        let mut icons: Vec<&str> = markers.iter().filter_map(|m| m.icon.as_deref()).collect();
+        icons.sort_unstable();
+        let line = format!("gps locators {total} shown {icons:?} no sprite {unnamed} carried {carried_count}");
+        if line != self.debug {
+            crate::filelog::write(&line);
+            self.debug = line.clone();
         }
         // Forget cached icons of locators that are gone.
         if self.icon_names.len() > markers.len() * 4 + 64 {

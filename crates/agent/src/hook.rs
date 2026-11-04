@@ -14,13 +14,23 @@
 //! Passing every register through also makes the thunk independent of the method's
 //! signature and of backend conventions (IL2CPP's trailing `MethodInfo*`, Mono's
 //! hidden arguments in r10/r11).
+//!
+//! On Mono the hooked code is JIT-compiled, and some game launches leave no free memory
+//! near it for a detour. Then the tick runs from the message pump instead (see
+//! [`enable_pump_ticks`]): Unity's main thread polls `PeekMessage` every frame, and that
+//! hook lives in user32, where there's always room.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use minhook::MinHook;
 use unity_runtime::Runtime;
+use windows::core::BOOL;
+use windows::Win32::Foundation::{HWND, LPARAM};
+use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
+use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetClassNameW, GetWindowThreadProcessId, IsWindowVisible};
 
 use crate::SHARED;
 
@@ -72,10 +82,21 @@ extern "C" fn thunk_entry(slot: usize) {
         s.stopping.store(true, Ordering::SeqCst);
         return;
     }
+    run_tick(s);
+}
+
+fn run_tick(s: &crate::agent::Shared) {
     s.in_tick.fetch_add(1, Ordering::SeqCst);
     if catch_unwind(AssertUnwindSafe(|| s.tick())).is_err() {
-        // A poisoned main-state lock disables further ticks; the game keeps running.
-        s.log(game_maps_protocol::LogLevel::Error, "agent tick panicked; live features disabled");
+        // The game keeps running either way. Ticks go on, unless they keep failing.
+        let panics = TICK_PANICS.fetch_add(1, Ordering::SeqCst) + 1;
+        crate::filelog::write(&format!("agent tick panicked ({panics})"));
+        if panics >= MAX_TICK_PANICS {
+            s.log(game_maps_protocol::LogLevel::Error, "agent tick keeps panicking; live features disabled");
+            s.stopping.store(true, Ordering::SeqCst);
+        } else {
+            s.log(game_maps_protocol::LogLevel::Error, "agent tick panicked; continuing");
+        }
     }
     s.in_tick.fetch_sub(1, Ordering::SeqCst);
 }
@@ -220,9 +241,73 @@ pub fn install_quit_hook(rt: &Runtime) -> Result<(), String> {
     unsafe { hook(QUIT_SLOT, code) }
 }
 
+static TICK_PANICS: AtomicUsize = AtomicUsize::new(0);
+/// Give up on live features after this many panics, rather than risk the game.
+const MAX_TICK_PANICS: usize = 10;
+
+/// Ticks from the message pump are on; see the module docs.
+static PUMP_TICKS: AtomicBool = AtomicBool::new(false);
+/// The game's main thread (the one with its window), once found.
+static PUMP_THREAD: AtomicU32 = AtomicU32::new(0);
+static PUMP_LAST_MS: AtomicU64 = AtomicU64::new(0);
+/// Shortest time between pump ticks: the pump is polled several times a frame.
+const PUMP_INTERVAL_MS: u64 = 8;
+/// How often the game's window is looked for until it's found.
+const PUMP_SEARCH_MS: u64 = 500;
+
+/// Runs the tick from the message pump, for when no frame hook could be installed.
+pub fn enable_pump_ticks() {
+    PUMP_TICKS.store(true, Ordering::SeqCst);
+}
+
+unsafe extern "system" fn find_game_thread(hwnd: HWND, found: LPARAM) -> BOOL {
+    let mut pid = 0u32;
+    let thread = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+    let mut class = [0u16; 32];
+    let len = GetClassNameW(hwnd, &mut class).max(0) as usize;
+    if pid == GetCurrentProcessId() && IsWindowVisible(hwnd).as_bool() && String::from_utf16_lossy(&class[..len]) == "UnityWndClass" {
+        *(found.0 as *mut u32) = thread;
+        return BOOL(0);
+    }
+    BOOL(1)
+}
+
+/// Called on every `PeekMessage`, from any thread.
+pub fn pump_tick() {
+    if !PUMP_TICKS.load(Ordering::Relaxed) {
+        return;
+    }
+    static START: OnceLock<Instant> = OnceLock::new();
+    let now = START.get_or_init(Instant::now).elapsed().as_millis() as u64;
+    let last = PUMP_LAST_MS.load(Ordering::Relaxed);
+    let thread = PUMP_THREAD.load(Ordering::Relaxed);
+    if thread == 0 {
+        if now.saturating_sub(last) >= PUMP_SEARCH_MS {
+            PUMP_LAST_MS.store(now, Ordering::Relaxed);
+            let mut found = 0u32;
+            unsafe {
+                let _ = EnumWindows(Some(find_game_thread), LPARAM(&mut found as *mut u32 as isize));
+            }
+            PUMP_THREAD.store(found, Ordering::Relaxed);
+            if found != 0 {
+                crate::filelog::write(&format!("ticking on thread {found}; polled from thread {}", unsafe { GetCurrentThreadId() }));
+            }
+        }
+        return;
+    }
+    if unsafe { GetCurrentThreadId() } != thread || now.saturating_sub(last) < PUMP_INTERVAL_MS {
+        return;
+    }
+    PUMP_LAST_MS.store(now, Ordering::Relaxed);
+    if let Some(s) = SHARED.get() {
+        run_tick(s);
+    }
+}
+
 /// Removes all hooks and waits until no thread is inside the agent's tick, so the
 /// module can be unloaded safely.
 pub fn remove() {
+    PUMP_TICKS.store(false, Ordering::SeqCst);
     crate::focus::remove();
     let mut any = false;
     for t in TARGETS.iter() {

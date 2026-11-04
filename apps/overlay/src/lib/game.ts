@@ -80,10 +80,20 @@ export async function loadGame(id: string): Promise<{ game: GameDefinition; pins
 /** Category of the pins friends share in multiplayer (added to every game). */
 export const FRIENDS_CATEGORY = 'friends'
 
-/** Pins friends share in multiplayer get a category of their own. */
+/**
+ * Category of what the game itself puts on its map at runtime (flags, GPS markers,
+ * vehicles): no pins, but listed so it can be hidden like any other.
+ */
+export const GAME_MARKERS_CATEGORY = 'game-markers'
+
+/** Categories every game gets: friends' shared pins and the game's own markers. */
 function withFriendsCategory(game: GameDefinition): GameDefinition {
   if (game.categories.some((c) => c.id === FRIENDS_CATEGORY)) return game
-  return { ...game, categories: [...game.categories, { id: FRIENDS_CATEGORY, name: "Friends' pins", color: '#56ccf2', icon: 'builtin:pin', visible: true }] }
+  const added: Category[] = [
+    { id: GAME_MARKERS_CATEGORY, name: 'In-game markers', color: '#475569', icon: 'builtin:pin', visible: true },
+    { id: FRIENDS_CATEGORY, name: "Friends' pins", color: '#56ccf2', icon: 'builtin:pin', visible: true },
+  ]
+  return { ...game, categories: [...game.categories, ...added] }
 }
 
 export function tileUrl(game: GameDefinition, map: GameMap, tiles: TileSource = map.tiles): string {

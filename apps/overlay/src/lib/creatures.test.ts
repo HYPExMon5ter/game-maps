@@ -21,7 +21,8 @@ describe('visibleCreatures', () => {
 
   it('follows the settings', () => {
     expect(visibleCreatures(all, false, true)).toEqual([])
-    expect(visibleCreatures(all, true, true)).toHaveLength(3)
-    expect(visibleCreatures(all, true, false).map((c) => c.id)).toEqual(['1', '3'])
+    // Friendly ones are companions, drawn with the players.
+    expect(visibleCreatures(all, true, true).map((c) => c.id)).toEqual(['1', '2'])
+    expect(visibleCreatures(all, true, false).map((c) => c.id)).toEqual(['1'])
   })
 })

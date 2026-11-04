@@ -1,4 +1,4 @@
-import { Component, useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState } from 'react'
 import { pinsReached } from './lib/autoFound'
 import { resolveTracked } from './lib/tracking'
 import { findPin, refreshBackSteps } from './lib/actions'
@@ -7,25 +7,32 @@ import { nearestEntrance, routeDestination } from './lib/route'
 import type { Vec3 } from './lib/protocol'
 import { startAgentLogBuffer } from './lib/agentLogs'
 import { backend, events } from './lib/backend'
+import { logUiError } from './lib/errors'
 import { loadGame } from './lib/game'
 import { matchesHotkey } from './lib/keys'
 import { steppedZoom } from './lib/zoom'
 import { mapHandle } from './map/handle'
 import { useSync } from './lib/sync/sync'
-import { loadSession, loadUserData, startPersisting } from './state/persist'
+import { startPersisting } from './state/persist'
+import { loadWorldView, useWorldTracking } from './state/useWorlds'
+import { useFog } from './state/fog'
 import { selectAllPins, useStore } from './state/store'
 import type { Hotkey } from './lib/protocol'
 import { FullMap } from './ui/FullMap'
 import { HUD_MARGIN, hudSize } from './lib/hudLayout'
 import { Hud } from './ui/Hud'
+import { useOverGame } from './lib/overGame'
 import { gameSettings } from './settings/model'
 import { mapHotkey, useSettings } from './settings/store'
 import { startSettings } from './settings/sync'
+import { IS_MAP_WINDOW } from './lib/view'
+import { ErrorBoundary } from './ui/ErrorBoundary'
 
 /** A new map pack arrived while the full map was open. */
 let reloadWhenClosed = false
 
-function useBackendSync() {
+/** `windowed`: the map window, which always shows the full map (see `lib/view`). */
+function useBackendSync(windowed: boolean) {
   useEffect(() => {
     const { setStatus, setMode, setSnapshot, notify } = useStore.getState()
     const cleanups: Promise<() => void>[] = [
@@ -37,6 +44,7 @@ function useBackendSync() {
       }),
       events.snapshot((s) => setSnapshot(s.local || s.others.length ? s : null)),
       events.overlayMode(async (mode) => {
+        if (windowed) return
         setMode(mode)
         if (mode !== 'open' && reloadWhenClosed) return window.location.reload()
         // Snapshots are only streamed while visible; catch up immediately.
@@ -49,21 +57,21 @@ function useBackendSync() {
       // over, but not while the user is looking at the map.
       events.mapPackInstalled((gameId) => {
         if (useStore.getState().game?.id !== gameId) return
-        if (useStore.getState().mode === 'open') reloadWhenClosed = true
+        if (useStore.getState().mode === 'open' && !windowed) reloadWhenClosed = true
         else window.location.reload()
       }),
     ]
     const stopPersist = startPersisting()
     void (async () => {
       setStatus(await backend.status())
-      setMode(await backend.overlayMode())
+      setMode(windowed ? 'open' : await backend.overlayMode())
       setSnapshot(await backend.lastSnapshot())
     })()
     return () => {
       stopPersist()
       cleanups.forEach((p) => void p.then((f) => f()))
     }
-  }, [])
+  }, [windowed])
 }
 
 /** How often the route to the tracked target is recomputed. */
@@ -156,43 +164,64 @@ function useAutoFound() {
   )
 }
 
-/** Loads the detected game, or the first available one so the map can be browsed offline. */
+/** How long to wait before trying a failed map load again. */
+const MAP_RETRY_MS = 5000
+
+/** Loads the detected game, else the one asked for, else the first so the map can be browsed offline. */
 function useGameLoader() {
   const detected = useStore((s) => s.status?.game_id ?? null)
   const current = useStore((s) => s.game?.id ?? null)
+  // Bumped to try again after a failed load.
+  const [attempt, setAttempt] = useState(0)
+  const [requested, setRequested] = useState<string | null>(null)
+  useEffect(() => {
+    const unlisten = events.showGame((id) => {
+      const { status, game } = useStore.getState()
+      if (!status?.game_id && game?.id !== id) setRequested(id)
+    })
+    return () => void unlisten.then((stop) => stop())
+  }, [])
   useEffect(() => {
     let cancelled = false
+    let retry: ReturnType<typeof setTimeout> | undefined
     void (async () => {
-      const id = detected ?? current ?? (await backend.listGames())[0]?.id
+      const id = detected ?? requested ?? current ?? (await backend.listGames())[0]?.id
       if (!id || id === current) return
       try {
-        const [{ game, pins }, user, session] = await Promise.all([loadGame(id), loadUserData(id), loadSession(id)])
-        if (!cancelled) useStore.getState().setGame(game, pins, user, session)
+        const [{ game, pins }, view] = await Promise.all([loadGame(id), loadWorldView(id)])
+        if (cancelled) return
+        useStore.getState().setGame(game, pins, view.user, view.world, view.index, view.session)
+        setRequested(null)
       } catch (e) {
+        logUiError(`could not load map ${id}: ${String(e)}`)
         useStore.getState().notify(`Could not load map: ${String(e)}`, 'error')
+        if (!cancelled) retry = setTimeout(() => setAttempt((a) => a + 1), MAP_RETRY_MS)
       }
     })()
     return () => {
       cancelled = true
+      clearTimeout(retry)
     }
-  }, [detected, current])
+  }, [detected, requested, current, attempt])
 }
 
 /** Keeps the backend's HUD window geometry in line with what the HUD shows. */
 function useHudSync() {
   const hud = useSettings((s) => s.ui.hud)
   const tracking = useStore((s) => s.tracked !== null)
+  const over = useOverGame()
+  const enabled = hud.minimap || tracking || over.waypoint || over.pings || over.danger
   useEffect(() => {
     const { width, height } = hudSize(hud.minimap, tracking, hud)
     void backend.setPinConfig({
-      enabled: hud.minimap || tracking,
+      enabled,
       corner: hud.corner,
       width,
       height,
       margin: HUD_MARGIN,
-      fullscreen: tracking && hud.waypoint,
+      fullscreen: over.cover,
     })
-  }, [hud, tracking])
+  }, [hud, tracking, enabled, over.cover])
 }
 
 /** Steps of a zoom key binding (+1 in, -1 out), or 0 if `e` isn't one. */
@@ -239,11 +268,35 @@ function useOverlayKeys() {
 }
 
 export default function App() {
-  useBackendSync()
+  return IS_MAP_WINDOW ? <MapWindowApp /> : <OverlayApp />
+}
+
+/** The map window: the full map only. The overlay does the rest (recording, multiplayer, HUD). */
+function MapWindowApp() {
+  useBackendSync(true)
+  useRoute()
+  useGameLoader()
+  useWorldTracking(false)
+  useFog(false)
+  const hasGame = useStore((s) => s.game !== null)
+  if (!hasGame) return null
+  return (
+    <ErrorBoundary>
+      <div className="absolute inset-0">
+        <FullMap />
+      </div>
+    </ErrorBoundary>
+  )
+}
+
+function OverlayApp() {
+  useBackendSync(false)
   useAutoFound()
   useRoute()
   useSync()
   useGameLoader()
+  useWorldTracking(true)
+  useFog(true)
   useHudSync()
   useOverlayKeys()
   const mode = useStore((s) => s.mode)
@@ -268,27 +321,4 @@ export default function App() {
       )}
     </ErrorBoundary>
   )
-}
-
-class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
-  state = { error: null as Error | null }
-
-  static getDerivedStateFromError(error: Error) {
-    return { error }
-  }
-
-  render() {
-    if (!this.state.error) return this.props.children
-    return (
-      <div className="grid h-full place-items-center">
-        <div className="glass max-w-md rounded-2xl p-5 text-[13px]">
-          <h2 className="font-display mb-2 text-[16px] font-semibold">The map hit an error</h2>
-          <p className="mb-3 break-words font-mono text-[12px] text-ink-dim">{this.state.error.message}</p>
-          <button className="rounded-lg bg-accent px-3 py-1.5 font-semibold text-accent-ink" onClick={() => this.setState({ error: null })}>
-            Try again
-          </button>
-        </div>
-      </div>
-    )
-  }
 }

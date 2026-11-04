@@ -291,6 +291,46 @@ impl Runtime {
         Ok(*(self.backend.unbox(boxed as Ptr) as *const T))
     }
 
+    /// A boxed integer of any built-in integer type, read by its actual size and
+    /// signedness (`None` for anything else).
+    ///
+    /// # Safety
+    /// `boxed` must be null or a live managed object.
+    pub unsafe fn unbox_integer(&self, boxed: *mut ManagedObject) -> Option<i128> {
+        let class = self.class_of(boxed)?;
+        let data = self.backend.unbox(boxed as Ptr);
+        Some(match self.class_name(class).as_str() {
+            "Byte" => *(data as *const u8) as i128,
+            "SByte" => *(data as *const i8) as i128,
+            "Int16" => *(data as *const i16) as i128,
+            "UInt16" => *(data as *const u16) as i128,
+            "Int32" => *(data as *const i32) as i128,
+            "UInt32" => *(data as *const u32) as i128,
+            "Int64" => *(data as *const i64) as i128,
+            "UInt64" => *(data as *const u64) as i128,
+            _ => return None,
+        })
+    }
+
+    /// The text of a boxed `System.Guid` or a string (`None` for anything else).
+    ///
+    /// # Safety
+    /// `boxed` must be null or a live managed object.
+    pub unsafe fn guid_or_string(&self, boxed: *mut ManagedObject) -> Option<String> {
+        let class = self.class_of(boxed)?;
+        match self.class_name(class).as_str() {
+            "String" => read_string(boxed),
+            "Guid" => {
+                let b = std::slice::from_raw_parts(self.backend.unbox(boxed as Ptr) as *const u8, 16);
+                // System.Guid's first three fields are little-endian.
+                let (a, c, d) = (u32::from_le_bytes([b[0], b[1], b[2], b[3]]), u16::from_le_bytes([b[4], b[5]]), u16::from_le_bytes([b[6], b[7]]));
+                let rest: String = b[8..].iter().map(|x| format!("{x:02x}")).collect();
+                Some(format!("{a:08x}-{c:04x}-{d:04x}-{}-{}", &rest[..4], &rest[4..]))
+            }
+            _ => None,
+        }
+    }
+
     /// Name of a boxed enum value (`System.Enum.ToString()`), e.g. as returned by
     /// [`Runtime::invoke`] for an enum-typed getter.
     ///

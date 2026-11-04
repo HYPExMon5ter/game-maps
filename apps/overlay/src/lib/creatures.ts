@@ -19,8 +19,11 @@ export function creatureName(name: string): string {
   return words.map((w, i) => (i === 0 ? w : w.toLowerCase())).join(' ')
 }
 
-/** The creatures to draw, per the map settings. */
+/**
+ * The creatures to draw as dots, per the map settings. Friendly ones are companions,
+ * drawn and listed with the players (see `lib/movers`).
+ */
 export function visibleCreatures(creatures: Creature[], show: boolean, animals: boolean): Creature[] {
   if (!show) return []
-  return animals ? creatures : creatures.filter((c) => c.kind !== 'animal')
+  return creatures.filter((c) => c.kind !== 'friendly' && (animals || c.kind !== 'animal'))
 }

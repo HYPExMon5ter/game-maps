@@ -11,6 +11,7 @@
 //! - `Sons.Gameplay.GPS.GPSLocator._activeLocators`: live GPS markers (Kelvin, placed locators, vehicles).
 //! - `Sons.Ai.Vail.VailActorManager._activeActors`: creatures around the player.
 //! - `Sons.Multiplayer.CoopLobbyManager`, `GameServerManager`: the multiplayer session.
+//! - `GameSetupManager.GetSelectedSaveId()`, `GetSaveGameType()`: the loaded save.
 
 mod astar;
 mod cave_scan;
@@ -19,11 +20,12 @@ mod creatures;
 mod export;
 mod gps;
 mod session;
+mod world;
 
 use std::ffi::c_void;
 use std::time::{Duration, Instant};
 
-use game_maps_protocol::{Capabilities, Creature, LocalPlayer, Marker, MultiplayerSession, PathInfo, RemotePlayer, TeleportTarget, Vec3, WorldExport, WorldLayer, WorldSnapshot};
+use game_maps_protocol::{Capabilities, Creature, GameWorld, WorldKind, LocalPlayer, Marker, MultiplayerSession, PathInfo, RemotePlayer, TeleportTarget, Vec3, WorldExport, WorldLayer, WorldSnapshot};
 use unity_runtime::{read_string, Class, Color, Field, ListLayout, ManagedObject, Method, Physics, Runtime, Vector3};
 
 use super::{to_proto, to_unity, Cx, Provider};
@@ -41,6 +43,8 @@ const LAYER_REFRESH: Duration = Duration::from_millis(250);
 const MARKER_REFRESH: Duration = Duration::from_millis(250);
 const CREATURE_REFRESH: Duration = Duration::from_millis(250);
 const SESSION_REFRESH: Duration = Duration::from_secs(2);
+/// Numbers worlds loaded without a save id (new games until they're saved).
+static UNSAVED_WORLDS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
 /// Creatures farther than this from the player are left out (the game simulates some
 /// actors well beyond what matters around you).
 const CREATURE_RADIUS: f32 = 200.0;
@@ -93,6 +97,7 @@ pub struct SonsOfTheForest {
     gps: Option<gps::GpsMarkers>,
     creatures: Option<creatures::Creatures>,
     session_members: Option<session::Session>,
+    world_members: Option<world::World>,
     astar: Option<astar::AStar>,
     /// Route timings reported so far (the first few go to the log).
     routes_logged: u32,
@@ -113,6 +118,10 @@ pub struct SonsOfTheForest {
     nearby: Vec<Creature>,
     logged_creatures: bool,
     last_session_refresh: Option<Instant>,
+    world: Option<GameWorld>,
+    logged_world_miss: bool,
+    /// Id for the world loaded now while it has no save id (see `refresh_session`).
+    unsaved_world: Option<String>,
     session: Option<MultiplayerSession>,
 }
 
@@ -183,6 +192,16 @@ impl SonsOfTheForest {
         notes.push(format!("Creatures: {}", creatures.is_some()));
         let session_members = session::Session::resolve(rt);
         notes.push(format!("Multiplayer session: {}", session_members.is_some()));
+        let world_members = match world::World::resolve(rt) {
+            Ok((w, namespace)) => {
+                notes.push(format!("Save detection: ok ({namespace}.GameSetupManager)"));
+                Some(w)
+            }
+            Err(e) => {
+                notes.push(format!("Save detection: unavailable ({e})"));
+                None
+            }
+        };
         let astar = match astar::AStar::resolve(rt) {
             Ok(a) => {
                 notes.push("Routes (A* Pathfinding): ok".into());
@@ -204,6 +223,7 @@ impl SonsOfTheForest {
             gps,
             creatures,
             session_members,
+            world_members,
             astar,
             routes_logged: 0,
             list_layout: None,
@@ -220,6 +240,9 @@ impl SonsOfTheForest {
             nearby: Vec::new(),
             logged_creatures: false,
             last_session_refresh: None,
+            world: None,
+            logged_world_miss: false,
+            unsaved_world: None,
             session: None,
         })
     }
@@ -357,6 +380,34 @@ impl SonsOfTheForest {
     }
 
     unsafe fn refresh_session(&mut self, cx: &Cx) {
+        if let Some(w) = &self.world_members {
+            let world = match w.read(cx.rt) {
+                Some(world) => Some(world),
+                // The game clears the save id while quitting: still the same world.
+                None if self.world.as_ref().is_some_and(|w| !w.id.starts_with("unsaved:")) => self.world.clone(),
+                None => {
+                    // A new game has no save id until it's first saved: report it as a
+                    // world of its own, so nothing lands in another world meanwhile.
+                    if !self.logged_world_miss {
+                        self.logged_world_miss = true;
+                        self.notes.push(format!("World: no save id yet ({})", w.describe(cx.rt)));
+                    }
+                    let id = self.unsaved_world.get_or_insert_with(|| {
+                        let n = UNSAVED_WORLDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        format!("unsaved:{}-{n}", std::process::id())
+                    });
+                    let kind = if self.session.is_some() { WorldKind::Hosted } else { WorldKind::SinglePlayer };
+                    Some(GameWorld { id: id.clone(), name: None, kind })
+                }
+            };
+            if world != self.world {
+                self.notes.push(match &world {
+                    Some(w) => format!("World: {} ({:?})", w.id, w.kind),
+                    None => "World: none".into(),
+                });
+                self.world = world;
+            }
+        }
         let Some(members) = &self.session_members else { return };
         let session = members.id(cx.rt).map(|id| MultiplayerSession { id, player_name: members.player_name(cx.rt) });
         if session != self.session {
@@ -432,6 +483,8 @@ impl Provider for SonsOfTheForest {
             self.markers.clear();
             self.nearby.clear();
             self.session = None;
+            self.world = None;
+            self.unsaved_world = None;
         } else {
             if self.last_remote_refresh.is_none_or(|t| now - t >= REMOTE_REFRESH) {
                 self.last_remote_refresh = Some(now);
@@ -453,7 +506,7 @@ impl Provider for SonsOfTheForest {
                 }
             }
         }
-        WorldSnapshot { frame, local, others: self.others.clone(), markers: self.markers.clone(), creatures: self.nearby.clone(), session: self.session.clone() }
+        WorldSnapshot { frame, local, others: self.others.clone(), markers: self.markers.clone(), creatures: self.nearby.clone(), session: self.session.clone(), world: self.world.clone() }
     }
 
     unsafe fn teleport(&mut self, cx: &Cx, target: &TeleportTarget) -> Result<(), String> {
@@ -476,6 +529,8 @@ impl Provider for SonsOfTheForest {
                     .find(|o| &o.id == id)
                     .map(|o| o.position)
                     .or_else(|| self.markers.iter().find(|m| &m.id == id).map(|m| m.position))
+                    // Companions tracked as creatures (Virginia).
+                    .or_else(|| self.nearby.iter().find(|c| &c.id == id).map(|c| c.position))
                     .ok_or("player not found")?;
                 let mut p = to_unity(position);
                 p.x += 1.0;

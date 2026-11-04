@@ -20,6 +20,8 @@ export interface HudSettings {
   rotateWithPlayer: boolean
   /** Draw the tracked target over the game where it is in the world. */
   waypoint: boolean
+  /** Fade the mini-map out while danger markers or pings are on or next to it. */
+  autoHide: boolean
 }
 
 /** Settings for one game; what a game shows or does differs between games. */
@@ -32,6 +34,12 @@ export interface GameSettings {
   showAnimals: boolean
   /** Connect with others running the app in the same multiplayer session. */
   playTogether: boolean
+  /** Point toward hostile creatures close by, over the game. */
+  dangerAlert: boolean
+  /** How close hostiles must be for the danger alert, in meters. */
+  dangerMeters: number
+  /** Draw map pings over the game, like the waypoint. */
+  pingsInGame: boolean
 }
 
 /** Settings for every game. */
@@ -49,6 +57,14 @@ export interface Settings {
   units: Units
   /** Show the walking route to what you track (map and mini-map). */
   showRoute: boolean
+  /** Keep track of the parts of the map you've been near (see `fogHideMap`, `fogHidePins`). */
+  fogOfWar: boolean
+  /** Fog of war: cover unexplored parts of the map (else they're only shaded). */
+  fogHideMap: boolean
+  /** Fog of war: hide game pins in unexplored parts of the map. */
+  fogHidePins: boolean
+  /** Fog of war: how far around the player the map is revealed, in meters. */
+  fogRadius: number
   hud: HudSettings
   /** Per game, by game id; missing values use `DEFAULT_GAME_SETTINGS`. */
   games: Record<string, Partial<GameSettings>>
@@ -59,6 +75,9 @@ export const DEFAULT_GAME_SETTINGS: GameSettings = {
   showCreatures: true,
   showAnimals: true,
   playTogether: true,
+  dangerAlert: true,
+  dangerMeters: 30,
+  pingsInGame: true,
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -69,7 +88,11 @@ export const DEFAULT_SETTINGS: Settings = {
   declutter: true,
   units: 'imperial',
   showRoute: true,
-  hud: { minimap: false, corner: 'top_right', width: 300, height: 300, zoom: 0, opacity: 0.92, rotateWithPlayer: false, waypoint: true },
+  fogOfWar: true,
+  fogHideMap: true,
+  fogHidePins: true,
+  fogRadius: 100,
+  hud: { minimap: false, corner: 'top_right', width: 300, height: 300, zoom: 0, opacity: 0.92, rotateWithPlayer: false, waypoint: true, autoHide: true },
   games: {},
 }
 
@@ -82,7 +105,8 @@ export function withGameSettings(settings: Settings, gameId: string, patch: Part
   return { ...settings, games: { ...settings.games, [gameId]: { ...settings.games[gameId], ...patch } } }
 }
 
-const GAME_KEYS = Object.keys(DEFAULT_GAME_SETTINGS) as (keyof GameSettings)[]
+/** Per-game settings older versions kept for all games. */
+const LEGACY_GAME_KEYS = ['autoFound', 'showCreatures', 'showAnimals', 'playTogether'] as const
 const SETTING_KEYS = Object.keys(DEFAULT_SETTINGS) as (keyof Settings)[]
 
 /** Saved settings as older versions may have left them. */
@@ -102,8 +126,9 @@ export function readSettings(saved: SavedSettings | null | undefined, gameIds: s
   }
   settings.hud = migrateHud(raw.hud)
   const legacy: Partial<GameSettings> = {}
-  for (const key of GAME_KEYS) {
-    if (typeof raw[key] === 'boolean') legacy[key] = raw[key]
+  for (const key of LEGACY_GAME_KEYS) {
+    const value = raw[key]
+    if (typeof value === 'boolean') legacy[key] = value
   }
   if (Object.keys(legacy).length) {
     const games = { ...settings.games }

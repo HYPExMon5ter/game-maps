@@ -14,11 +14,15 @@
 //! - `UIInGameTextChat.IsChatInputActive`, `QuantumConsole.IsActive`: suppress hotkeys
 //!   while typing.
 
+mod creatures;
+mod marks;
+mod session;
+
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::time::{Duration, Instant};
 
-use game_maps_protocol::{Capabilities, LocalPlayer, Marker, MarkerKind, RemotePlayer, TeleportTarget, Vec3, WorldLayer, WorldSnapshot};
+use game_maps_protocol::{Capabilities, Creature, GameWorld, LocalPlayer, Marker, MarkerKind, MultiplayerSession, RemotePlayer, TeleportTarget, Vec3, WorldKind, WorldLayer, WorldSnapshot};
 use unity_runtime::{read_string, Field, ListLayout, ManagedObject, Method, Runtime, Vector3};
 
 use super::{to_proto, to_unity, Cx, Provider};
@@ -38,6 +42,16 @@ const REMOTE_REFRESH: Duration = Duration::from_millis(100);
 const MARKER_REFRESH: Duration = Duration::from_millis(250);
 /// Names change rarely and reading them goes through Fusion's networked properties.
 const NAME_REFRESH: Duration = Duration::from_secs(5);
+/// How often the loaded world and session are read (they only change when loading another).
+const WORLD_REFRESH: Duration = Duration::from_secs(2);
+const CREATURE_REFRESH: Duration = Duration::from_millis(250);
+/// How often placed flags are searched for (an object search; they rarely change), and
+/// how often if a search takes longer than `SLOW_FLAG_SEARCH`, to stay out of the way.
+const FLAG_REFRESH: Duration = Duration::from_secs(10);
+const SLOW_FLAG_REFRESH: Duration = Duration::from_secs(300);
+const SLOW_FLAG_SEARCH: Duration = Duration::from_millis(10);
+/// Creatures farther than this from the player are left out.
+const CREATURE_RADIUS: f32 = 500.0;
 const MAX_ENTITIES: usize = 256;
 /// Teleport ground probe: cast down from this height above sea level.
 const PROBE_HEIGHT: f32 = 600.0;
@@ -102,6 +116,19 @@ struct ChatMembers {
     active: Field,
 }
 
+/// `Mainframe.code.SaveManager.CurrentWorldGuid/Name` for your own worlds, and
+/// `Mainframe.code.WorldManager.WorldIdentifier/WorldName` (from the host) when joining.
+struct SaveMembers {
+    mainframe: Field,
+    save_manager: Method,
+    world_valid: Option<Method>,
+    world_guid: Method,
+    world_name: Option<Method>,
+    world_manager: Option<Method>,
+    session_world_name: Option<Method>,
+    session_world_id: Option<Method>,
+}
+
 struct ConsoleMembers {
     mainframe: Field,
     console: Field,
@@ -134,6 +161,18 @@ pub struct Sunkenland {
     console: Option<ConsoleMembers>,
     teleport: Option<TeleportMembers>,
     entities: EntityMembers,
+    save: Option<SaveMembers>,
+    creature_members: Option<creatures::Creatures>,
+    mark_members: Option<marks::MapMarks>,
+    /// Map marks, read with the world (they rarely change).
+    map_marks: Vec<Marker>,
+    logged_marks: bool,
+    flag_members: Option<marks::Flags>,
+    flags: Vec<Marker>,
+    last_flag_refresh: Option<Instant>,
+    flag_refresh: Duration,
+    logged_flags: bool,
+    session_members: Option<session::Session>,
     /// One layout serves every `List<T>` of reference types.
     list_layout: Option<ListLayout>,
     notes: Vec<String>,
@@ -146,6 +185,12 @@ pub struct Sunkenland {
     /// Display names per object, refreshed every [`NAME_REFRESH`].
     names: HashMap<usize, String>,
     names_at: Option<Instant>,
+    last_world_refresh: Option<Instant>,
+    game_world: Option<GameWorld>,
+    session: Option<MultiplayerSession>,
+    last_creature_refresh: Option<Instant>,
+    nearby: Vec<Creature>,
+    logged_creatures: bool,
 }
 
 // Raw object pointers are only dereferenced on the main thread.
@@ -263,6 +308,39 @@ impl Sunkenland {
             teleport.is_some(),
             teleport.as_ref().is_some_and(|t| t.raycast.is_some()),
         ));
+        let save = (|| {
+            let mf = rt.class("", "Mainframe").ok()?;
+            let sm = rt.class("", "SaveManager").ok()?;
+            let wm = rt.class("", "WorldManager").ok();
+            Some(SaveMembers {
+                mainframe: static_field(rt, mf, "code")?,
+                save_manager: rt.method(mf, "get_SaveManager", 0).ok()?,
+                world_valid: rt.method(sm, "get_IsCurrentWorldValid", 0).ok(),
+                world_guid: rt.method(sm, "get_CurrentWorldGuid", 0).ok()?,
+                world_name: rt.method(sm, "get_CurrentWorldName", 0).ok(),
+                world_manager: rt.method(mf, "get_WorldManager", 0).ok(),
+                session_world_name: wm.and_then(|c| rt.method(c, "get_WorldName", 0).ok()),
+                session_world_id: wm.and_then(|c| rt.method(c, "get_WorldIdentifier", 0).ok()),
+            })
+        })();
+        notes.push(format!(
+            "Sunkenland world detection: own={} valid_check={} name={} joined={}",
+            save.is_some(),
+            save.as_ref().is_some_and(|s| s.world_valid.is_some()),
+            save.as_ref().is_some_and(|s| s.world_name.is_some()),
+            save.as_ref().is_some_and(|s| s.world_manager.is_some() && s.session_world_name.is_some()),
+        ));
+        let creature_members = creatures::Creatures::resolve(rt, world_class);
+        let session_members = session::Session::resolve(rt);
+        let mark_members = marks::MapMarks::resolve(rt, global_class);
+        let flag_members = marks::Flags::resolve(rt);
+        notes.push(format!("Sunkenland map marks: {} flags: {}", mark_members.is_some(), flag_members.is_some()));
+        notes.push(format!(
+            "Sunkenland creatures={} ({} types) session={}",
+            creature_members.is_some(),
+            creature_members.as_ref().map_or(0, |c| c.type_count()),
+            session_members.is_some(),
+        ));
         notes.push(format!(
             "Sunkenland markers: companions={} boats={} helicopters={}",
             entities.assistant_position.is_some(),
@@ -280,6 +358,17 @@ impl Sunkenland {
             console,
             teleport,
             entities,
+            save,
+            creature_members,
+            mark_members,
+            map_marks: Vec::new(),
+            logged_marks: false,
+            flag_members,
+            flags: Vec::new(),
+            last_flag_refresh: None,
+            flag_refresh: FLAG_REFRESH,
+            logged_flags: false,
+            session_members,
             list_layout: None,
             notes,
             last_remote_refresh: None,
@@ -289,6 +378,12 @@ impl Sunkenland {
             markers: Vec::new(),
             names: HashMap::new(),
             names_at: None,
+            last_world_refresh: None,
+            game_world: None,
+            session: None,
+            last_creature_refresh: None,
+            nearby: Vec::new(),
+            logged_creatures: false,
         })
     }
 
@@ -312,6 +407,96 @@ impl Sunkenland {
             player
         } else {
             std::ptr::null_mut()
+        }
+    }
+
+    /// The world that's loaded: your own (by its id) or the one you joined (by what its
+    /// host publishes).
+    unsafe fn read_world(&self, cx: &Cx, joined: bool) -> Option<GameWorld> {
+        let s = self.save.as_ref()?;
+        let mainframe: *mut ManagedObject = cx.rt.static_value(s.mainframe);
+        if !cx.unity.is_alive(mainframe) {
+            return None;
+        }
+        let call = |m: &Method, this: *mut ManagedObject| cx.rt.invoke(m, this, &mut []).ok().filter(|o| !o.is_null());
+        let manager = call(&s.save_manager, mainframe)?;
+        let own = s.world_valid.as_ref().is_none_or(|m| call(m, manager).and_then(|b| cx.rt.unbox::<bool>(b).ok()).unwrap_or(false));
+        if own && !joined {
+            let id = call(&s.world_guid, manager).and_then(|g| cx.rt.guid_or_string(g)).filter(|g| !g.is_empty() && !g.bytes().all(|b| b == b'0' || b == b'-'))?;
+            let name = s.world_name.as_ref().and_then(|m| read_string(call(m, manager)?)).filter(|n| !n.is_empty());
+            let kind = if self.session.is_some() { WorldKind::Hosted } else { WorldKind::SinglePlayer };
+            return Some(GameWorld { id: format!("world:{id}"), name, kind });
+        }
+        let world_manager = call(s.world_manager.as_ref()?, mainframe)?;
+        let name = read_string(call(s.session_world_name.as_ref()?, world_manager)?).filter(|n| !n.is_empty())?;
+        let id = s.session_world_id.as_ref().and_then(|m| read_string(call(m, world_manager)?)).filter(|i| !i.is_empty());
+        Some(GameWorld { id: format!("joined:{}", id.as_deref().unwrap_or(&name)), name: Some(name), kind: WorldKind::Joined })
+    }
+
+    unsafe fn refresh_flags(&mut self, cx: &Cx) {
+        let Some(members) = &self.flag_members else { return };
+        let started = Instant::now();
+        match members.read(cx.rt, cx.unity) {
+            Ok(flags) => {
+                if !self.logged_flags {
+                    self.logged_flags = true;
+                    let ms = started.elapsed().as_secs_f32() * 1000.0;
+                    self.notes.push(format!("Flags on first read, in {ms:.2} ms: {:?}", flags.iter().map(|f| (&f.label, f.position)).collect::<Vec<_>>()));
+                }
+                self.flags = flags;
+                let took = started.elapsed();
+                self.flag_refresh = if took > SLOW_FLAG_SEARCH { SLOW_FLAG_REFRESH } else { FLAG_REFRESH };
+                if took > SLOW_FLAG_SEARCH {
+                    crate::filelog::write(&format!("slow flag search: {:.1} ms", took.as_secs_f32() * 1000.0));
+                }
+            }
+            Err(e) => {
+                self.notes.push(format!("Flags disabled: {e}"));
+                self.flag_members = None;
+            }
+        }
+    }
+
+    unsafe fn refresh_map_marks(&mut self, cx: &Cx) {
+        let Some(g) = &self.global else { return };
+        let Some(members) = &self.mark_members else { return };
+        let global: *mut ManagedObject = cx.rt.static_value(g.instance);
+        if !cx.unity.is_alive(global) {
+            return;
+        }
+        let sea = self.world_scene(cx).and_then(|(w, scene)| w.ocean_y.map(|f| f.get::<f32>(scene))).unwrap_or(0.0);
+        match members.read(cx.rt, global, sea) {
+            Ok(marks) => {
+                if !self.logged_marks {
+                    self.logged_marks = true;
+                    self.notes.push(format!("Map marks on first read: {:?}", marks.iter().map(|m| (&m.label, m.position)).collect::<Vec<_>>()));
+                }
+                self.map_marks = marks;
+            }
+            Err(e) => {
+                self.notes.push(format!("Map marks disabled: {e}"));
+                self.mark_members = None;
+            }
+        }
+    }
+
+    unsafe fn refresh_creatures(&mut self, cx: &Cx, around: Vector3) {
+        let Some(scene) = self.world_scene(cx).map(|(_, s)| s) else { return };
+        let Some(members) = self.creature_members.as_mut() else { return };
+        match members.read(cx.rt, cx.unity, scene, around, CREATURE_RADIUS) {
+            Ok(found) => {
+                if !self.logged_creatures {
+                    self.logged_creatures = true;
+                    let names: Vec<String> = found.iter().map(|c| format!("{} ({:?})", c.name, c.kind)).collect();
+                    self.notes.push(format!("Creatures around on first read: {} [{}]", found.len(), names.join(", ")));
+                }
+                self.nearby = found;
+            }
+            Err(e) => {
+                self.notes.push(format!("Creatures disabled: {e}"));
+                self.creature_members = None;
+                self.nearby.clear();
+            }
         }
     }
 
@@ -526,10 +711,45 @@ impl Provider for Sunkenland {
             self.others.clear();
             self.markers.clear();
             self.names.clear();
+            self.game_world = None;
+            self.session = None;
+            self.nearby.clear();
         } else {
+            if self.last_world_refresh.is_none_or(|t| now - t >= WORLD_REFRESH) {
+                self.last_world_refresh = Some(now);
+                let state = self.session_members.as_mut().and_then(|m| m.read(cx.rt));
+                let joined = state.as_ref().is_some_and(|s| s.joined);
+                let session = state.and_then(|s| s.session);
+                if session != self.session {
+                    self.notes.push(match &session {
+                        Some(s) => format!("Multiplayer session joined: {} as {:?}", s.id, s.player_name),
+                        None => "Not in a multiplayer session".into(),
+                    });
+                    self.session = session;
+                }
+                self.refresh_map_marks(cx);
+                let world = self.read_world(cx, joined);
+                if world != self.game_world {
+                    self.notes.push(match &world {
+                        Some(w) => format!("World: {} {:?} ({:?})", w.id, w.name, w.kind),
+                        None => "World: none".into(),
+                    });
+                    self.game_world = world;
+                }
+            }
             if self.names_at.is_none_or(|t| now - t >= NAME_REFRESH) {
                 self.names_at = Some(now);
                 self.names.clear();
+            }
+            if self.last_flag_refresh.is_none_or(|t| now - t >= self.flag_refresh) {
+                self.last_flag_refresh = Some(now);
+                self.refresh_flags(cx);
+            }
+            if self.last_creature_refresh.is_none_or(|t| now - t >= CREATURE_REFRESH) {
+                self.last_creature_refresh = Some(now);
+                if let Some(p) = &local {
+                    self.refresh_creatures(cx, to_unity(p.position));
+                }
             }
             if self.last_remote_refresh.is_none_or(|t| now - t >= REMOTE_REFRESH) {
                 self.last_remote_refresh = Some(now);
@@ -540,7 +760,7 @@ impl Provider for Sunkenland {
                 self.refresh_markers(cx);
             }
         }
-        WorldSnapshot { frame, local, others: self.others.clone(), markers: self.markers.clone(), creatures: Vec::new(), session: None }
+        WorldSnapshot { frame, local, others: self.others.clone(), markers: self.markers.iter().chain(&self.map_marks).chain(&self.flags).cloned().collect(), creatures: self.nearby.clone(), session: self.session.clone(), world: self.game_world.clone() }
     }
 
     unsafe fn teleport(&mut self, cx: &Cx, target: &TeleportTarget) -> Result<(), String> {
@@ -582,7 +802,7 @@ impl Provider for Sunkenland {
                     .iter()
                     .find(|o| &o.id == id)
                     .map(|o| o.position)
-                    .or_else(|| self.markers.iter().find(|m| &m.id == id).map(|m| m.position))
+                    .or_else(|| self.markers.iter().chain(&self.map_marks).chain(&self.flags).find(|m| &m.id == id).map(|m| m.position))
                     .ok_or("player not found")?;
                 let mut p = to_unity(position);
                 p.x += 1.0;
@@ -683,7 +903,7 @@ mod tests {
         let mut p = Sunkenland::detect(&rt).expect("provider detected");
         let notes = p.take_notes().join("\n");
         println!("{notes}");
-        for want in ["global=true", "world=true", "players=true", "chat=true", "console=true", "teleport=true", "ground_probe=true", "companions=true", "boats=true", "helicopters=true"] {
+        for want in ["global=true", "world=true", "players=true", "chat=true", "console=true", "teleport=true", "ground_probe=true", "companions=true", "boats=true", "helicopters=true", "own=true", "valid_check=true", "name=true", "joined=true", "creatures=true (10 types)", "session=true", "map marks: true flags: true"] {
             assert!(notes.contains(want), "missing {want} in:\n{notes}");
         }
         let caps = p.capabilities();

@@ -75,7 +75,8 @@
       "name": "Research & Blueprints",
       "color": "#2f80ed",
       "icon": "game:ICON RESEARCH",
-      "visible": true
+      "visible": true,
+      "autoFound": true
     },
     {
       "id": "fragment",

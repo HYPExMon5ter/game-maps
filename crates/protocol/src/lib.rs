@@ -137,6 +137,33 @@ pub struct WorldSnapshot {
     /// game doesn't expose one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<MultiplayerSession>,
+    /// The world or save that's loaded; `None` in menus or when the game doesn't expose it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub world: Option<GameWorld>,
+}
+
+/// A world or save, so the app can keep found items, pins and explored areas apart
+/// for each one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GameWorld {
+    /// Stable for this world across sessions (e.g. the save's id), different for other
+    /// worlds of the same game. Unique within the game, not across games.
+    pub id: String,
+    /// The world's name as the game shows it, if it has one.
+    pub name: Option<String>,
+    pub kind: WorldKind,
+}
+
+/// How the player is in the world.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorldKind {
+    /// Their own world, alone.
+    SinglePlayer,
+    /// Their own world, with others joining.
+    Hosted,
+    /// Someone else's world.
+    Joined,
 }
 
 /// A multiplayer session, as every player in it sees it: lets copies of the app in the
@@ -386,6 +413,7 @@ mod tests {
                 }],
                 creatures: vec![Creature { id: "actor:1".into(), kind: CreatureKind::Hostile, name: "Fingers".into(), position: Vec3::new(6.0, 7.0, 8.0) }],
                 session: Some(MultiplayerSession { id: "lobby:1".into(), player_name: Some("A".into()) }),
+                world: Some(GameWorld { id: "sp:42".into(), name: Some("Island".into()), kind: WorldKind::SinglePlayer }),
             }),
             AgentMessage::HotkeyPressed { action: HotkeyAction::ToggleMap },
             AgentMessage::HotkeyPressed { action: HotkeyAction::ZoomOut },

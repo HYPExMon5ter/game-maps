@@ -72,6 +72,8 @@ pub struct AppSettings {
     /// games); `None` turns it off.
     pub back_key: Option<Hotkey>,
     pub auto_update: bool,
+    /// Monitor (by name) the map window is kept open on; `None` when it's off.
+    pub map_window: Option<String>,
 }
 
 /// Backspace: rarely bound by games, and easy to reach.
@@ -87,6 +89,7 @@ impl Default for AppSettings {
             zoom_keys: ZoomKeys::default(),
             back_key: Some(default_back_key()),
             auto_update: true,
+            map_window: None,
         }
     }
 }

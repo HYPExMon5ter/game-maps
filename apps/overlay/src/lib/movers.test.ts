@@ -31,4 +31,20 @@ describe('movers', () => {
     ])
     expect(findMover(snap, 'gps:2')?.icon).toBe('GolfCartIcon')
   })
+  it('lists friendly creatures (Virginia) as companions, once', () => {
+    const withCreatures: WorldSnapshot = {
+      ...snap,
+      creatures: [
+        { id: 'actor:a', kind: 'friendly', name: 'Virginia', position: { x: 1, y: 1, z: 1 } },
+        { id: 'actor:b', kind: 'friendly', name: 'Kelvin', position: { x: 4, y: 5, z: 6 } },
+        { id: 'actor:c', kind: 'hostile', name: 'Fingers', position: { x: 0, y: 0, z: 0 } },
+      ],
+    }
+    expect(movers(withCreatures).map((m) => [m.id, m.name, m.kind])).toEqual([
+      ['p1', 'Alex', 'player'],
+      ['gps:1', 'Kelvin', 'companion'],
+      ['actor:a', 'Virginia', 'companion'],
+    ])
+    expect(findMover(withCreatures, 'actor:a')?.name).toBe('Virginia')
+  })
 })

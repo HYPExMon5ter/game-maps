@@ -10,13 +10,15 @@
 import { Download, FolderOpen, Gamepad2, Keyboard, Map as MapIcon, MapPinned, Navigation, PictureInPicture2, RefreshCw, SlidersHorizontal, Users, Wrench, type LucideIcon } from 'lucide-react'
 import { useCallback, useEffect, useState, type ComponentType, type ReactNode } from 'react'
 import { agentLogs } from '../lib/agentLogs'
-import { backend, events, type AppSettings, type GameEntry, type HookMode, type UpdateState, type ZoomKeys } from '../lib/backend'
+import { backend, events, type AppSettings, type GameEntry, type HookMode, type MonitorInfo, type UpdateState, type ZoomKeys } from '../lib/backend'
+import { formatDistance } from '../lib/compass'
 import { maxMinimapSize, MIN_MINIMAP_SIZE } from '../lib/minimap'
 import type { AgentLog, Corner, Hotkey, HotkeyAction, LinkStatus } from '../lib/protocol'
 import { readyPeers, useSyncStore } from '../lib/sync/sync'
 import { MAX_UI_SCALE, MIN_UI_SCALE, useUiScale } from '../lib/uiScale'
 import { Button, Segmented, Slider, Toggle } from '../ui/controls'
 import { HotkeyInput } from '../ui/HotkeyInput'
+import { resetFog } from '../state/fog'
 import { gameSettings, type GameSettings, type HudSettings, type Settings } from './model'
 import { mapHotkey, useSettings } from './store'
 
@@ -93,8 +95,10 @@ function hudToggle(key: { [K in keyof HudSettings]: HudSettings[K] extends boole
   }
 }
 
+type GameFlag = { [K in keyof GameSettings]: GameSettings[K] extends boolean ? K : never }[keyof GameSettings]
+
 /** A switch for a setting of the panel's game. */
-function gameToggle(key: keyof GameSettings, requires?: keyof GameSettings): ComponentType<ControlProps> {
+function gameToggle(key: GameFlag, requires?: GameFlag): ComponentType<ControlProps> {
   return function GameToggle({ label, hint, ctx }) {
     const id = ctx.game?.id ?? null
     const checked = useSettings((s) => gameSettings(s.ui, id)[key])
@@ -103,6 +107,16 @@ function gameToggle(key: keyof GameSettings, requires?: keyof GameSettings): Com
     if (!id) return null
     return <Toggle label={label} hint={hint} checked={checked} disabled={!enabled} onChange={(v) => setGameSettings(id, { [key]: v })} />
   }
+}
+
+function DangerDistance({ label, ctx }: ControlProps) {
+  const id = ctx.game?.id ?? null
+  const meters = useSettings((s) => gameSettings(s.ui, id).dangerMeters)
+  const enabled = useSettings((s) => gameSettings(s.ui, id).dangerAlert)
+  const units = useSettings((s) => s.ui.units)
+  const setGameSettings = useSettings((s) => s.setGameSettings)
+  if (!id || !enabled) return null
+  return <Slider label={label} value={meters} min={10} max={100} step={5} format={(m) => formatDistance(m, units)} onChange={(dangerMeters) => setGameSettings(id, { dangerMeters })} />
 }
 
 function uiSlider(
@@ -303,6 +317,105 @@ const CORNERS: { id: Corner; label: string }[] = [
   { id: 'bottom_right', label: 'Bottom right' },
 ]
 
+function monitorLabel(m: MonitorInfo, i: number): string {
+  return `Monitor ${i + 1} (${m.width}×${m.height}${m.primary ? ', main' : ''})`
+}
+
+function MapWindow({ label, hint, ctx }: ControlProps) {
+  const current = useSettings((s) => s.app?.map_window ?? null)
+  const save = useSaveApp(ctx)
+  const [monitors, setMonitors] = useState<MonitorInfo[]>([])
+  useEffect(() => {
+    void backend.listMonitors().then(setMonitors)
+  }, [])
+  // A second screen if there is one: the map next to the game, not over it.
+  const preferred = monitors.find((m) => !m.primary) ?? monitors[0]
+  const set = (monitor: string | null) => void save(() => backend.setMapWindow(monitor))
+  return (
+    <>
+      <Toggle label={label} hint={hint} checked={current !== null} disabled={!preferred} onChange={(on) => set(on ? (preferred?.name ?? null) : null)} />
+      {current !== null && monitors.length > 1 && (
+        <Row label="Monitor">
+          <select
+            value={current}
+            onChange={(e) => set(e.target.value)}
+            aria-label="Monitor for the map window"
+            className="rounded-md bg-black/30 px-1.5 py-1 text-[12px] text-ink outline-none"
+          >
+            {monitors.map((m, i) => (
+              <option key={m.name} value={m.name} className="bg-panel-solid">
+                {monitorLabel(m, i)}
+              </option>
+            ))}
+            {!monitors.some((m) => m.name === current) && <option value={current}>Disconnected monitor</option>}
+          </select>
+        </Row>
+      )}
+    </>
+  )
+}
+
+function FogOfWar({ label, hint, ctx }: ControlProps) {
+  const enabled = useSettings((s) => s.ui.fogOfWar)
+  const hideMap = useSettings((s) => s.ui.fogHideMap)
+  const hidePins = useSettings((s) => s.ui.fogHidePins)
+  const radius = useSettings((s) => s.ui.fogRadius)
+  const units = useSettings((s) => s.ui.units)
+  const setUi = useSettings((s) => s.setUi)
+  const [confirming, setConfirming] = useState(false)
+  return (
+    <>
+      <Toggle label={label} hint={hint} checked={enabled} onChange={(fogOfWar) => setUi({ fogOfWar })} />
+      <div className="ml-3 border-l border-line pl-3">
+        <Toggle
+          label="Hide unexplored map"
+          hint="Cover what you haven't explored instead of shading it"
+          checked={hideMap}
+          disabled={!enabled}
+          onChange={(fogHideMap) => setUi({ fogHideMap })}
+        />
+        <Toggle
+          label="Hide pins in unexplored areas"
+          hint="On the map, in search and in progress lists; your own, found and tracked pins always show"
+          checked={hidePins}
+          disabled={!enabled}
+          onChange={(fogHidePins) => setUi({ fogHidePins })}
+        />
+        {enabled && (
+          <div className="py-1">
+            <Slider
+              label="Reveal distance"
+              value={radius}
+              min={25}
+              max={300}
+              step={25}
+              format={(m) => formatDistance(m, units)}
+              onChange={(fogRadius) => setUi({ fogRadius })}
+            />
+            <span className="block text-[11px] text-ink-faint">How far around you the map is revealed as you explore</span>
+          </div>
+        )}
+      </div>
+      {ctx.window === 'map' && (
+        <div className="flex items-center justify-end gap-2 pb-1">
+          {confirming && <span className="text-[11px] text-ink-faint">Forget explored areas in this world?</span>}
+          <Button
+            tone={confirming ? 'danger' : 'default'}
+            onClick={() => {
+              if (!confirming) return setConfirming(true)
+              setConfirming(false)
+              void resetFog()
+            }}
+          >
+            {confirming ? 'Reset' : 'Reset explored areas'}
+          </Button>
+          {confirming && <Button onClick={() => setConfirming(false)}>Cancel</Button>}
+        </div>
+      )}
+    </>
+  )
+}
+
 function MinimapCorner({ label, hint }: ControlProps) {
   const corner = useSettings((s) => s.ui.hud.corner)
   const setHud = useSettings((s) => s.setHud)
@@ -442,14 +555,17 @@ export const SETTINGS: SettingDef[] = [
   { id: 'zoom-reset', category: 'keys', scope: 'all', label: 'Default zoom keys', hint: 'Numpad + and −, and = and −', keywords: 'reset restore hotkey', Control: ResetZoomKeys },
 
   // Full map
+  { id: 'map-window', category: 'map', scope: 'all', label: 'Map window on another monitor', hint: 'Keeps the full map open on a second screen while you play; closing the window turns it off', keywords: 'second monitor screen display dual window always', Control: MapWindow },
   { id: 'map-opacity', category: 'map', scope: 'all', label: 'Opacity', hint: 'The game shows through below 100%', keywords: 'transparency see through', Control: uiSlider('opacity', { min: 0.4, max: 1, step: 0.02 }) },
   { id: 'map-size', category: 'map', scope: 'all', label: 'Size', keywords: 'scale panel screen', Control: uiSlider('panelScale', { min: 0.5, max: 1, step: 0.05 }) },
   { id: 'pin-size', category: 'map', scope: 'all', label: 'Pin size', keywords: 'icon marker bigger smaller', Control: uiSlider('pinSize', { min: 0.6, max: 1.6, step: 0.05 }) },
+  { id: 'fog-of-war', category: 'map', scope: 'all', label: 'Fog of war', hint: "Only what you've explored is revealed, so the map doesn't spoil anything (each world keeps its own)", keywords: 'explored unexplored discover reveal radius distance range reset spoiler spoil hide pins icons', Control: FogOfWar },
   { id: 'declutter', category: 'map', scope: 'all', label: 'Declutter pins', hint: 'Where pins overlap, the most important stay; the rest show as dots until you zoom in', keywords: 'overlap clutter icons', Control: uiToggle('declutter') },
 
   // Mini-map
   { id: 'minimap', category: 'minimap', scope: 'all', label: 'Mini-map while playing', hint: 'Click-through map in a corner of the screen', keywords: 'minimap hud radar overlay', Control: hudToggle('minimap') },
   { id: 'minimap-rotate', category: 'minimap', scope: 'all', label: 'Rotate with view', hint: 'The direction you face points up', keywords: 'minimap heading north compass', Control: hudToggle('rotateWithPlayer') },
+  { id: 'minimap-auto-hide', category: 'minimap', scope: 'all', label: 'Hide for alerts', hint: 'Fades out while danger markers or pings are on or next to it, so nothing is hidden behind it', keywords: 'minimap auto hide fight enemies overlap danger', Control: hudToggle('autoHide') },
   { id: 'minimap-corner', category: 'minimap', scope: 'all', label: 'Corner', keywords: 'minimap position place screen', Control: MinimapCorner },
   { id: 'minimap-width', category: 'minimap', scope: 'all', label: 'Width', keywords: 'minimap size', Control: hudSizeSlider('width') },
   { id: 'minimap-height', category: 'minimap', scope: 'all', label: 'Height', keywords: 'minimap size', Control: hudSizeSlider('height') },
@@ -460,12 +576,17 @@ export const SETTINGS: SettingDef[] = [
   { id: 'creatures', category: 'content', scope: 'game', label: 'Nearby creatures', hint: 'Enemies, companions and animals around you, as far as the game keeps them', keywords: 'enemies cannibals mutants npc radar', applies: live, Control: gameToggle('showCreatures') },
   { id: 'animals', category: 'content', scope: 'game', label: 'Include animals', hint: 'Wildlife as well as enemies and companions', keywords: 'creatures wildlife deer', applies: live, Control: gameToggle('showAnimals', 'showCreatures') },
 
+  { id: 'danger-alert', category: 'content', scope: 'game', label: 'Danger alert', hint: 'A count at the top of the screen, and red arrows at the screen edges pointing toward hostiles close by', keywords: 'enemies warning threat nearby cannibals hud', applies: live, Control: gameToggle('dangerAlert') },
+  { id: 'danger-distance', category: 'content', scope: 'game', label: 'Alert distance', keywords: 'danger radius range enemies', applies: live, Control: DangerDistance },
+
   // Tracking
   { id: 'route', category: 'tracking', scope: 'all', label: 'Route to what you track', hint: 'The walking path on the map and mini-map', keywords: 'path navigation directions', Control: uiToggle('showRoute') },
   { id: 'waypoint', category: 'tracking', scope: 'all', label: 'Waypoint in the game', hint: 'Shows what you track over the game, with its distance', keywords: 'marker objective hud compass', Control: hudToggle('waypoint') },
 
   // Multiplayer
   { id: 'play-together', category: 'multiplayer', scope: 'game', label: 'Play together', hint: 'Connect with others running Game Maps on your server to share what you track, map pings and pins', keywords: 'sync friends coop share', applies: live, Control: PlayTogether },
+
+  { id: 'pings-in-game', category: 'multiplayer', scope: 'game', label: 'Pings in the game', hint: 'Map pings from you and your friends show over the game for 30 seconds', keywords: 'ping marker friends hud', applies: live, Control: gameToggle('pingsInGame') },
 
   // Advanced
   { id: 'diagnostics', category: 'advanced', scope: 'all', label: 'Connection', keywords: 'diagnostics logs debug agent status', Control: Diagnostics },

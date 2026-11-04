@@ -191,6 +191,7 @@ unsafe fn filter_message(msg: *mut MSG) {
 }
 
 unsafe extern "system" fn peek_message_w(msg: *mut MSG, hwnd: HWND, min: u32, max: u32, remove: u32) -> BOOL {
+    crate::hook::pump_tick();
     let original: PeekMessageFn = std::mem::transmute(PEEK_W.load(Ordering::Relaxed));
     let r = original(msg, hwnd, min, max, remove);
     if r.as_bool() {
@@ -200,6 +201,7 @@ unsafe extern "system" fn peek_message_w(msg: *mut MSG, hwnd: HWND, min: u32, ma
 }
 
 unsafe extern "system" fn peek_message_a(msg: *mut MSG, hwnd: HWND, min: u32, max: u32, remove: u32) -> BOOL {
+    crate::hook::pump_tick();
     let original: PeekMessageFn = std::mem::transmute(PEEK_A.load(Ordering::Relaxed));
     let r = original(msg, hwnd, min, max, remove);
     if r.as_bool() {

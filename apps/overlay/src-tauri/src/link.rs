@@ -23,6 +23,7 @@ use tokio::sync::{mpsc, oneshot, Notify};
 
 use crate::games::GameEntry;
 use crate::injector;
+use crate::map_window;
 use crate::overlay;
 use crate::settings::{self, HookMode};
 
@@ -40,11 +41,22 @@ const EXPORT_TIMEOUT: Duration = Duration::from_secs(600);
 /// How long to keep trying to reach a freshly injected agent (it waits for the game's
 /// scripting runtime, which can take a while during game startup).
 const CONNECT_AFTER_INJECT: Duration = Duration::from_secs(180);
+/// The agent sends something at least this often while it's working.
+const LIVE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Longest wait between attempts to get an agent going again.
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
+/// A session this long counts as a success: the next failure starts over.
+const STABLE_SESSION: Duration = Duration::from_secs(30);
 /// How long an outdated agent may take to unhook and unload after being told to detach.
 const AGENT_UNLOAD_TIMEOUT: Duration = Duration::from_secs(15);
 
 const ERROR_FILE_NOT_FOUND: i32 = 2;
 const ERROR_PIPE_BUSY: i32 = 231;
+
+/// Wait before the next attempt after `failures` failed ones: 5 s, doubling up to a minute.
+fn retry_delay(failures: u32) -> Duration {
+    Duration::from_secs(5u64.saturating_mul(1u64 << failures.min(10))).min(MAX_RETRY_DELAY)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionEnd {
@@ -87,6 +99,8 @@ struct Inner {
     teleported_from: Vec<Vec3>,
     /// Last snapshot sent to the UI while the map was hidden.
     hidden_sent_at: Option<Instant>,
+    /// Last message from the agent.
+    last_message: Option<Instant>,
 }
 
 /// Per-process hooking decisions.
@@ -142,6 +156,7 @@ impl<T> Pending<T> {
     }
 }
 
+#[derive(Clone)]
 pub struct LinkConfig {
     pub games: Vec<GameEntry>,
     pub agent_dll: PathBuf,
@@ -157,6 +172,7 @@ impl AgentLink {
                 sender: None,
                 teleported_from: Vec::new(),
                 hidden_sent_at: None,
+                last_message: None,
             }),
             control: Mutex::new(Control::default()),
             wake: Notify::new(),
@@ -168,7 +184,17 @@ impl AgentLink {
             next_request: AtomicU32::new(1),
         });
         let l = link.clone();
-        tauri::async_runtime::spawn(async move { l.run(app, config).await });
+        // The link is what everything live depends on: if it ever panics, start it again.
+        tauri::async_runtime::spawn(async move {
+            loop {
+                let (run, app, config) = (l.clone(), app.clone(), config.clone());
+                match tauri::async_runtime::spawn(async move { run.run(app, config).await }).await {
+                    Ok(()) => break,
+                    Err(e) => log::error!("agent link stopped: {e}; restarting it"),
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        });
         link
     }
 
@@ -229,6 +255,13 @@ impl AgentLink {
                 let _ = tx.send(AppMessage::SetHotkeys { hotkeys });
             }
         }
+    }
+
+    /// Whether the agent is connected and working (it can be connected with its frame
+    /// hooks failing, or stuck). Without it, the map still opens as a plain map.
+    pub fn is_live(&self) -> bool {
+        let inner = self.inner.lock().unwrap();
+        inner.status.state == LinkState::Connected && inner.last_message.is_some_and(|t| t.elapsed() < LIVE_TIMEOUT)
     }
 
     /// Teleports the player, remembering where they were for [`AgentLink::teleport_back`].
@@ -328,6 +361,8 @@ impl AgentLink {
     }
 
     async fn run(self: Arc<Self>, app: AppHandle, config: LinkConfig) {
+        // Failed attempts in a row.
+        let mut failures: u32 = 0;
         loop {
             let found = config.games.iter().find_map(|g| injector::find_process(&g.process).map(|pid| (g, pid)));
             let Some((game, pid)) = found else {
@@ -367,9 +402,14 @@ impl AgentLink {
 
             match self.connect(pid, &config, may_inject).await {
                 Ok((pipe, expected_module)) => {
-                    if self.session(&app, game, pid, pipe, &expected_module).await == SessionEnd::AgentReplaced {
+                    let started = Instant::now();
+                    let end = self.session(&app, game, pid, pipe, &expected_module).await;
+                    if end == SessionEnd::AgentReplaced {
                         // The outdated agent unloads itself; inject the current one next.
                         self.control.lock().unwrap().injected.remove(&pid);
+                    }
+                    if started.elapsed() >= STABLE_SESSION {
+                        failures = 0;
                     }
                 }
                 Err(ConnectError::NotLoaded) => {
@@ -378,8 +418,13 @@ impl AgentLink {
                     continue;
                 }
                 Err(ConnectError::Failed(message)) => {
+                    log::warn!("cannot connect to {}: {message}", game.id);
                     self.set_status(&app, status(LinkState::Error, Some(message)));
-                    self.idle(Duration::from_secs(5)).await;
+                    // Keep trying, less often the longer it fails. The agent may have died:
+                    // inject it again (a copy that's still loaded makes this harmless).
+                    self.control.lock().unwrap().injected.remove(&pid);
+                    self.idle(retry_delay(failures)).await;
+                    failures = failures.saturating_add(1);
                 }
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
@@ -507,6 +552,7 @@ impl AgentLink {
     }
 
     fn handle(&self, app: &AppHandle, game: &GameEntry, pid: u32, msg: AgentMessage) {
+        self.inner.lock().unwrap().last_message = Some(Instant::now());
         match msg {
             AgentMessage::Hello { protocol_version, agent_version, game: agent_game, capabilities, .. } => {
                 let (state, message) = if protocol_version != PROTOCOL_VERSION {
@@ -524,7 +570,7 @@ impl AgentLink {
                 inner.snapshot = Some(snap.clone());
                 // Hidden map: a slow trickle keeps background features (marking
                 // collectibles found) working without busy-updating the UI.
-                let send = overlay::is_visible(app) || inner.hidden_sent_at.is_none_or(|t| t.elapsed() >= HIDDEN_SNAPSHOT_INTERVAL);
+                let send = overlay::is_visible(app) || map_window::is_open(app) || inner.hidden_sent_at.is_none_or(|t| t.elapsed() >= HIDDEN_SNAPSHOT_INTERVAL);
                 if send {
                     inner.hidden_sent_at = Some(Instant::now());
                     drop(inner);

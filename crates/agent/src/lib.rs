@@ -129,7 +129,9 @@ fn run() {
     shared.log(LogLevel::Info, format!("input guard: {input_guarded} Input functions"));
     shared.log(LogLevel::Info, format!("navigation (routes): {}", shared.unity.has_navigation()));
     if installed.is_empty() {
-        shared.log(LogLevel::Error, "no frame hook could be installed; live features unavailable");
+        hook::enable_pump_ticks();
+        filelog::write("no frame hook could be installed; ticking from the message pump");
+        shared.log(LogLevel::Warn, "no frame hook could be installed; ticking from the message pump");
     } else {
         shared.log(LogLevel::Info, format!("frame hooks: {}", installed.join(", ")));
     }

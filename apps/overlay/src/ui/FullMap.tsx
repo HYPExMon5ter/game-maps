@@ -16,6 +16,7 @@ import { Sidebar } from './Sidebar'
 import { SyncRequests } from './SyncRequests'
 import { TopBar } from './TopBar'
 import { useSettings } from '../settings/store'
+import { IS_MAP_WINDOW } from '../lib/view'
 
 function ContextMenu({
   at,
@@ -103,9 +104,10 @@ function panelPadding(uiScale: number) {
   }
 }
 
+/** The full map: over the game (sized and see-through per the settings), or filling the map window. */
 export function FullMap() {
-  const opacity = useSettings((s) => s.ui.opacity)
-  const scale = useSettings((s) => s.ui.panelScale)
+  const opacity = useSettings((s) => (IS_MAP_WINDOW ? 1 : s.ui.opacity))
+  const scale = useSettings((s) => (IS_MAP_WINDOW ? 1 : s.ui.panelScale))
   const hasSelection = useStore((s) => s.selectedPinId !== null)
   const hasLiveSelection = useStore((s) => s.selectedLiveId !== null)
   const tracking = useStore((s) => s.tracked !== null)
@@ -126,7 +128,8 @@ export function FullMap() {
         {/* Interface layer, scaled for the screen size; the map underneath is not. */}
         <div className="pointer-events-none absolute inset-0" style={{ zoom: uiScale }}>
           <div className="absolute inset-0 flex flex-col gap-3 p-3">
-            <div className="pointer-events-auto">
+            {/* Above the sidebar and cards: its menus open over them. */}
+            <div className="pointer-events-auto relative z-30">
               <TopBar onSettings={() => setSettingsOpen(!settingsOpen)} settingsOpen={settingsOpen} />
             </div>
             <div className="flex min-h-0 flex-1 gap-3">

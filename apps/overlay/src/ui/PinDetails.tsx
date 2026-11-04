@@ -49,6 +49,9 @@ export function PinDetails({ onEdit }: { onEdit: (pin: Pin) => void }) {
         <Button tone={isTracked ? 'primary' : 'default'} onClick={() => setTracked(isTracked ? null : { kind: 'pin', id: pin.id })}>
           <Navigation className="size-4" /> {isTracked ? 'Tracking' : 'Track'}
         </Button>
+        <Button disabled={!canTeleport} title={canTeleport ? undefined : 'Teleport needs the game running'} onClick={() => teleportToPin(pin)}>
+          <Zap className="size-4" /> Teleport
+        </Button>
         {together && (
           <Button
             title="Ask the other players to track this too"
@@ -60,9 +63,6 @@ export function PinDetails({ onEdit }: { onEdit: (pin: Pin) => void }) {
             <Send className="size-4" /> Share
           </Button>
         )}
-        <Button disabled={!canTeleport} title={canTeleport ? undefined : 'Teleport needs the game running'} onClick={() => teleportToPin(pin)}>
-          <Zap className="size-4" /> Teleport
-        </Button>
         <Button tone={found ? 'primary' : 'default'} onClick={() => toggleFound(pin.id)}>
           <Check className="size-4" /> {found ? 'Found' : 'Mark found'}
         </Button>

@@ -35,7 +35,7 @@ pub fn has_meaningful_change(prev: &WorldSnapshot, next: &WorldSnapshot) -> bool
         .iter()
         .zip(&next.creatures)
         .any(|(a, b)| a.id != b.id || a.kind != b.kind || a.position.distance_sq(b.position) > CREATURE_MOVE_EPSILON * CREATURE_MOVE_EPSILON);
-    if creatures_changed || prev.session != next.session {
+    if creatures_changed || prev.session != next.session || prev.world != next.world {
         return true;
     }
     let markers_changed = prev.markers.iter().zip(&next.markers).any(|(a, b)| {
@@ -96,6 +96,7 @@ mod tests {
             markers: vec![],
             creatures: vec![],
             session: None,
+            world: None,
         }
     }
 

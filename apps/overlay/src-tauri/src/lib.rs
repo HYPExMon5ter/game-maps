@@ -7,8 +7,10 @@ mod games;
 mod injector;
 mod launcher;
 mod link;
+mod map_window;
 mod mappacks;
 mod overlay;
+mod recovery;
 mod settings;
 mod updates;
 
@@ -19,7 +21,7 @@ use game_maps_protocol::{GroundPoint, Hotkey, HotkeyAction, PathInfo, RouteCheck
 use tauri::http::{header, Response, StatusCode};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Listener, Manager, State};
+use tauri::{AppHandle, Emitter, Listener, Manager, State};
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_opener::OpenerExt as _;
 
@@ -131,8 +133,10 @@ fn get_overlay_mode(app: AppHandle) -> OverlayMode {
     overlay::mode(&app)
 }
 
+/// Opens `game_id`'s map. A running game's map stays shown over any other.
 #[tauri::command]
-fn open_map(app: AppHandle) {
+fn open_map(app: AppHandle, game_id: String) {
+    let _ = app.emit("show-game", game_id);
     overlay::open(&app);
 }
 
@@ -228,6 +232,26 @@ fn set_zoom_keys(app: AppHandle, link: State<'_, Arc<AgentLink>>, registry: Stat
 #[tauri::command]
 fn set_auto_update(app: AppHandle, enabled: bool) -> Result<AppSettings, String> {
     settings::update(&app, |s| s.auto_update = enabled)
+}
+
+/// An error in a window's UI, for the log.
+#[tauri::command]
+fn log_ui_error(window: tauri::Window, message: String) {
+    log::error!("[ui:{}] {message}", window.label());
+}
+
+/// Monitors the map window can be put on. Async: monitor and window calls wait for the
+/// main thread, where synchronous commands run.
+#[tauri::command]
+async fn list_monitors(app: AppHandle) -> Vec<map_window::MonitorInfo> {
+    map_window::monitors(&app)
+}
+
+/// Keeps the map window open on `monitor` (by name), or closes it (`None`).
+#[tauri::command]
+async fn set_map_window(app: AppHandle, monitor: Option<String>) -> Result<AppSettings, String> {
+    map_window::apply(&app, monitor.as_deref())?;
+    settings::update(&app, |s| s.map_window = monitor)
 }
 
 #[tauri::command]
@@ -380,6 +404,7 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    recovery::log_panics();
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| launcher::show(app)))
         .plugin(
@@ -406,10 +431,15 @@ pub fn run() {
                 overlay::enforce_placement(window.app_handle());
             }
             launcher::WINDOW_LABEL => launcher::on_window_event(window, event),
+            map_window::WINDOW_LABEL => map_window::on_window_event(window, event),
             _ => {}
         })
         .setup(|app| {
             let handle = app.handle().clone();
+            recovery::protect_save_files(&handle);
+            for window in handle.webview_windows().values() {
+                recovery::watch_webview(window);
+            }
             let (paths, agent_dll) = resolve_paths(&handle);
             log::info!("Game Maps {} - games: {}, agent: {}", env!("CARGO_PKG_VERSION"), paths.games.display(), agent_dll.display());
             let registry = games::load_registry(&paths.games);
@@ -437,6 +467,7 @@ pub fn run() {
                 }
             });
 
+            map_window::restore(&handle);
             build_tray(app)?;
             if !std::env::args().any(|a| a == BACKGROUND_ARG) {
                 launcher::show(&handle);
@@ -448,6 +479,9 @@ pub fn run() {
             get_last_snapshot,
             teleport,
             teleport_back,
+            log_ui_error,
+            list_monitors,
+            set_map_window,
             find_path,
             check_route,
             probe_ground,

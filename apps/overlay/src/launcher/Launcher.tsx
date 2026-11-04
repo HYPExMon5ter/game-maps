@@ -254,7 +254,7 @@ function GameRow({
             <Unplug className="size-4" />
           </IconButton>
         )}
-        <IconButton label="Open the map" onClick={() => onAction(backend.openMap)}>
+        <IconButton label="Open the map" onClick={() => onAction(() => backend.openMap(game.id))}>
           <MapIcon className="size-4" />
         </IconButton>
         <IconButton label={open ? 'Hide options' : 'Show options'} aria-expanded={open} aria-controls={detailsId} onClick={() => setOpen(!open)}>

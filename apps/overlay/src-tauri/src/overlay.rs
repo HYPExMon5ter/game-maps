@@ -3,16 +3,21 @@
 //! - `Open`: covers the game's monitor, takes focus and input (full map UI).
 //! - `Pinned`: small click-through HUD (mini-map and/or tracking compass) while playing.
 
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
+use game_maps_protocol::HotkeyAction;
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VIRTUAL_KEY, VK_CONTROL, VK_MENU, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, IsWindow, SetForegroundWindow, SetWindowPos, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER,
 };
 
 use crate::injector;
+use crate::link::AgentLink;
+use crate::settings;
 
 pub const WINDOW_LABEL: &str = "overlay";
 
@@ -285,7 +290,8 @@ pub fn watch_focus(app: AppHandle) {
         .name("overlay-focus".into())
         .spawn(move || loop {
             std::thread::sleep(FOCUS_POLL);
-            sync_with_game(&app);
+            // Must keep running: it's what hides the overlay when the game goes away.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sync_with_game(&app)));
         })
         .expect("spawn overlay focus watcher");
 }
@@ -313,6 +319,27 @@ fn front(app: &AppHandle, game_pid: u32) -> Front {
     }
 }
 
+/// The map key while the agent can't report it (not connected, or not working): the
+/// map then opens as a plain map over the game. Polled, so the game still sees the key.
+fn poll_map_key(app: &AppHandle, in_front: bool) {
+    static WAS_DOWN: AtomicBool = AtomicBool::new(false);
+    let Some(link) = app.try_state::<Arc<AgentLink>>() else { return };
+    let Some(registry) = app.try_state::<crate::Registry>() else { return };
+    let Some(game) = link.status().game_id.and_then(|id| registry.0.iter().find(|g| g.id == id).cloned()) else { return };
+    let Some(key) = settings::get(app).hotkeys(&game).into_iter().find(|h| h.action == HotkeyAction::ToggleMap) else { return };
+    let state = unsafe { GetAsyncKeyState(key.vk as i32) };
+    let (down, tapped) = (state < 0, state & 1 != 0);
+    let was_down = WAS_DOWN.swap(down, Ordering::Relaxed);
+    if !(down || tapped) || was_down || !in_front || link.is_live() || mode(app) == OverlayMode::Open {
+        return;
+    }
+    let held = |vk: VIRTUAL_KEY| unsafe { GetAsyncKeyState(vk.0 as i32) < 0 };
+    if held(VK_CONTROL) == key.ctrl && held(VK_SHIFT) == key.shift && held(VK_MENU) == key.alt {
+        log::info!("opening the map without the agent");
+        open(app);
+    }
+}
+
 fn sync_with_game(app: &AppHandle) {
     let mode = mode(app);
     // No game attached (map opened from the tray): nothing to follow.
@@ -324,7 +351,9 @@ fn sync_with_game(app: &AppHandle) {
         }
         return;
     }
-    match (mode, front(app, pid)) {
+    let in_front = front(app, pid);
+    poll_map_key(app, matches!(in_front, Front::Ours));
+    match (mode, in_front) {
         // A game attached (app start, game start, reconnect): bring the mini-map and
         // tracking HUD back once the game is in front, as it was left.
         (OverlayMode::Hidden, Front::Ours) if state(app).pin.lock().unwrap().enabled => apply(app, OverlayMode::Pinned),

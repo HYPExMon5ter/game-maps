@@ -87,6 +87,18 @@ export interface WorldSnapshot {
   creatures?: Creature[]
   /** The multiplayer session the player is in; absent in single player. */
   session?: MultiplayerSession
+  /** The world or save that's loaded; absent in menus or when the game doesn't expose it. */
+  world?: GameWorld
+}
+
+export type WorldKind = 'single_player' | 'hosted' | 'joined'
+
+/** A world or save (see `state/worlds`). */
+export interface GameWorld {
+  /** Stable for this world, unique within the game. */
+  id: string
+  name: string | null
+  kind: WorldKind
 }
 
 export interface MultiplayerSession {
