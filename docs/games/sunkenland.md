@@ -60,7 +60,7 @@ companions. Pins below sea level note their depth.
 | Use | Member |
 |---|---|
 | Player position and heading | `FPSPlayer.code` (static) → `myTransform` |
-| Teleport | `FPSRigidBodyWalker.code.ResetParent()` (leave a boat deck), then `Transform.set_position` on `FPSPlayer.code.myTransform`, as the game does for respawns, beds and teleport gates |
+| Teleport | `FPSRigidBodyWalker.code.ResetParent()` (leave a boat deck), clearing `isFloating`, `isSwimming`, `isUnderWater` and `isInWater`, then `Transform.set_position` on `FPSPlayer.code.myTransform` and on `RPGCamera.code.cam`, as the game does for respawns, beds and teleport gates |
 | Teleport ground height | `Physics.Raycast` straight down (triggers ignored), never below `WorldScene.oceanObjectY` |
 | Teleport guards | `Global.code.player` (`PlayerCharacter`): `IsDead`, `drivingObject`, `seatObject`, `CurHelicopter` |
 | Other players | `WorldScene.code.allPlayerDummies` (includes the local player's `PlayerCharacter.playerDummy`), `PlayerDummy.myTransform`, `get_CharacterName()` / `cache_CharacterName` |
@@ -68,7 +68,7 @@ companions. Pins below sea level note their depth.
 | Loaded world | `Mainframe.code.get_SaveManager()`: `get_IsCurrentWorldValid()`, `get_CurrentWorldGuid()`, `get_CurrentWorldName()`; when joining, `Mainframe.code.get_WorldManager()`: `get_WorldIdentifier()`, `get_WorldName()` |
 | Nearby creatures | `WorldScene.code.AllCharactersList` (`Character`; players and companions are other classes): `myTransform`, `get_IsDead()`, `Faction.IsFriendly`. `EnemyType` only names animals, sharks, mutants and bosses; ordinary enemies are `None`, often with no `Faction`, so anything alive and not friendly counts as hostile. Only characters near the player are spawned |
 | Enemy ships | `WorldScene.code.EnemyBoatComponents` (`Boat`): `TransformPosition`, `Destroied` |
-| Placed flags | `Buoy` objects (`FindObjectsOfType`, every 10 s, or 5 minutes if the search is slow; about 57 ms in a late-game world; no list holds them): `get_IsAI()` (the game's own), `get_BuoyName()`, `transformPosition`, `M_MarkerType` |
+| Placed flags | `Buoy` objects (`FindObjectsOfType`, every 10 s; if the search is slow, about 57 ms in a late-game world, only when the full map opens and hourly; no list holds them): `get_IsAI()` (the game's own), `get_BuoyName()`, `transformPosition`, `M_MarkerType` |
 | Map marks | `Global.code.uiCompass.get_MapMarks()`, a Fusion `NetworkDictionary`, walked through its enumerator |
 | Multiplayer session | `Fusion.NetworkRunner.get_Instances()`: the running runner's `get_IsSinglePlayer()`, `get_IsClient()`, `get_SessionInfo().get_Name()`; the player's name from `Steamworks.SteamFriends.GetPersonaName()` |
 | Boats, helicopters | `WorldScene.code.PlayerBoatComponents` (`TransformPosition`, `DisplayName`, `Destroied`), `Global.code.HelicopterControllers` |
@@ -89,6 +89,11 @@ The agent's Mono backend (`crates/unity-runtime/src/mono.rs`) uses the embedding
   `GetAxis*`, `anyKey*`) report nothing pressed while a Game Maps window is in front.
 - Teleports to points more than 3 m below the sea surface (sunken locations, underwater
   loot) land on the surface right above.
+- While `isFloating` is set, the walker writes the player's position toward the water
+  height with no collision, a share of the distance scaled by frame time. Teleporting
+  from the water without clearing it drags the player through the ground on the first
+  frame, and they swim under the island from then on. The water state comes from the
+  camera's height, so the camera has to move too, or it comes back for a frame.
 - The game's own map key is also M; while Game Maps is connected the game doesn't see
   the map hotkey, so only the overlay opens.
 

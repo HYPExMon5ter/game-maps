@@ -32,11 +32,16 @@ Unity 2022.2, IL2CPP (metadata v29), no anti-cheat. Steam app 1326470.
 | Player name/color | `Sons.Multiplayer.Client.CoopPlayerRemoteSetup` `_cachedPlayerName`, `_cachedPlayerColor` |
 | Chat open (suppress hotkey) | `TheForest.UI.Multiplayer.ChatBox` `<IsChatOpen>k__BackingField` |
 | Ground height for teleports | `UnityEngine.Terrain.activeTerrain.SampleHeight(Vector3)` |
-| Cave systems (teleports, export) | `Sons.Areas.CaveSystem`: `IsInsideExtents(Vector3)`, `DoForcedEnter`, `DoForcedExit`, `_isActive`, `_areaId` |
+| Cave systems (teleports, export) | `Sons.Areas.CaveSystem`: `IsInsideExtents(Vector3)`, `DoForcedEnter`, `DoForcedExit`, `GetAreaMask`, `_areaId`; `CaveEntranceManager.get_CurrentAreaMask` |
 | Live GPS markers, Kelvin | `Sons.Gameplay.GPS.GPSLocator._activeLocators` (static `List`), `Position()`, `get_IconData()._icon`; Kelvin's tracker has the `RobbyLogo` icon |
 | Nearby creatures | `Sons.Ai.Vail.VailActorManager._instance._activeActors` (`List<VailActor>`), `get_TypeId()` / `get_ClassId()` (enum names: Cannibal and Creepy are hostile, Animal is wildlife), `IsDead()`. Kelvin (`Robby`) is left out: his GPS tracker already shows him. Friendly ones (Virginia) are companions in the app: listed with the players, selectable, trackable, and teleport targets |
 | Loaded save | `Sons.Gameplay.GameSetup.GameSetupManager.GetSelectedSaveId()` (a `UInt32`, 0 for a new game until it's saved) and `GetSaveGameType()` (`SinglePlayer`, `Multiplayer` when hosting, `MultiplayerClient`; `Default` for an unsaved new game) |
 | Multiplayer session | `Sons.Multiplayer.CoopLobbyManager.GetActiveInstance()` → `CoopLobby.get_LobbyId()` (a `CSteamID`), else `GameServerManager.ServerId` on dedicated servers; the player's name from `Steamworks.SteamFriends.GetPersonaName()` |
+| Kelvin's condition and orders | `VailActor.GetRobbyCallbacks()` is his `Sons.Gameplay.Robby`: `IsAlive()`, `_injuredState`, `_activeOrder`, `_followTransform`, and the order lists in `_orderData`. Orders go through `ServerGiveOrders(OrderType, Int32, Int32, Transform)` on the host and `ClientSendOrders(OrderType, Int32, Int32)` on clients; the first number is the index in the order's list, the second the `DropLocationType` for fetching. `LocalPlayerHelpUp()` helps him up (it walks the player to him) |
+| Companion stats | `VailActor.GetHealth()`, `GetMaxHealth()`; `GetStatsManager()` → `VailStatsManager.GetStatsManager()` → `StatsManager.get_Stats()`, each `Stat` with `GetName()`, `Sample()`, `GetMax()` |
+| Time, season, weather | `Sons.Environment.TimeOfDayHolder.GetTimeOfDay()` (`_timeSpan`), `GPSTrackerSystem.GetDaysSurvived()`, `SeasonsManager.get_ActiveSeason()`, `TheForest.World.WeatherSystem.Instance` |
+| Player dying | `LocalPlayer.Stats` → `PlayerStats.IsDying()`, `IsDead()` |
+| Dropped bag | `TheForest.Player.Actions.PlayerRetrieveDroppedInventoryAction`: `_isInventoryDropped`, `_droppedInventoryPosition`. The game picks the spot, which can be tens of meters from where you died. Found by searching objects, once per world and after a death |
 | Route checks, breadcrumbs | `UnityEngine.Physics` rays and sphere sweeps against the world layers (`Default`, `TreeWS`, `Culling*`, `Prop`, `BasicCollider`, `Blocker`, and `Terrain` above ground); player, character, item and trigger layers are left out |
 | Item names (export) | `ItemDatabaseManager.ItemById`, `ItemData.get_Name/get_Type/get_UiData`, `ItemUiData.GetTitleLocalized()` |
 | Frame hooks | `RenderPipelineManager.DoRenderLoop_Internal`, `EventSystem.Update` (menus only in this game), `Sons.Input.InputSystem.LateUpdate`, `FirstPersonCharacter.Update` |
@@ -84,10 +89,17 @@ If a game update renames something, the agent logs which members failed to resol
 - Cave bounds come from the cave's extent colliders, or from the objects known to be
   inside it (±40 m).
 - Cave interiors only get collision and lighting once the game puts the player in that
-  cave (normally via entrance triggers). Teleports call `DoForcedEnter` on the cave
-  system containing the destination (and `DoForcedExit` on others) before
-  `TeleportTo`. Without it the player falls through and the game rescues them to the
-  surface.
+  cave (normally via entrance triggers). Teleports to a cave call `DoForcedEnter` on the
+  cave system containing the destination, and `DoForcedExit` on any other the player is
+  in, before `TeleportTo`. Without it the player falls through and the game rescues them
+  to the surface.
+- A cave's extents reach past its entrances and up through the ground above it, so being
+  within them doesn't mean underground. The app says which layer a teleport is for;
+  entering the cave at a surface spot leaves the game in cave mode outside: dark, black
+  walls, and the map on Underground.
+- Which caves the player is in comes from `CaveEntranceManager.get_CurrentAreaMask` and
+  `CaveSystem.GetAreaMask`. `_isActive` on the cave system stays false either way.
+  `DoForcedExit` also clears the deep cave state (`IsInDeepCaves`).
 - The map follows the player underground using `IsInCaves` or a position more than
   4 m below the terrain.
 

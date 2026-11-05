@@ -14,7 +14,7 @@ body:
     attributes:
       label: Game Maps version
       description: Shown at the top of the Game Maps window.
-      placeholder: "0.1.0"
+      placeholder: "0.4.0"
     validations:
       required: true
   - type: textarea
@@ -37,4 +37,4 @@ body:
     id: logs
     attributes:
       label: Logs
-      description: Click **Open logs** in the Game Maps window and drag the newest log file here.
+      description: Go to Settings → Advanced → **Report a problem**, save a report, read it through, and drag it here.
