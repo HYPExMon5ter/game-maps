@@ -7,7 +7,7 @@ import { readyPeers, shareTrack, targetOfPin, useSyncStore } from '../lib/sync/s
 import { formatRemaining } from '../lib/timers'
 import { useCanTeleport, useTeleportOffered } from '../lib/teleport'
 import { useStore } from '../state/store'
-import { Button } from './controls'
+import { Button, ButtonGrid } from './controls'
 import { CategoryIcon } from './Sidebar'
 import { useSettings } from '../settings/store'
 
@@ -101,7 +101,7 @@ export function PinDetails({ onEdit }: { onEdit: (pin: Pin) => void }) {
       </div>
       {pin.description && <p className="mt-3 whitespace-pre-wrap text-[13px] leading-relaxed text-ink-dim">{pin.description}</p>}
       <PinExtras key={pin.id} pinId={pin.id} />
-      <div className="mt-4 flex flex-wrap gap-2">
+      <ButtonGrid className="mt-4">
         <Button tone={isTracked ? 'primary' : 'default'} onClick={() => setTracked(isTracked ? null : { kind: 'pin', id: pin.id })}>
           <Navigation className="size-4" /> {isTracked ? 'Tracking' : 'Track'}
         </Button>
@@ -129,12 +129,12 @@ export function PinDetails({ onEdit }: { onEdit: (pin: Pin) => void }) {
             <Button onClick={() => onEdit(pin)}>
               <Pencil className="size-4" /> Edit
             </Button>
-            <Button tone="danger" onClick={() => deleteCustomPin(pin.id)} aria-label="Delete pin">
-              <Trash2 className="size-4" />
+            <Button tone="danger" onClick={() => deleteCustomPin(pin.id)}>
+              <Trash2 className="size-4" /> Delete
             </Button>
           </>
         )}
-      </div>
+      </ButtonGrid>
       <p className="mt-3 font-mono text-[11px] text-ink-faint">
         {pin.position.x.toFixed(1)}, {pin.snapToGround ? '—' : pin.position.y.toFixed(1)}, {pin.position.z.toFixed(1)}
       </p>

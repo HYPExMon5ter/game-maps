@@ -5,7 +5,7 @@ import { EMPTY_USER_DATA, useStore } from '../../state/store'
 import type { GameDefinition, Pin } from '../game'
 import type { SyncMessage } from './messages'
 import type { SyncRoom } from './room'
-import { acceptLatestRequest, acceptRequest, attachRoom, expire, handlers, hasSyncNotice, NOTICE_MS, PING_MS, sendPing, shareTrack, useSyncStore } from './sync'
+import { acceptLatestRequest, acceptRequest, announce, attachRoom, expire, handlers, hasSyncNotice, NOTICE_MS, PING_MS, sendPing, shareTrack, useSyncStore } from './sync'
 
 const at = { x: 1, y: 2, z: 3 }
 
@@ -168,6 +168,21 @@ describe('hasSyncNotice', () => {
   it('is true while a track request or notice waits to be seen', () => {
     expect(hasSyncNotice({ requests: [], notices: [] })).toBe(false)
     expect(hasSyncNotice({ requests: [{ id: 1, peerId: 'a', from: 'Ana', target, at: 0 }], notices: [] })).toBe(true)
-    expect(hasSyncNotice({ requests: [], notices: [{ id: 1, text: 'Hi', at: 0 }] })).toBe(true)
+    expect(hasSyncNotice({ requests: [], notices: [{ id: 1, text: 'Hi', kind: 'done', at: 0 }] })).toBe(true)
+  })
+})
+
+describe('announce', () => {
+  beforeEach(() => useSyncStore.setState({ notices: [] }))
+
+  it('keeps what the notice is about, for its icon', () => {
+    announce('Bag recovered', 'bag')
+    expect(useSyncStore.getState().notices.map((n) => n.kind)).toEqual(['bag'])
+    expect(useStore.getState().toast).toMatchObject({ text: 'Bag recovered', tone: 'info' })
+  })
+
+  it('shows a failure as an error on the map too', () => {
+    announce('Teleport back failed', 'failed')
+    expect(useStore.getState().toast).toMatchObject({ text: 'Teleport back failed', tone: 'error' })
   })
 })

@@ -1,6 +1,17 @@
-import { Navigation, Users, X } from 'lucide-react'
-import { acceptRequest, dismissRequest, hasSyncNotice, useSyncStore } from '../lib/sync/sync'
+import { Backpack, Check, MapPin, Navigation, Skull, Timer, Users, X, type LucideIcon } from 'lucide-react'
+import { acceptRequest, dismissRequest, hasSyncNotice, useSyncStore, type NoticeKind } from '../lib/sync/sync'
 import { Button } from './controls'
+
+const NOTICE_ICONS: Record<NoticeKind, { Icon: LucideIcon; color: string }> = {
+  done: { Icon: Check, color: 'text-live' },
+  failed: { Icon: X, color: 'text-danger' },
+  friends: { Icon: Users, color: 'text-accent' },
+  tracking: { Icon: Navigation, color: 'text-accent' },
+  pin: { Icon: MapPin, color: 'text-accent' },
+  bag: { Icon: Backpack, color: 'text-live' },
+  death: { Icon: Skull, color: 'text-danger' },
+  timer: { Icon: Timer, color: 'text-accent' },
+}
 
 /** "Track this with me" requests from other players, to accept or dismiss. */
 export function SyncRequests() {
@@ -51,12 +62,15 @@ export function SyncNotices() {
           </p>
         </div>
       ))}
-      {notices.map((n) => (
-        <div key={n.id} className={item}>
-          <Users className="size-4 shrink-0 text-accent" />
-          <p>{n.text}</p>
-        </div>
-      ))}
+      {notices.map((n) => {
+        const { Icon, color } = NOTICE_ICONS[n.kind]
+        return (
+          <div key={n.id} className={item}>
+            <Icon className={`size-4 shrink-0 ${color}`} />
+            <p>{n.text}</p>
+          </div>
+        )
+      })}
     </div>
   )
 }

@@ -4,6 +4,7 @@ import { iconUrl } from '../lib/game'
 import { findMover, MOVER_KIND_LABELS } from '../lib/movers'
 import { useStore } from '../state/store'
 import { CompanionPanel } from './CompanionPanel'
+import { ButtonGrid } from './controls'
 import { LiveActions } from './LiveActions'
 import { useSettings } from '../settings/store'
 
@@ -50,9 +51,9 @@ export function LiveDetails() {
           <X className="size-4" />
         </button>
       </div>
-      <div className="mt-4 flex flex-wrap gap-2">
+      <ButtonGrid className="mt-4">
         <LiveActions entity={entity} />
-      </div>
+      </ButtonGrid>
       {entity.kind === 'companion' && <CompanionPanel name={entity.name} />}
     </div>
   )

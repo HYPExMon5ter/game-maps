@@ -46,10 +46,14 @@ export interface Ping {
   at: number
 }
 
+/** What a notice is about, which sets its icon. */
+export type NoticeKind = 'done' | 'failed' | 'friends' | 'tracking' | 'pin' | 'bag' | 'death' | 'timer'
+
 /** Something to tell the player, shown briefly over the game. */
 export interface Notice {
   id: number
   text: string
+  kind: NoticeKind
   at: number
 }
 
@@ -146,9 +150,9 @@ function sendProgress(peerId?: string) {
 }
 
 /** Tells the player something, whether they're on the map or in the game. */
-export function announce(text: string) {
-  useStore.getState().notify(text)
-  useSyncStore.setState((s) => ({ notices: [...s.notices, { id: ++seq, text, at: Date.now() }].slice(-MAX_NOTICES) }))
+export function announce(text: string, kind: NoticeKind) {
+  useStore.getState().notify(text, kind === 'failed' ? 'error' : 'info')
+  useSyncStore.setState((s) => ({ notices: [...s.notices, { id: ++seq, text, kind, at: Date.now() }].slice(-MAX_NOTICES) }))
 }
 
 /** Message handlers for a joined room (exported for tests). */
@@ -186,7 +190,7 @@ export const handlers: SyncHandlers = {
       updateFriendPins()
       // Only the first: a repeated hello doesn't need another round of everything.
       if (ready && !peer?.ready) {
-        announce(`${message.name ?? 'A player'} is using Game Maps with you`)
+        announce(`${message.name ?? 'A player'} is using Game Maps with you`, 'friends')
         sendProgress(peerId)
       }
       return
@@ -210,7 +214,7 @@ export const handlers: SyncHandlers = {
         const added = message.pins.filter((p) => !known.has(p.id))
         useSyncStore.setState((s) => ({ peerPins: { ...s.peerPins, [peerId]: message.pins } }))
         updateFriendPins()
-        if (added.length > 0) announce(`${peerName(peerId)} shared ${added.length === 1 ? added[0].name : `${added.length} pins`}`)
+        if (added.length > 0) announce(`${peerName(peerId)} shared ${added.length === 1 ? added[0].name : `${added.length} pins`}`, 'friends')
         break
       }
       case 'found': {
@@ -307,7 +311,7 @@ export function acceptLatestRequest(): boolean {
   const latest = useSyncStore.getState().requests.at(-1)
   if (!latest) return false
   acceptRequest(latest.id)
-  announce(`Tracking ${latest.target.name}`)
+  announce(`Tracking ${latest.target.name}`, 'tracking')
   return true
 }
 

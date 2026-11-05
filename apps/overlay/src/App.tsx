@@ -43,7 +43,7 @@ function useBackendSync(windowed: boolean) {
       events.teleportBack((error) => {
         void refreshBackSteps()
         // Pressed in the game, so the map's toasts wouldn't show.
-        if (useStore.getState().mode === 'pinned') announce(error ? `Teleport back failed: ${error}` : 'Teleported back')
+        if (useStore.getState().mode === 'pinned') announce(error ? `Teleport back failed: ${error}` : 'Teleported back', error ? 'failed' : 'done')
         else if (useStore.getState().mode === 'open') notify(error ? `Teleport back failed: ${error}` : 'Teleported back', error ? 'error' : 'info')
       }),
       events.snapshot((s) => setSnapshot(s.local || s.others.length ? s : null)),
@@ -190,12 +190,12 @@ function useActionKeys() {
     const unlisten = events.hotkeyAction((action) => {
       if (action === 'quick_mark') {
         const pin = quickMark()
-        announce(pin ? `Marked: ${pin.name}` : 'Nowhere to mark yet')
+        announce(pin ? `Marked: ${pin.name}` : 'Nowhere to mark yet', pin ? 'pin' : 'failed')
       } else if (action === 'nearest_unfound') {
         const pin = trackNearestUnfound()
-        announce(pin ? `Tracking the nearest: ${pin.name}` : 'Nothing left to find nearby')
+        announce(pin ? `Tracking the nearest: ${pin.name}` : 'Nothing left to find nearby', pin ? 'tracking' : 'failed')
       } else if (action === 'accept_request' && !acceptLatestRequest()) {
-        announce('No requests to accept')
+        announce('No requests to accept', 'failed')
       }
     })
     return () => void unlisten.then((f) => f())
@@ -215,10 +215,10 @@ function useDeathMarker() {
         // Better than where the player fell: it's where their things actually are.
         if (bag && bagMoved(prev.snapshot?.dropped_bag, bag)) {
           markBag(bag, alive?.layer)
-          if (prev.snapshot?.local) announce('Marked where your bag is')
+          if (prev.snapshot?.local) announce('Marked where your bag is', 'bag')
         } else if (!bag && prev.snapshot?.dropped_bag && snapshot.local) {
           clearDeathPin()
-          announce('Bag recovered')
+          announce('Bag recovered', 'bag')
         }
       }
       if (!snapshot.dying) {
@@ -227,7 +227,7 @@ function useDeathMarker() {
       }
       if (prev.snapshot?.dying || !alive || !s.game || !gameSettings(useSettings.getState().ui, s.game.id).deathMarker) return
       markDeath(alive)
-      announce('Marked where you died')
+      announce('Marked where you died', 'death')
     })
   }, [])
 }
@@ -244,7 +244,7 @@ function usePinTimers() {
       const { due, running } = dueTimers(s.user.timers, Date.now())
       if (due.length === 0) return
       s.setPinTimers(running)
-      for (const pinId of due) announce(`Time's up: ${findPin(pinId)?.name ?? 'a pin'}`)
+      for (const pinId of due) announce(`Time's up: ${findPin(pinId)?.name ?? 'a pin'}`, 'timer')
     }, TIMER_CHECK_MS)
     return () => clearInterval(id)
   }, [])
