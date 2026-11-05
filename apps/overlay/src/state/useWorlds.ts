@@ -76,7 +76,11 @@ async function leaveUnsaved(gameId: string, unsaved: string, next: string) {
   await flushFog()
   await showWorld(next, false)
   await discardWorld(gameId, unsaved)
+  void emit(ENTERED, { gameId, worldId: next } satisfies Entered)
 }
+
+/** How long a new game's world may be gone before it counts as left without saving. */
+const LEFT_WORLD_MS = 10_000
 
 /** The overlay recorded a newly loaded world (see `useWorldTracking`). */
 const ENTERED = 'world-entered'
@@ -111,21 +115,39 @@ export function useWorldTracking(lead: boolean) {
 
   useEffect(() => {
     if (!lead) return
-    return useStore.subscribe((s, prev) => {
-        const world = s.snapshot?.world
-        if (!world && s.game && prev.snapshot?.world && isUnsaved(s.world.id)) {
-          // Left a new game without saving: it's gone, back to the last world.
-          void leaveUnsaved(s.game.id, s.world.id, s.worldIndex.last ?? DEFAULT_WORLD)
-          return
-        }
-        if (!world || !s.game || world === prev.snapshot?.world) return
-        if (world.id === s.world.id && world.name === s.world.name) return
-        if (world.id === s.world.id) {
-          // Same world, new name (renamed in the game): just record it.
-          void enterWorld(s.game.id, world, s.worldIndex).then((index) => useStore.getState().setWorldIndex(index))
-          return
-        }
-        void followGameWorld(world)
-      })
+    let leaving: ReturnType<typeof setTimeout> | undefined
+    const stop = useStore.subscribe((s, prev) => {
+      const world = s.snapshot?.world
+      if (world) {
+        clearTimeout(leaving)
+        leaving = undefined
+      }
+      if (!world && s.game && prev.snapshot?.world && isUnsaved(s.world.id)) {
+        // Left a new game without saving: it's gone, back to the last world. Only if that's
+        // what happened: a moment without a world, a lost connection or the player
+        // disconnecting the app mustn't delete a game they're still in.
+        clearTimeout(leaving)
+        leaving = setTimeout(() => {
+          const now = useStore.getState()
+          const state = now.status?.state
+          if (now.snapshot?.world || !now.game || !isUnsaved(now.world.id) || (state !== 'connected' && state !== 'waiting_for_game')) return
+          void leaveUnsaved(now.game.id, now.world.id, now.worldIndex.last ?? DEFAULT_WORLD)
+        }, LEFT_WORLD_MS)
+        return
+      }
+      if (!world || !s.game || world === prev.snapshot?.world) return
+      if (world.id === s.world.id && world.name === s.world.name) return
+      if (world.id === s.world.id) {
+        // Same world, new name (renamed in the game): just record it.
+        useStore.setState({ world: { ...s.world, name: world.name } })
+        void enterWorld(s.game.id, world, s.worldIndex).then((index) => useStore.getState().setWorldIndex(index))
+        return
+      }
+      void followGameWorld(world)
+    })
+    return () => {
+      clearTimeout(leaving)
+      stop()
+    }
   }, [lead])
 }

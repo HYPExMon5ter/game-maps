@@ -19,16 +19,28 @@ interface Changed {
   settings: Settings
 }
 
+/** `value` as text with object keys in order: what's saved doesn't keep theirs. */
+function sortedJson(value: unknown): string {
+  return JSON.stringify(value, (_, v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : 1))) : v))
+}
+
+function sameJson(a: unknown, b: unknown): boolean {
+  return sortedJson(a) === sortedJson(b)
+}
+
 /** Starts loading and syncing; resolves to a function that stops it. */
 export async function startSettings(): Promise<() => void> {
   const self = getCurrentWebviewWindow().label
   const state = useSettings.getState()
   // Settings arriving from the other window are already saved; don't send them back.
   let applyingRemote = false
+  // Newer than what's being loaded, if it comes in meanwhile.
+  let received: Settings | null = null
   const unlisten = await Promise.all([
     events.appSettings(state.setApp),
     listen<Changed>(EVENT, ({ payload }) => {
       if (payload.from === self) return
+      received = payload.settings
       applyingRemote = true
       useSettings.setState({ ui: payload.settings })
       applyingRemote = false
@@ -43,9 +55,9 @@ export async function startSettings(): Promise<() => void> {
     backend.autostart(),
   ])
   const { settings, legacyHotkey } = readSettings(saved, games.map((g) => g.id))
-  useSettings.setState({ ui: settings, app, games, autostart })
+  useSettings.setState({ ui: received ?? settings, app, games, autostart })
   // Older versions saved them differently (see `readSettings`).
-  if (saved && JSON.stringify(saved) !== JSON.stringify(settings)) await store.set(STORE_KEY, settings)
+  if (saved && !received && !sameJson(saved, settings)) await store.set(STORE_KEY, settings)
   if (legacyHotkey) void applyLegacyHotkey(legacyHotkey)
 
   const stop = useSettings.subscribe((s, prev) => {

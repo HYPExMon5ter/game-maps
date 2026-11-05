@@ -25,8 +25,13 @@ describe('parseMessage', () => {
     expect(parseMessage({ type: 'ping', position: { x: 1, y: 2 }, layer: 'surface' })).toBeNull()
     expect(parseMessage({ type: 'ping', position: { x: Infinity, y: 0, z: 0 }, layer: 'surface' })).toBeNull()
     expect(parseMessage({ type: 'ping', position: at, layer: 'space' })).toBeNull()
-    expect(parseMessage({ type: 'track', target: { name: 'x'.repeat(500), position: at, layer: 'surface' } })).toBeNull()
-    expect(parseMessage({ type: 'pins', pins: [{ id: 'a' }] })).toBeNull()
+    expect(parseMessage({ type: 'track', target: { name: 'x'.repeat(5000), position: at, layer: 'surface' } })).toBeNull()
+    expect(parseMessage({ type: 'pins', pins: 'many' })).toBeNull()
+  })
+
+  it('keeps the good pins of a list with a bad one', () => {
+    const good = { id: 'b', name: 'Base', position: at, layer: 'surface', category: 'custom' }
+    expect(parseMessage({ type: 'pins', pins: [{ id: 'a' }, good] })).toEqual({ type: 'pins', pins: [good] })
   })
 })
 

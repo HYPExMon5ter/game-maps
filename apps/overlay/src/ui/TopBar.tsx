@@ -1,11 +1,15 @@
-import { Crosshair, Layers, LocateFixed, PictureInPicture2, Settings, Undo2, Users, X } from 'lucide-react'
+import { Crosshair, Layers, LocateFixed, Move, PictureInPicture2, Settings, Undo2, Users, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { centerOnPlayer, teleportBack } from '../lib/actions'
 import { backend } from '../lib/backend'
 import { compassReading, formatDistance } from '../lib/compass'
+import { formatEnvironment } from '../lib/environment'
 import { LAYER_LABELS } from '../lib/game'
 import { hotkeyLabel } from '../lib/keys'
 import { movers } from '../lib/movers'
+import { useSyncStore } from '../lib/sync/sync'
+import { CONNECTION_LABELS, connectionOf } from '../lib/together'
+import { useCanTeleport } from '../lib/teleport'
 import { selectViewLayer, useStore } from '../state/store'
 import { IconButton } from './controls'
 import { WorldMenu } from './WorldMenu'
@@ -13,10 +17,25 @@ import { LiveActions } from './LiveActions'
 import { IS_MAP_WINDOW } from '../lib/view'
 import { mapHotkey, useSettings } from '../settings/store'
 
+/** A connection problem in full, under the top bar: too long and too useful to cut off. */
+export function LinkProblem() {
+  const status = useStore((s) => s.status)
+  const failed = status?.state === 'error'
+  const message = failed ? (status.message ?? 'Connection error') : status?.state === 'connected' ? status.message : null
+  if (!message) return null
+  return (
+    <p className="glass mt-2 rounded-xl px-3 py-1.5 text-[12.5px] leading-snug break-words">
+      {message}
+      {failed && <span className="text-ink-dim"> The map still works, and live data comes back by itself.</span>}
+    </p>
+  )
+}
+
 function StatusChip() {
   const status = useStore((s) => s.status)
   const hasLocation = useStore((s) => !!s.snapshot?.local)
   const game = useStore((s) => s.game)
+  const environment = useStore((s) => (s.snapshot?.environment ? formatEnvironment(s.snapshot.environment) : null))
   let tone = 'bg-white/30'
   let text = 'Start the game to see your location'
   if (status?.state === 'ready') {
@@ -26,10 +45,10 @@ function StatusChip() {
     text = 'Connecting to game…'
   } else if (status?.state === 'error') {
     tone = 'bg-danger'
-    text = status.message ?? 'Connection error'
+    text = 'Live data lost'
   } else if (status?.state === 'connected') {
     tone = hasLocation ? 'bg-live' : 'bg-amber-300'
-    text = status.message ?? (hasLocation ? 'Live' : 'Load into a world to see your location')
+    text = status.message ? 'Connected, with a problem' : hasLocation ? 'Live' : 'Load into a world to see your location'
   }
   return (
     <div className="flex min-w-0 items-center gap-2 px-1" title={text}>
@@ -37,6 +56,7 @@ function StatusChip() {
       <span className="font-display shrink-0 truncate text-[14px] font-semibold">{game?.name ?? 'Game Maps'}</span>
       <WorldMenu />
       <span className="truncate text-[12px] text-ink-faint">{text}</span>
+      {environment && <span className="shrink-0 text-[12px] tabular-nums text-ink-dim">{environment}</span>}
     </div>
   )
 }
@@ -51,6 +71,8 @@ function PlayersMenu() {
   const units = useSettings((s) => s.ui.units)
   const selectLive = useStore((s) => s.selectLive)
   const [open, setOpen] = useState(false)
+  const peers = useSyncStore((s) => s.peers)
+  const inRoom = useSyncStore((s) => s.session !== null)
   if (others.length === 0) return null
   return (
     <div className="relative">
@@ -64,6 +86,7 @@ function PlayersMenu() {
         <div className="glass absolute right-0 top-11 z-20 w-[280px] rounded-xl p-1.5">
           {others.map((o) => {
             const r = local && map && game ? compassReading(map.projection, local, o.position, game.unitsPerMeter) : null
+            const connection = o.kind === 'player' && inRoom ? connectionOf(o, Object.values(peers)) : null
             return (
               <div key={o.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-panel-raised">
                 <button
@@ -79,6 +102,9 @@ function PlayersMenu() {
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[13px]">{o.name}</span>
                     {r && <span className="block text-[11px] text-ink-faint">{formatDistance(r.distance, units)}</span>}
+                    {connection && (
+                      <span className={`block text-[11px] ${connection === 'connected' ? 'text-live' : connection === 'outdated' ? 'text-danger' : 'text-ink-faint'}`}>{CONNECTION_LABELS[connection]}</span>
+                    )}
                   </span>
                 </button>
                 <LiveActions entity={o} compact />
@@ -106,7 +132,7 @@ export function TopBar({ onSettings, settingsOpen }: { onSettings: () => void; s
   const hasCaves = gameMap?.layers.includes('caves') ?? false
   const backSteps = useStore((s) => s.backSteps)
   const backKey = useSettings((s) => s.app?.back_key ?? null)
-  const canTeleport = useStore((s) => s.status?.state === 'connected' && !!s.status.capabilities?.teleport)
+  const canTeleport = useCanTeleport()
 
   return (
     <header className="glass flex h-12 items-center gap-1 rounded-2xl px-2">
@@ -145,6 +171,11 @@ export function TopBar({ onSettings, settingsOpen }: { onSettings: () => void; s
       <IconButton label={hud.minimap ? 'Hide mini-map while playing' : 'Show mini-map while playing'} active={hud.minimap} onClick={() => setHud({ minimap: !hud.minimap })}>
         <PictureInPicture2 className="size-[18px]" />
       </IconButton>
+      {!IS_MAP_WINDOW && (
+        <IconButton label="Move and resize the map and mini-map" onClick={() => useStore.getState().setEditingLayout(true)}>
+          <Move className="size-[18px]" />
+        </IconButton>
+      )}
       <IconButton label="Settings" active={settingsOpen} onClick={onSettings}>
         <Settings className="size-[18px]" />
       </IconButton>

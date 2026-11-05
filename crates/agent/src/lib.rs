@@ -58,6 +58,10 @@ extern "system" fn DllMain(module: HMODULE, reason: u32, _reserved: *mut c_void)
         // Never do real work under the loader lock.
         std::thread::spawn(move || {
             run();
+            if focus::thread_in_get_message() {
+                filelog::write("a thread is waiting in GetMessage; staying loaded");
+                return;
+            }
             unload(HMODULE(module as *mut c_void));
         });
     }

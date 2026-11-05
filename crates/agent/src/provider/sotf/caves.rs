@@ -21,7 +21,10 @@ pub struct Caves {
     inside_extents: Method,
     forced_enter: Method,
     forced_exit: Method,
-    is_active: Field,
+    /// `GetAreaMask`: the `Sons.Areas.AreaMask` bit of a cave system.
+    area_mask: Method,
+    /// `CaveEntranceManager.get_CurrentAreaMask`: the caves the player is in.
+    current_areas: Method,
     area: Field,
     extents: Option<Field>,
     collider: Option<Class>,
@@ -37,7 +40,8 @@ impl Caves {
             inside_extents: rt.method_with_params(class, "IsInsideExtents", &["UnityEngine.Vector3"]).ok()?,
             forced_enter: rt.method(class, "DoForcedEnter", 0).ok()?,
             forced_exit: rt.method(class, "DoForcedExit", 0).ok()?,
-            is_active: rt.field(class, "_isActive").ok()?,
+            area_mask: rt.method(class, "GetAreaMask", 0).ok()?,
+            current_areas: rt.method(rt.class("Sons.Areas", "CaveEntranceManager").ok()?, "get_CurrentAreaMask", 0).ok()?,
             area: rt.field(class, "_areaId").ok()?,
             extents: rt.field(class, "_extents").ok(),
             collider,
@@ -79,13 +83,16 @@ impl Caves {
     /// # Safety
     /// Main thread only; `systems` from [`Caves::systems`] this frame.
     pub unsafe fn activate(&self, rt: &Runtime, systems: &[*mut ManagedObject], target: Option<*mut ManagedObject>) -> Result<(), String> {
+        let mask = |result: Result<*mut ManagedObject, unity_runtime::Error>| result.and_then(|b| rt.unbox::<i32>(b)).unwrap_or(0);
+        let current = mask(rt.invoke(&self.current_areas, std::ptr::null_mut(), &mut []));
+        let is_in = |s: *mut ManagedObject| current & mask(rt.invoke(&self.area_mask, s, &mut [])) != 0;
         for &s in systems {
-            if Some(s) != target && self.is_active.get::<bool>(s) {
+            if Some(s) != target && is_in(s) {
                 rt.invoke(&self.forced_exit, s, &mut []).map_err(|e| format!("leaving cave failed: {e}"))?;
             }
         }
         if let Some(s) = target {
-            if !self.is_active.get::<bool>(s) {
+            if !is_in(s) {
                 rt.invoke(&self.forced_enter, s, &mut []).map_err(|e| format!("entering cave failed: {e}"))?;
             }
         }

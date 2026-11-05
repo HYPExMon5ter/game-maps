@@ -1,10 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { emptyFog, exploredAt, exploredFraction, fogPixels, isExplored, loadFog, reveal, saveFog } from './fog'
+import { emptyFog, exploredAt, exploredFraction, fogPixels, isExplored, loadFog, mergeFog, reveal, saveFog } from './fog'
 import type { Projection } from './projection'
 
 const p: Projection = { east: 'x', north: 'z', up: 'y', minEast: -400, maxEast: 400, minNorth: -400, maxNorth: 400 }
 
 describe('fog of war', () => {
+  it('merges what another player explored, once', () => {
+    const mine = emptyFog(p, 1)
+    const theirs = emptyFog(p, 1)
+    reveal(mine, -200, 0, 40)
+    reveal(theirs, 200, 0, 40)
+    expect(mergeFog(mine, theirs)).toBe(true)
+    expect(exploredAt(mine, -200, 0)).toBe(true)
+    expect(exploredAt(mine, 200, 0)).toBe(true)
+    expect(mergeFog(mine, theirs)).toBe(false)
+  })
+
   it('uses 8 m cells over the map rectangle', () => {
     const fog = emptyFog(p, 1)
     expect([fog.cell, fog.width, fog.height]).toEqual([8, 100, 100])

@@ -13,45 +13,63 @@ const CREATURE_MOVE_EPSILON: f32 = 1.0;
 /// cos(~1.8°): smaller heading changes are not worth a message.
 const FORWARD_DOT_THRESHOLD: f32 = 0.9995;
 
-pub fn has_meaningful_change(prev: &WorldSnapshot, next: &WorldSnapshot) -> bool {
-    match (&prev.local, &next.local) {
-        (None, None) => {}
+/// Whether what every [`SnapshotUpdate`] carries changed.
+///
+/// [`SnapshotUpdate`]: game_maps_protocol::SnapshotUpdate
+pub fn live_changed(prev: &WorldSnapshot, next: &WorldSnapshot) -> bool {
+    let local_changed = match (&prev.local, &next.local) {
+        (None, None) => false,
         (Some(a), Some(b)) => {
-            if a.layer != b.layer
+            a.layer != b.layer
                 || a.position.distance_sq(b.position) > LOCAL_MOVE_EPSILON * LOCAL_MOVE_EPSILON
                 || forward_changed(a.forward, b.forward)
                 || camera_changed(a.camera.as_ref(), b.camera.as_ref())
-            {
-                return true;
-            }
         }
-        _ => return true,
-    }
-    if prev.others.len() != next.others.len() || prev.markers.len() != next.markers.len() || prev.creatures.len() != next.creatures.len() {
-        return true;
-    }
-    let creatures_changed = prev
-        .creatures
-        .iter()
-        .zip(&next.creatures)
-        .any(|(a, b)| a.id != b.id || a.kind != b.kind || a.position.distance_sq(b.position) > CREATURE_MOVE_EPSILON * CREATURE_MOVE_EPSILON);
-    if creatures_changed || prev.session != next.session || prev.world != next.world {
-        return true;
-    }
-    let markers_changed = prev.markers.iter().zip(&next.markers).any(|(a, b)| {
-        a.id != b.id
-            || a.label != b.label
-            || a.icon != b.icon
-            || a.position.distance_sq(b.position) > MARKER_MOVE_EPSILON * MARKER_MOVE_EPSILON
-    });
-    markers_changed
+        _ => true,
+    };
+    local_changed
+        || prev.dying != next.dying
+        || prev.companions != next.companions
+        || prev.environment != next.environment
+        || prev.dropped_bag != next.dropped_bag
+        || prev.others.len() != next.others.len()
         || prev.others.iter().zip(&next.others).any(|(a, b)| {
-        a.id != b.id
-            || a.name != b.name
-            || a.color != b.color
-            || a.position.distance_sq(b.position) > REMOTE_MOVE_EPSILON * REMOTE_MOVE_EPSILON
-            || forward_changed(a.forward, b.forward)
+            a.id != b.id
+                || a.name != b.name
+                || a.color != b.color
+                || a.position.distance_sq(b.position) > REMOTE_MOVE_EPSILON * REMOTE_MOVE_EPSILON
+                || forward_changed(a.forward, b.forward)
         })
+}
+
+/// Whether this needs a whole snapshot: entering or leaving a world (the app starts over
+/// from the one it gets then) or changing session.
+pub fn world_changed(prev: &WorldSnapshot, next: &WorldSnapshot) -> bool {
+    prev.local.is_some() != next.local.is_some() || prev.session != next.session || prev.world != next.world
+}
+
+pub fn creatures_changed(prev: &WorldSnapshot, next: &WorldSnapshot) -> bool {
+    prev.creatures.len() != next.creatures.len()
+        || prev
+            .creatures
+            .iter()
+            .zip(&next.creatures)
+            .any(|(a, b)| a.id != b.id || a.kind != b.kind || a.position.distance_sq(b.position) > CREATURE_MOVE_EPSILON * CREATURE_MOVE_EPSILON)
+}
+
+pub fn markers_changed(prev: &WorldSnapshot, next: &WorldSnapshot) -> bool {
+    prev.markers.len() != next.markers.len()
+        || prev.markers.iter().zip(&next.markers).any(|(a, b)| {
+            a.id != b.id
+                || a.label != b.label
+                || a.icon != b.icon
+                || a.position.distance_sq(b.position) > MARKER_MOVE_EPSILON * MARKER_MOVE_EPSILON
+        })
+}
+
+#[cfg(test)]
+fn has_meaningful_change(prev: &WorldSnapshot, next: &WorldSnapshot) -> bool {
+    live_changed(prev, next) || world_changed(prev, next) || creatures_changed(prev, next) || markers_changed(prev, next)
 }
 
 /// Camera moves or turns matter for waypoints drawn over the game (pitch included,
@@ -97,7 +115,25 @@ mod tests {
             creatures: vec![],
             session: None,
             world: None,
+            ..Default::default()
         }
+    }
+
+    #[test]
+    fn looking_around_only_needs_an_update() {
+        let a = snap(Vec3::new(1.0, 1.0, 1.0), Vec3::new(0.0, 0.0, 1.0));
+        let b = snap(Vec3::new(1.0, 1.0, 1.0), Vec3::new(1.0, 0.0, 0.0));
+        assert!(live_changed(&a, &b));
+        assert!(!world_changed(&a, &b));
+        assert!(!markers_changed(&a, &b));
+        assert!(!creatures_changed(&a, &b));
+    }
+
+    #[test]
+    fn entering_a_world_needs_a_whole_snapshot() {
+        let a = snap(Vec3::ZERO, Vec3::new(0.0, 0.0, 1.0));
+        assert!(world_changed(&WorldSnapshot::default(), &a));
+        assert!(world_changed(&a, &WorldSnapshot::default()));
     }
 
     #[test]

@@ -49,6 +49,11 @@ body.launcher #root {
   box-shadow: 0 18px 50px rgb(0 0 0 / 0.45);
 }
 
+/* Over the game the window is transparent: there's nothing behind to blur, only the cost. */
+.hud .glass {
+  backdrop-filter: none;
+}
+
 .scroll-thin {
   scrollbar-width: thin;
   scrollbar-color: rgb(255 255 255 / 0.18) transparent;

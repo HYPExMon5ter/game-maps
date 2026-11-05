@@ -4,7 +4,7 @@ import { DEFAULT_GAME_SETTINGS, DEFAULT_SETTINGS, gameSettings, migrateHud, read
 describe('settings model', () => {
   it('fills in defaults', () => {
     expect(readSettings(undefined, ['a'])).toEqual({ settings: DEFAULT_SETTINGS, legacyHotkey: null })
-    expect(readSettings({ opacity: 0.5 }, []).settings).toEqual({ ...DEFAULT_SETTINGS, opacity: 0.5 })
+    expect(readSettings({ opacity: 0.5, onboarding: DEFAULT_SETTINGS.onboarding }, []).settings).toEqual({ ...DEFAULT_SETTINGS, opacity: 0.5 })
   })
 
   it('gives each game the per-game settings older versions kept for all games', () => {
@@ -21,7 +21,7 @@ describe('settings model', () => {
 
   it('drops settings that moved elsewhere, returning the old map hotkey', () => {
     const hotkey = { action: 'toggle_map' as const, vk: 77, ctrl: false, shift: false, alt: false }
-    const { settings, legacyHotkey } = readSettings({ hotkey, followPlayer: true }, [])
+    const { settings, legacyHotkey } = readSettings({ hotkey, followPlayer: true, onboarding: DEFAULT_SETTINGS.onboarding }, [])
     expect(legacyHotkey).toEqual(hotkey)
     expect(settings).toEqual(DEFAULT_SETTINGS)
   })

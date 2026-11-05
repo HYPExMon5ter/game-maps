@@ -2,6 +2,7 @@
 // `lib/sync/room.ts`). Everything that arrives is validated: peers run other versions,
 // and anyone who learns the session could join the room.
 
+import type { SavedFog } from '../fog'
 import { FRIENDS_CATEGORY, type Pin } from '../game'
 import type { Vec3, WorldLayer } from '../protocol'
 
@@ -38,9 +39,16 @@ export type SyncMessage =
   | { type: 'ping'; position: Vec3; layer: WorldLayer }
   /** The sender's shared pins, all of them (replaces what was sent before). */
   | { type: 'pins'; pins: SharedPin[] }
+  /** Map pins the sender has found (added to what's known). */
+  | { type: 'found'; ids: string[] }
+  /** What the sender has explored (merged with what's known). */
+  | { type: 'fog'; fog: SavedFog }
 
-const MAX_TEXT = 200
-const MAX_PINS = 500
+const MAX_TEXT = 2000
+export const MAX_PINS = 500
+const MAX_FOUND = 5000
+/** Base64 of the largest fog bitmap (see `lib/fog`). */
+const MAX_FOG_TEXT = 700_000
 const LAYERS: readonly WorldLayer[] = ['surface', 'caves']
 
 /** The message in `data`, or null when it isn't a valid one. */
@@ -58,10 +66,14 @@ export function parseMessage(data: unknown): SyncMessage | null {
     case 'ping':
       return isVec3(data.position) && isLayer(data.layer) ? { type: 'ping', position: data.position, layer: data.layer } : null
     case 'pins': {
-      if (!Array.isArray(data.pins) || data.pins.length > MAX_PINS) return null
-      const pins = data.pins.map(parsePin)
-      return pins.every((p) => p !== null) ? { type: 'pins', pins: pins as SharedPin[] } : null
+      if (!Array.isArray(data.pins)) return null
+      // One bad pin isn't a reason to lose the rest.
+      return { type: 'pins', pins: data.pins.slice(0, MAX_PINS).map(parseSharedPin).filter((p) => p !== null) }
     }
+    case 'found':
+      return Array.isArray(data.ids) && data.ids.length <= MAX_FOUND && data.ids.every(isText) ? { type: 'found', ids: data.ids as string[] } : null
+    case 'fog':
+      return isFog(data.fog) ? { type: 'fog', fog: data.fog } : null
     default:
       return null
   }
@@ -73,7 +85,12 @@ function parseTarget(t: unknown): SharedTarget | null {
   return { name: t.name, position: t.position, layer: t.layer, ...(t.pinId !== undefined && { pinId: t.pinId as string }) }
 }
 
-function parsePin(p: unknown): SharedPin | null {
+function isFog(f: unknown): f is SavedFog {
+  return isObject(f) && typeof f.bits === 'string' && f.bits.length <= MAX_FOG_TEXT && [f.cell, f.minEast, f.minNorth, f.width, f.height].every((n) => typeof n === 'number' && Number.isFinite(n))
+}
+
+/** A pin as sent to us, or null when it isn't a valid one. */
+export function parseSharedPin(p: unknown): SharedPin | null {
   if (!isObject(p) || !isText(p.id) || !isText(p.name) || !isVec3(p.position) || !isLayer(p.layer) || !isText(p.category)) return null
   const optionalText = (v: unknown) => v === undefined || isText(v)
   if (!optionalText(p.description) || !optionalText(p.icon) || !optionalText(p.color)) return null
@@ -94,11 +111,11 @@ function parsePin(p: unknown): SharedPin | null {
 export function toSharedPin(pin: Pin): SharedPin {
   return {
     id: pin.id,
-    name: pin.name,
+    name: pin.name.slice(0, MAX_TEXT),
     position: pin.position,
     layer: pin.layer ?? 'surface',
     category: pin.category,
-    ...(pin.description && { description: pin.description }),
+    ...(pin.description && { description: pin.description.slice(0, MAX_TEXT) }),
     ...(pin.icon && !pin.icon.startsWith('user:') && { icon: pin.icon }),
     ...(pin.color && { color: pin.color }),
     ...(pin.snapToGround && { snapToGround: true }),

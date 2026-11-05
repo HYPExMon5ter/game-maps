@@ -5,6 +5,7 @@
 import { emit, listen } from '@tauri-apps/api/event'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { load, type Store } from '@tauri-apps/plugin-store'
+import { logUiError } from '../lib/errors'
 import type { GameWorld } from '../lib/protocol'
 import { EMPTY_SESSION, selectSession, useStore, type GameUserData, type MapSession, type SavedMapView, type TrackTarget } from './store'
 import {
@@ -35,7 +36,7 @@ export async function loadPrefs(gameId: string): Promise<GamePrefs> {
   const saved = await s.get<Partial<GamePrefs>>(keys.prefs(gameId))
   if (saved) return { ...EMPTY_PREFS, ...saved }
   const legacy = (await s.get<Partial<GamePrefs>>(keys.data(gameId, DEFAULT_WORLD))) ?? {}
-  const prefs = { hiddenCategories: legacy.hiddenCategories ?? [], shownCategories: legacy.shownCategories ?? [] }
+  const prefs = { ...EMPTY_PREFS, hiddenCategories: legacy.hiddenCategories ?? [], shownCategories: legacy.shownCategories ?? [] }
   await s.set(keys.prefs(gameId), prefs)
   return prefs
 }
@@ -43,7 +44,7 @@ export async function loadPrefs(gameId: string): Promise<GamePrefs> {
 export async function loadWorldData(gameId: string, worldId: string): Promise<WorldData> {
   const s = await getStore()
   const saved = (await s.get<Partial<WorldData>>(keys.data(gameId, worldId))) ?? {}
-  return { customPins: saved.customPins ?? [], found: saved.found ?? [] }
+  return { ...EMPTY_WORLD_DATA, ...saved }
 }
 
 export async function loadSession(gameId: string, worldId: string): Promise<MapSession> {
@@ -141,7 +142,16 @@ export async function rememberLastWorld(gameId: string, index: WorldIndex, world
 
 /** The user's data for the map: every world's filters plus this world's pins. */
 export function userData(prefs: GamePrefs, data: WorldData): GameUserData {
-  return { ...prefs, ...data }
+  // Prefs last: old `game:<id>` data can still hold filters that moved to them.
+  return { ...data, ...prefs }
+}
+
+/** A write that failed is written again with the next change: say so, don't lose it quietly. */
+function saving(write: Promise<unknown>) {
+  write.catch((e: unknown) => {
+    logUiError(`could not save: ${String(e)}`)
+    useStore.getState().notify('Could not save your map data. It stays here while the app is open', 'error')
+  })
 }
 
 const SESSION_KEYS = Object.keys(EMPTY_SESSION) as (keyof MapSession)[]
@@ -176,22 +186,23 @@ export function startPersisting(): () => void {
   })
   const unsubscribe = useStore.subscribe((state, prev) => {
     // Loading another game or world replaces everything at once; nothing to save.
-    if (applyingRemote || !state.game || state.game !== prev.game || state.world.id !== prev.world.id) return
+    if (applyingRemote || !state.game || state.game !== prev.game || state.world !== prev.world) return
     const gameId = state.game.id
     const worldId = state.world.id
     const changed: Changed = { from: self, gameId, worldId }
     if (state.user !== prev.user) {
-      const { hiddenCategories, shownCategories, customPins, found } = state.user
-      void getStore().then((s) => {
-        void s.set(keys.prefs(gameId), { hiddenCategories, shownCategories })
-        void s.set(keys.data(gameId, worldId), { customPins, found })
-      })
+      const { hiddenCategories, shownCategories, filterSets, customPins, found, notes, timers } = state.user
+      saving(
+        getStore().then((s) =>
+          Promise.all([s.set(keys.prefs(gameId), { hiddenCategories, shownCategories, filterSets }), s.set(keys.data(gameId, worldId), { customPins, found, notes, timers })]),
+        ),
+      )
       changed.user = state.user
     }
     if (state.tracked !== prev.tracked) changed.tracked = state.tracked
     if (SESSION_KEYS.some((k) => state[k] !== prev[k])) {
       const session = selectSession(state)
-      void getStore().then((s) => s.set(keys.session(gameId, worldId), session))
+      saving(getStore().then((s) => s.set(keys.session(gameId, worldId), session)))
     }
     if (changed.user || changed.tracked !== undefined) void emit(CHANGED, changed)
   })

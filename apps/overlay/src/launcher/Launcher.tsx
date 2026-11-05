@@ -8,9 +8,10 @@ import { startAgentLogBuffer } from '../lib/agentLogs'
 import { backend, events, type GameEntry, type PackStatus, type SetupChecks, type UpdateState } from '../lib/backend'
 import type { LinkStatus } from '../lib/protocol'
 import { SettingsView } from '../settings/SettingsView'
-import { mapHotkey, useSettings } from '../settings/store'
+import { hookMode, mapHotkey, useSettings } from '../settings/store'
 import { startSettings } from '../settings/sync'
 import { Button, IconButton, Segmented } from '../ui/controls'
+import { AnalyticsChoice, StarPrompt, Welcome } from '../ui/Onboarding'
 import { filterGames, gameView, packView, updateView, type GameFilter } from './view'
 
 function useLauncherData() {
@@ -99,6 +100,9 @@ export function Launcher() {
       ) : (
         <GameList data={data} onAction={run} onSettings={(gameId) => setSettings({ gameId })} />
       )}
+      <StarPrompt gameRunning={!!data.status?.game_id} className="fixed bottom-3 right-3 z-40" />
+      <Welcome />
+      <AnalyticsChoice />
     </div>
   )
 }
@@ -205,9 +209,9 @@ function GameRow({
   onAction: (a: () => Promise<unknown>) => void
 }) {
   const [open, setOpen] = useState(false)
-  const hookMode = useSettings((s) => s.app?.hook_modes[game.id] ?? 'auto')
+  const connectMode = useSettings((s) => hookMode(s.app, game.id))
   const mapKey = useSettings((s) => mapHotkey(s.app, game))
-  const view = gameView(game, status, hookMode, mapKey)
+  const view = gameView(game, status, connectMode, mapKey)
   const checks = useSetupChecks(view.running)
   const map = pack && packView(pack)
   const detailsId = `game-${game.id}-options`
@@ -236,7 +240,8 @@ function GameRow({
                 </span>
               )}
             </span>
-            <span className="block truncate text-[12px] text-ink-dim">{view.text}</span>
+            {/* Wraps: this is where connection errors show, and they have to be readable. */}
+            <span className="block break-words text-[12px] text-ink-dim">{view.text}</span>
           </span>
         </div>
         {!view.running && game.steamAppId !== null && (

@@ -1,11 +1,15 @@
 // User actions shared across components.
 
 import { mapHandle } from '../map/handle'
-import { selectAllPins, useStore } from '../state/store'
+import { isCategoryVisible, selectAllPins, useStore } from '../state/store'
 import { backend } from './backend'
 import type { Pin } from './game'
 import { LABEL_ZOOM } from '../map/style'
+import { nearestUnfound } from './nearest'
 import { mapZoom, toLngLat, type LngLat, toWorld } from './projection'
+import type { LocalPlayer, Vec3, WorldLayer } from './protocol'
+
+const DEATH_PIN = 'custom-death'
 
 function projection() {
   const map = useStore.getState().map
@@ -46,7 +50,7 @@ export function teleportToPin(pin: Pin) {
   const { game } = useStore.getState()
   const up = projection().up
   const position = snap ? pin.position : { ...pin.position, [up]: pin.position[up] + PIN_CLEARANCE_METERS * (game?.unitsPerMeter ?? 1) }
-  return runTeleport(() => backend.teleport({ kind: 'position', position, snap_to_ground: snap }), pin.name)
+  return runTeleport(() => backend.teleport({ kind: 'position', position, snap_to_ground: snap, layer: pin.layer }), pin.name)
 }
 
 export function teleportToMapPoint(ll: LngLat) {
@@ -89,6 +93,70 @@ export function newCustomPinAt(ll: LngLat): Pin {
     custom: true,
     snapToGround: true,
   }
+}
+
+/** Drops a pin where the player stands (the quick-mark key). */
+export function quickMark(): Pin | null {
+  const pin = customPinAtPlayer()
+  if (!pin) return null
+  const { user, upsertCustomPin } = useStore.getState()
+  const marked = { ...pin, name: `Mark ${user.customPins.filter((p) => p.name.startsWith('Mark ')).length + 1}` }
+  upsertCustomPin(marked)
+  return marked
+}
+
+/** The pin dropped where the player died, replacing the last one. */
+export function markDeath(at: LocalPlayer) {
+  const { upsertCustomPin } = useStore.getState()
+  upsertCustomPin({
+    id: DEATH_PIN,
+    category: 'custom',
+    name: 'Where you died',
+    position: { ...at.position },
+    layer: at.layer === 'caves' ? 'caves' : 'surface',
+    color: '#eb5757',
+    icon: 'builtin:skull',
+    custom: true,
+  })
+}
+
+/** How far the bag has to move to count: it settles a little after landing. */
+const BAG_MOVE_UNITS = 1
+
+/** Whether the bag is somewhere new. */
+export function bagMoved(before: Vec3 | undefined, now: Vec3): boolean {
+  return !before || Math.hypot(now.x - before.x, now.y - before.y, now.z - before.z) > BAG_MOVE_UNITS
+}
+
+/** Moves the death pin to the player's bag, which the game drops somewhere of its own. */
+export function markBag(at: Vec3, layer: WorldLayer = 'surface') {
+  useStore.getState().upsertCustomPin({
+    id: DEATH_PIN,
+    category: 'custom',
+    name: 'Your bag',
+    position: { ...at },
+    layer: layer === 'caves' ? 'caves' : 'surface',
+    color: '#eb5757',
+    icon: 'builtin:backpack',
+    custom: true,
+  })
+}
+
+/** Removes the death pin, once there's nothing to go back for. */
+export function clearDeathPin() {
+  useStore.getState().deleteCustomPin(DEATH_PIN)
+}
+
+/** Tracks the nearest thing not found yet among the categories on the map. */
+export function trackNearestUnfound(hidden?: (pin: Pin) => boolean): Pin | null {
+  const s = useStore.getState()
+  const local = s.snapshot?.local
+  if (!local || !s.game || !s.map) return null
+  const shown = s.game.categories.filter((c) => isCategoryVisible(c, s.user))
+  const collectible = shown.filter((c) => c.autoFound)
+  const pin = nearestUnfound(s.gamePins, collectible.length ? collectible : shown, s.user.found, local, s.map.projection, hidden)
+  if (pin) s.setTracked({ kind: 'pin', id: pin.id })
+  return pin
 }
 
 export function customPinAtPlayer(): Pin | null {

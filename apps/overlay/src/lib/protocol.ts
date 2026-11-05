@@ -89,6 +89,61 @@ export interface WorldSnapshot {
   session?: MultiplayerSession
   /** The world or save that's loaded; absent in menus or when the game doesn't expose it. */
   world?: GameWorld
+  /** AI companions the game reports details for; absent when there are none. */
+  companions?: CompanionStatus[]
+  /** Time, season and weather, for games that expose them. */
+  environment?: Environment
+  /** Where the player's things are after dying, while they're on the ground. */
+  dropped_bag?: Vec3
+  /** The player is dying or dead right now. */
+  dying?: boolean
+}
+
+/** What changed since the last snapshot; `markers` and `creatures` only when they did. */
+export interface SnapshotUpdate {
+  frame: number
+  local: LocalPlayer | null
+  others: RemotePlayer[]
+  markers?: Marker[]
+  creatures?: Creature[]
+  companions?: CompanionStatus[]
+  environment?: Environment
+  dropped_bag?: Vec3
+  dying?: boolean
+}
+
+export interface CompanionStat {
+  name: string
+  value: number
+  max: number
+}
+
+export interface CompanionStatus {
+  id: string
+  name: string
+  position: Vec3 | null
+  alive: boolean
+  injured: boolean
+  /** What they're doing, when the game says. */
+  activity: string | null
+  stats: CompanionStat[]
+}
+
+/** Something a companion can be told to do. */
+export interface CompanionOrderOption {
+  id: string
+  /** Heading it's listed under. */
+  group: string
+  label: string
+}
+
+export interface Environment {
+  /** Days survived, when the game counts them. */
+  day: number | null
+  hour: number
+  minute: number
+  season: string | null
+  weather: string | null
 }
 
 export type WorldKind = 'single_player' | 'hosted' | 'joined'
@@ -118,7 +173,7 @@ export interface Creature {
   position: Vec3
 }
 
-export type HotkeyAction = 'toggle_map' | 'zoom_in' | 'zoom_out' | 'teleport_back'
+export type HotkeyAction = 'toggle_map' | 'zoom_in' | 'zoom_out' | 'teleport_back' | 'quick_mark' | 'nearest_unfound' | 'accept_request'
 
 export interface Hotkey {
   action: HotkeyAction
@@ -129,7 +184,7 @@ export interface Hotkey {
 }
 
 export type TeleportTarget =
-  | { kind: 'position'; position: Vec3; snap_to_ground: boolean }
+  | { kind: 'position'; position: Vec3; snap_to_ground: boolean; layer?: WorldLayer }
   | { kind: 'player'; id: string }
 
 /** `ready`: the game is running but not connected (manual hooking, or disconnected). */
@@ -149,7 +204,9 @@ export type Corner = 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right'
 
 export interface PinConfig {
   enabled: boolean
-  corner: Corner
+  /** Where the HUD sits: 0..1 across the room left on the screen inside the margin. */
+  anchor_x: number
+  anchor_y: number
   width: number
   height: number
   margin: number

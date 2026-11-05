@@ -2,6 +2,7 @@
 //! loads the agent into them, shows the map overlay, and keeps itself and its map
 //! data up to date.
 
+mod analytics;
 mod checks;
 mod games;
 mod injector;
@@ -11,20 +12,23 @@ mod map_window;
 mod mappacks;
 mod overlay;
 mod recovery;
+mod report;
 mod settings;
 mod updates;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use game_maps_protocol::{GroundPoint, Hotkey, HotkeyAction, PathInfo, RouteCheck, TeleportTarget, Vec3, WorldSnapshot};
+use game_maps_protocol::{CompanionOrderOption, GroundPoint, Hotkey, HotkeyAction, PathInfo, RouteCheck, TeleportTarget, Vec3, WorldSnapshot};
 use tauri::http::{header, Response, StatusCode};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Listener, Manager, State};
 use tauri_plugin_autostart::ManagerExt as _;
+use tauri_plugin_dialog::DialogExt as _;
 use tauri_plugin_opener::OpenerExt as _;
 
+use analytics::Analytics;
 use games::{AssetRoots, GameEntry};
 use link::{AgentLink, LinkConfig, LinkStatus};
 use mappacks::{MapPacks, PackStatus};
@@ -34,6 +38,10 @@ use updates::{UpdateState, Updates};
 
 /// Passed when started by Windows at login: stay in the tray.
 const BACKGROUND_ARG: &str = "--background";
+const PROJECT_URL: &str = "https://github.com/HYPExMon5ter/game-maps";
+const PRIVACY_URL: &str = "https://github.com/HYPExMon5ter/game-maps#privacy";
+const POSTHOG_URL: &str = "https://posthog.com";
+const ISSUES_URL: &str = "https://github.com/HYPExMon5ter/game-maps/issues/new/choose";
 
 struct Paths {
     /// Bundled game definitions (in development: the repository's `games/`).
@@ -56,8 +64,8 @@ fn get_last_snapshot(link: State<'_, Arc<AgentLink>>) -> Option<WorldSnapshot> {
 }
 
 #[tauri::command]
-async fn teleport(link: State<'_, Arc<AgentLink>>, target: TeleportTarget) -> Result<(), String> {
-    link.inner().clone().teleport(target).await
+async fn teleport(app: AppHandle, link: State<'_, Arc<AgentLink>>, target: TeleportTarget) -> Result<(), String> {
+    link.inner().clone().teleport(&app, target).await
 }
 
 /// A walking route from the player to `to` on the game's navigation mesh.
@@ -88,6 +96,18 @@ async fn probe_ground(link: State<'_, Arc<AgentLink>>, points: Vec<Vec3>) -> Res
     link.inner().clone().probe_ground(points).await
 }
 
+/// What a companion can be told to do right now.
+#[tauri::command]
+async fn companion_orders(link: State<'_, Arc<AgentLink>>, companion: String) -> Result<Vec<CompanionOrderOption>, String> {
+    link.inner().clone().companion_orders(companion).await
+}
+
+/// Tells a companion to do something (an id from `companion_orders`).
+#[tauri::command]
+async fn companion_order(link: State<'_, Arc<AgentLink>>, companion: String, order: String) -> Result<(), String> {
+    link.inner().clone().companion_order(companion, order).await
+}
+
 /// Returns the player to where they were before their last teleport.
 #[tauri::command]
 async fn teleport_back(link: State<'_, Arc<AgentLink>>) -> Result<(), String> {
@@ -113,6 +133,75 @@ fn set_back_key(app: AppHandle, link: State<'_, Arc<AgentLink>>, registry: State
     Ok(saved)
 }
 
+/// Sets the key of an action the map handles itself (all games); `None` turns it off.
+#[tauri::command]
+fn set_action_key(app: AppHandle, link: State<'_, Arc<AgentLink>>, registry: State<'_, Registry>, action: HotkeyAction, key: Option<Hotkey>) -> Result<AppSettings, String> {
+    if key.as_ref().is_some_and(|h| h.action != action) {
+        return Err("the key must be bound to its own action".into());
+    }
+    let saved = settings::update(&app, |s| {
+        if let Some(slot) = s.action_keys.slot(action) {
+            *slot = key;
+        }
+    })?;
+    if let Some(game) = link.status().game_id.and_then(|id| registry.0.iter().find(|g| g.id == id)) {
+        link.apply_hotkeys(&game.id, saved.hotkeys(game));
+    }
+    Ok(saved)
+}
+
+/// Asks where to save `contents`, then writes it. False when the user cancels.
+async fn save_as(app: &AppHandle, name: &str, kind: (&str, &str), contents: String) -> Result<bool, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog().file().set_file_name(name).add_filter(kind.0, &[kind.1]).save_file(move |path| {
+        let _ = tx.send(path);
+    });
+    let Some(path) = rx.await.map_err(|e| e.to_string())? else { return Ok(false) };
+    let path = path.into_path().map_err(|e| e.to_string())?;
+    std::fs::write(path, contents).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn save_text_file(app: AppHandle, name: String, contents: String) -> Result<bool, String> {
+    save_as(&app, &name, ("Pins", "json"), contents).await
+}
+
+/// Saves a problem report (see [`report`]). `ui` is what the asking window knows.
+#[tauri::command]
+async fn save_report(app: AppHandle, ui: String) -> Result<bool, String> {
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let saved = save_as(&app, &format!("game-maps-report-{stamp}.txt"), ("Text", "txt"), report::build(&app, &ui)).await?;
+    if saved {
+        log::info!("problem report saved");
+    }
+    Ok(saved)
+}
+
+/// Opens the project's page for reporting a problem.
+#[tauri::command]
+fn open_issue_page(app: AppHandle) -> Result<(), String> {
+    app.opener().open_url(ISSUES_URL, None::<&str>).map_err(|e| e.to_string())
+}
+
+/// Opens the project's page.
+#[tauri::command]
+fn open_project_page(app: AppHandle) -> Result<(), String> {
+    app.opener().open_url(PROJECT_URL, None::<&str>).map_err(|e| e.to_string())
+}
+
+/// Opens the list of what the usage counts contain.
+#[tauri::command]
+fn open_privacy_page(app: AppHandle) -> Result<(), String> {
+    app.opener().open_url(PRIVACY_URL, None::<&str>).map_err(|e| e.to_string())
+}
+
+/// Opens the site of the service that receives the usage counts.
+#[tauri::command]
+fn open_posthog_page(app: AppHandle) -> Result<(), String> {
+    app.opener().open_url(POSTHOG_URL, None::<&str>).map_err(|e| e.to_string())
+}
+
 /// Dev tooling: scans the loaded world and saves it as JSON under `exports/`.
 /// Returns the file path. `tools/pins` turns exports into a game's pin data.
 #[tauri::command]
@@ -136,6 +225,7 @@ fn get_overlay_mode(app: AppHandle) -> OverlayMode {
 /// Opens `game_id`'s map. A running game's map stays shown over any other.
 #[tauri::command]
 fn open_map(app: AppHandle, game_id: String) {
+    mappacks::request(&app, &game_id);
     let _ = app.emit("show-game", game_id);
     overlay::open(&app);
 }
@@ -192,6 +282,13 @@ fn set_hook_mode(app: AppHandle, link: State<'_, Arc<AgentLink>>, game_id: Strin
     Ok(saved)
 }
 
+#[tauri::command]
+fn set_all_hook_modes(app: AppHandle, link: State<'_, Arc<AgentLink>>, mode: HookMode) -> Result<AppSettings, String> {
+    let saved = settings::update(&app, |s| s.set_all_hook_modes(mode))?;
+    link.wake();
+    Ok(saved)
+}
+
 /// Sets (or with `None`, resets to the game's default) the key that opens a game's map.
 #[tauri::command]
 fn set_map_hotkey(
@@ -234,10 +331,30 @@ fn set_auto_update(app: AppHandle, enabled: bool) -> Result<AppSettings, String>
     settings::update(&app, |s| s.auto_update = enabled)
 }
 
+/// Sets whether usage counts are sent.
+#[tauri::command]
+fn set_analytics(app: AppHandle, enabled: bool) -> Result<AppSettings, String> {
+    let saved = settings::update(&app, |s| s.analytics = Some(enabled))?;
+    analytics::app_started(&app);
+    Ok(saved)
+}
+
+/// A feature used during play, for the session's usage counts.
+#[tauri::command]
+fn count_feature(app: AppHandle, feature: analytics::Feature) {
+    analytics::count(&app, feature);
+}
+
 /// An error in a window's UI, for the log.
 #[tauri::command]
 fn log_ui_error(window: tauri::Window, message: String) {
     log::error!("[ui:{}] {message}", window.label());
+}
+
+/// Something that happened in a window's UI, for the log.
+#[tauri::command]
+fn log_ui_info(window: tauri::Window, message: String) {
+    log::info!("[ui:{}] {message}", window.label());
 }
 
 /// Monitors the map window can be put on. Async: monitor and window calls wait for the
@@ -268,8 +385,12 @@ fn set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn connect_game(link: State<'_, Arc<AgentLink>>) -> Result<(), String> {
-    link.request_connect()
+fn connect_game(app: AppHandle, link: State<'_, Arc<AgentLink>>) -> Result<(), String> {
+    link.request_connect()?;
+    if let Some(id) = link.status().game_id {
+        mappacks::request(&app, &id);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -281,6 +402,7 @@ fn disconnect_game(link: State<'_, Arc<AgentLink>>) -> Result<(), String> {
 fn launch_game(app: AppHandle, registry: State<'_, Registry>, game_id: String) -> Result<(), String> {
     let game = registry.0.iter().find(|g| g.id == game_id).ok_or("unknown game")?;
     let app_id = game.steam_app_id.ok_or("this game can't be started from Game Maps")?;
+    mappacks::request(&app, &game_id);
     app.opener().open_url(format!("steam://rungameid/{app_id}"), None::<&str>).map_err(|_| "Could not start Steam. Is it installed?".to_string())
 }
 
@@ -411,6 +533,8 @@ pub fn run() {
             tauri_plugin_log::Builder::new()
                 .level(log::LevelFilter::Info)
                 .max_file_size(2_000_000)
+                // The session a problem happened in may not be the newest file.
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(3))
                 .build(),
         )
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -447,7 +571,26 @@ pub fn run() {
             let ids: Vec<String> = registry.iter().map(|g| g.id.clone()).collect();
             app.manage(MapPacks::new(data_dir.join("maps"), &paths.games, &ids));
             app.manage(SettingsState::load(&handle));
+            app.manage(Analytics::new());
+            analytics::app_started(&handle);
             app.manage(paths);
+            // A game just started: pick up a map published since the last check, and its
+            // map if there is none yet and the player wants the app connecting to it.
+            // Before the link starts, so a game that's already running counts too.
+            let h = handle.clone();
+            app.listen_any("agent-status", move |event| {
+                let status = serde_json::from_str::<serde_json::Value>(event.payload()).unwrap_or_default();
+                let started = matches!(status.get("state").and_then(|v| v.as_str()), Some("connecting" | "ready"));
+                if started {
+                    mappacks::sync_soon(&h);
+                    if let Some(id) = status.get("game_id").and_then(|v| v.as_str()) {
+                        if settings::get(&h).hook_mode(id) == HookMode::Auto {
+                            mappacks::request(&h, id);
+                        }
+                    }
+                }
+            });
+
             let link = AgentLink::start(handle.clone(), LinkConfig { games: registry.clone(), agent_dll, staging_dir: data_dir.join("agent") });
             app.manage(link);
             app.manage(Registry(registry));
@@ -456,16 +599,6 @@ pub fn run() {
             checks::start_fullscreen_watch(handle.clone());
             mappacks::start_background(handle.clone());
             updates::start_background(handle.clone());
-
-            // A game just started: pick up a map published since the last check.
-            let h = handle.clone();
-            app.listen_any("agent-status", move |event| {
-                let status = serde_json::from_str::<serde_json::Value>(event.payload()).unwrap_or_default();
-                let started = matches!(status.get("state").and_then(|v| v.as_str()), Some("connecting" | "ready"));
-                if started {
-                    mappacks::sync_soon(&h);
-                }
-            });
 
             map_window::restore(&handle);
             build_tray(app)?;
@@ -480,13 +613,23 @@ pub fn run() {
             teleport,
             teleport_back,
             log_ui_error,
+            log_ui_info,
             list_monitors,
             set_map_window,
             find_path,
             check_route,
             probe_ground,
+            companion_orders,
+            companion_order,
             teleport_back_steps,
             set_back_key,
+            set_action_key,
+            save_text_file,
+            save_report,
+            open_issue_page,
+            open_project_page,
+            open_privacy_page,
+            open_posthog_page,
             export_world,
             get_overlay_mode,
             open_map,
@@ -496,9 +639,12 @@ pub fn run() {
             save_user_icon,
             get_app_settings,
             set_hook_mode,
+            set_all_hook_modes,
             set_map_hotkey,
             set_zoom_keys,
             set_auto_update,
+            set_analytics,
+            count_feature,
             get_autostart,
             set_autostart,
             connect_game,

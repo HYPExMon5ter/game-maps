@@ -28,6 +28,7 @@ use std::sync::Mutex;
 
 use game_maps_protocol::Hotkey;
 use minhook::MinHook;
+use windows::Win32::System::SystemInformation::GetTickCount64;
 use unity_runtime::Runtime;
 use windows::core::{s, w, BOOL, PCSTR};
 use windows::Win32::Foundation::HWND;
@@ -56,10 +57,24 @@ fn window_pid(hwnd: HWND) -> u32 {
     pid
 }
 
-/// Whether the connected app's window (the open map) is in front.
+/// The last answer of [`app_in_front`]: the tick it's from, shifted up, and the answer.
+static APP_IN_FRONT: AtomicU64 = AtomicU64::new(0);
+
+/// Whether the connected app's window (the open map) is in front. Asked by every guarded
+/// input call, many times a frame, so it's only looked up once per system tick (about 16 ms).
 fn app_in_front() -> bool {
     let app = APP_PID.load(Ordering::Relaxed);
-    app != 0 && window_pid(unsafe { GetForegroundWindow() }) == app
+    if app == 0 {
+        return false;
+    }
+    let tick = unsafe { GetTickCount64() };
+    let known = APP_IN_FRONT.load(Ordering::Relaxed);
+    if known >> 1 == tick {
+        return known & 1 != 0;
+    }
+    let in_front = window_pid(unsafe { GetForegroundWindow() }) == app;
+    APP_IN_FRONT.store(tick << 1 | in_front as u64, Ordering::Relaxed);
+    in_front
 }
 
 unsafe fn hook(target: *mut c_void, detour: *mut c_void, original: &AtomicUsize) -> Result<(), String> {
@@ -170,6 +185,8 @@ fn is_hidden_vk(vk: u32) -> bool {
 static PEEK_W: AtomicUsize = AtomicUsize::new(0);
 static PEEK_A: AtomicUsize = AtomicUsize::new(0);
 static GET_W: AtomicUsize = AtomicUsize::new(0);
+/// Threads inside the `GetMessage` detours.
+static IN_GET_MESSAGE: AtomicUsize = AtomicUsize::new(0);
 static GET_A: AtomicUsize = AtomicUsize::new(0);
 static RAW_DATA: AtomicUsize = AtomicUsize::new(0);
 static RAW_BUFFER: AtomicUsize = AtomicUsize::new(0);
@@ -212,19 +229,23 @@ unsafe extern "system" fn peek_message_a(msg: *mut MSG, hwnd: HWND, min: u32, ma
 
 unsafe extern "system" fn get_message_w(msg: *mut MSG, hwnd: HWND, min: u32, max: u32) -> BOOL {
     let original: GetMessageFn = std::mem::transmute(GET_W.load(Ordering::Relaxed));
+    IN_GET_MESSAGE.fetch_add(1, Ordering::SeqCst);
     let r = original(msg, hwnd, min, max);
     if r.0 > 0 {
         filter_message(msg);
     }
+    IN_GET_MESSAGE.fetch_sub(1, Ordering::SeqCst);
     r
 }
 
 unsafe extern "system" fn get_message_a(msg: *mut MSG, hwnd: HWND, min: u32, max: u32) -> BOOL {
     let original: GetMessageFn = std::mem::transmute(GET_A.load(Ordering::Relaxed));
+    IN_GET_MESSAGE.fetch_add(1, Ordering::SeqCst);
     let r = original(msg, hwnd, min, max);
     if r.0 > 0 {
         filter_message(msg);
     }
+    IN_GET_MESSAGE.fetch_sub(1, Ordering::SeqCst);
     r
 }
 
@@ -442,14 +463,19 @@ pub fn install_input_guard(rt: &Runtime) -> usize {
     done.len()
 }
 
-/// Removes every guard hook (before the agent unloads).
-pub fn remove() {
+/// Stops every guard hook (before the agent unloads); see `hook::remove` for freeing them.
+pub fn disable() {
     for target in HOOKED.lock().unwrap().drain(..) {
         unsafe {
             let _ = MinHook::disable_hook(target as *mut c_void);
-            let _ = MinHook::remove_hook(target as *mut c_void);
         }
     }
+}
+
+/// Whether a game thread is blocked in `GetMessage` with this module on its stack: it
+/// returns here whenever a message comes, so the module has to stay mapped.
+pub fn thread_in_get_message() -> bool {
+    IN_GET_MESSAGE.load(Ordering::SeqCst) != 0
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import type { AgentLog, GroundPoint, Hotkey, LinkStatus, OverlayMode, PathInfo, PinConfig, RouteCheck, TeleportTarget, Vec3, WorldSnapshot } from './protocol'
+import type { AgentLog, CompanionOrderOption, GroundPoint, Hotkey, HotkeyAction, LinkStatus, OverlayMode, PathInfo, PinConfig, RouteCheck, SnapshotUpdate, TeleportTarget, Vec3, WorldSnapshot } from './protocol'
 
 /** A supported game as bundled with the app (subset of `game.json`). */
 export interface GameEntry {
@@ -23,16 +23,28 @@ export interface ZoomKeys {
   zoom_out: [Hotkey | null, Hotkey | null]
 }
 
+export interface ActionKeys {
+  quick_mark: Hotkey | null
+  nearest_unfound: Hotkey | null
+  accept_request: Hotkey | null
+}
+
 export interface AppSettings {
+  /** For games without a choice of their own in `hook_modes`. */
+  default_hook_mode: HookMode
   hook_modes: Record<string, HookMode>
   /** Per-game map hotkey; absent uses the game's default. */
   map_hotkeys: Record<string, Hotkey>
   zoom_keys: ZoomKeys
   /** Returns to where you were before your last teleport (all games); null = off. */
   back_key: Hotkey | null
+  /** Keys for what the map does itself (all games); null = off. */
+  action_keys: ActionKeys
   auto_update: boolean
   /** Monitor the map window is kept open on; null when it's off. */
   map_window: string | null
+  /** Whether anonymous usage counts may be sent; null until the player has answered. */
+  analytics: boolean | null
 }
 
 export interface MonitorInfo {
@@ -81,6 +93,9 @@ export const backend = {
   checkRoute: (points: Vec3[]) => invoke<RouteCheck>('check_route', { points }),
   /** The floor under points near the player, and whether the game camera sees them. */
   probeGround: (points: Vec3[]) => invoke<GroundPoint[]>('probe_ground', { points }),
+  /** What a companion can be told to do right now. */
+  companionOrders: (companion: string) => invoke<CompanionOrderOption[]>('companion_orders', { companion }),
+  companionOrder: (companion: string, order: string) => invoke<void>('companion_order', { companion, order }),
   /** How many teleports `teleportBack` can undo. */
   teleportBackSteps: () => invoke<number>('teleport_back_steps'),
   /** Dev tooling: scans the loaded world; resolves to the saved file path. */
@@ -95,15 +110,30 @@ export const backend = {
 
   appSettings: () => invoke<AppSettings>('get_app_settings'),
   setHookMode: (gameId: string, mode: HookMode) => invoke<AppSettings>('set_hook_mode', { gameId, mode }),
+  setAllHookModes: (mode: HookMode) => invoke<AppSettings>('set_all_hook_modes', { mode }),
+  openProjectPage: () => invoke<void>('open_project_page'),
+  openPrivacyPage: () => invoke<void>('open_privacy_page'),
+  openPosthogPage: () => invoke<void>('open_posthog_page'),
   /** `null` resets to the game's default key. */
   setMapHotkey: (gameId: string, hotkey: Hotkey | null) => invoke<AppSettings>('set_map_hotkey', { gameId, hotkey }),
   /** `null` restores the default zoom keys. */
   setZoomKeys: (keys: ZoomKeys | null) => invoke<AppSettings>('set_zoom_keys', { keys }),
   /** `null` turns the teleport back key off. */
   setBackKey: (key: Hotkey | null) => invoke<AppSettings>('set_back_key', { key }),
+  /** `null` turns the action's key off. */
+  setActionKey: (action: HotkeyAction, key: Hotkey | null) => invoke<AppSettings>('set_action_key', { action, key }),
+  /** Asks where to save a text file; false when the user cancels. */
+  saveTextFile: (name: string, contents: string) => invoke<boolean>('save_text_file', { name, contents }),
+  saveReport: (ui: string) => invoke<boolean>('save_report', { ui }),
+  openIssuePage: () => invoke<void>('open_issue_page'),
   setAutoUpdate: (enabled: boolean) => invoke<AppSettings>('set_auto_update', { enabled }),
+  setAnalytics: (enabled: boolean) => invoke<AppSettings>('set_analytics', { enabled }),
+  /** Notes a feature used during play, for the session's usage counts. */
+  countFeature: (feature: 'tracked' | 'multiplayer') => invoke<void>('count_feature', { feature }),
   /** Writes a UI error to the app's log. */
   logUiError: (message: string) => invoke<void>('log_ui_error', { message }),
+  /** Writes a UI event to the app's log. */
+  logUiInfo: (message: string) => invoke<void>('log_ui_info', { message }),
   listMonitors: () => invoke<MonitorInfo[]>('list_monitors'),
   /** Keeps the map window open on a monitor, or closes it (`null`). */
   setMapWindow: (monitor: string | null) => invoke<AppSettings>('set_map_window', { monitor }),
@@ -125,6 +155,8 @@ export const events = {
   status: (cb: (s: LinkStatus) => void): Promise<UnlistenFn> => listen<LinkStatus>('agent-status', (e) => cb(e.payload)),
   snapshot: (cb: (s: WorldSnapshot) => void): Promise<UnlistenFn> =>
     listen<WorldSnapshot>('world-snapshot', (e) => cb(e.payload)),
+  snapshotUpdate: (cb: (u: SnapshotUpdate) => void): Promise<UnlistenFn> =>
+    listen<SnapshotUpdate>('world-update', (e) => cb(e.payload)),
   overlayMode: (cb: (m: OverlayMode) => void): Promise<UnlistenFn> =>
     listen<OverlayMode>('overlay-mode', (e) => cb(e.payload)),
   agentLog: (cb: (l: AgentLog) => void): Promise<UnlistenFn> => listen<AgentLog>('agent-log', (e) => cb(e.payload)),
@@ -137,6 +169,8 @@ export const events = {
   showGame: (cb: (gameId: string) => void): Promise<UnlistenFn> => listen<string>('show-game', (e) => cb(e.payload)),
   /** The teleport back key was used in the game; the payload is the error, if any. */
   teleportBack: (cb: (error: string | null) => void): Promise<UnlistenFn> => listen<string | null>('teleport-back', (e) => cb(e.payload)),
+  /** A key for something the map does itself was pressed in the game. */
+  hotkeyAction: (cb: (action: HotkeyAction) => void): Promise<UnlistenFn> => listen<HotkeyAction>('hotkey-action', (e) => cb(e.payload)),
   /** A zoom key was pressed in the game while the mini-map is shown; `steps` is +1 or -1. */
   mapZoom: (cb: (steps: number) => void): Promise<UnlistenFn> => listen<number>('map-zoom', (e) => cb(e.payload)),
 }

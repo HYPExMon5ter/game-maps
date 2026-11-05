@@ -1,8 +1,9 @@
 // Completion for the current world: found collectibles per category with what's left,
 // and how much of the map has been explored (see `state/fog`).
 
-import { ChevronDown } from 'lucide-react'
+import { CheckCircle2, ChevronDown, Circle } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { checklistRows, type ChecklistEntry } from '../lib/checklist'
 import { formatDistance } from '../lib/compass'
 import { completion, percent, type CategoryProgress } from '../lib/completion'
 import { exploredFraction } from '../lib/fog'
@@ -55,12 +56,49 @@ export function Progress({ onOpen }: { onOpen: (pin: Pin) => void }) {
         </div>
       </div>
 
+      {game.checklist && <Checklist entries={game.checklist} pins={gamePins} found={found} onOpen={onOpen} />}
+
       <ul className="mt-2">
         {progress.categories.map((c) => (
           <CategoryRow key={c.category.id} gameId={game.id} progress={c} open={open === c.category.id} onToggle={() => setOpen(open === c.category.id ? null : c.category.id)} onOpen={onOpen} />
         ))}
         {progress.categories.length === 0 && <li className="px-2 py-6 text-center text-[13px] text-ink-faint">Nothing to collect on this map.</li>}
       </ul>
+    </div>
+  )
+}
+
+/** The game's key items: what's done, and the way to what isn't. */
+function Checklist({ entries, pins, found, onOpen }: { entries: ChecklistEntry[]; pins: Pin[]; found: string[]; onOpen: (pin: Pin) => void }) {
+  const rows = useMemo(() => checklistRows(entries, pins, found), [entries, pins, found])
+  const [open, setOpen] = useState(false)
+  const done = rows.filter((r) => r.done).length
+  return (
+    <div className="mt-2 rounded-xl bg-panel-raised px-2 py-1.5">
+      <button className="flex w-full items-center justify-between gap-2 px-1 py-0.5 text-[13px]" aria-expanded={open} onClick={() => setOpen(!open)}>
+        Key items
+        <span className="flex items-center gap-1.5 text-[11px] tabular-nums text-ink-faint">
+          {done}/{rows.length}
+          <ChevronDown className={`size-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />
+        </span>
+      </button>
+      {open && (
+        <ul className="mt-1">
+          {rows.map((row) => (
+            <li key={row.name}>
+              <button
+                className="flex w-full items-center gap-2 rounded-lg px-1 py-1 text-left text-[12.5px] hover:bg-black/20 disabled:hover:bg-transparent"
+                disabled={row.pins.length === 0}
+                title={row.pins.length ? 'Show on the map' : "This map doesn't have it"}
+                onClick={() => onOpen(row.pins.find((p) => !found.includes(p.id)) ?? row.pins[0])}
+              >
+                {row.done ? <CheckCircle2 className="size-3.5 shrink-0 text-live" /> : <Circle className="size-3.5 shrink-0 text-ink-faint" />}
+                <span className={`min-w-0 flex-1 truncate ${row.done ? 'text-ink-faint' : ''}`}>{row.name}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }

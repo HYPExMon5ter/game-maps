@@ -4,7 +4,8 @@
 import { emit, listen } from '@tauri-apps/api/event'
 import { useEffect, useMemo } from 'react'
 import { create } from 'zustand'
-import { emptyFog, exploredAt, loadFog, reveal, saveFog, type Fog, type SavedFog } from '../lib/fog'
+import { logUiError } from '../lib/errors'
+import { emptyFog, exploredAt, loadFog, mergeFog, reveal, saveFog, type Fog, type SavedFog } from '../lib/fog'
 import { FRIENDS_CATEGORY, type Pin } from '../lib/game'
 import { useSettings } from '../settings/store'
 import { getStore } from './persist'
@@ -56,12 +57,37 @@ async function save() {
   const { key, fog } = useFogStore.getState()
   if (!dirty || !key || !fog) return
   dirty = false
-  await (await getStore()).set(key, saveFog(fog))
-  void emit(SAVED, key)
+  try {
+    await (await getStore()).set(key, saveFog(fog))
+    void emit(SAVED, key)
+  } catch (e) {
+    // Try again with the next save.
+    dirty = true
+    logUiError(`could not save explored areas: ${String(e)}`)
+  }
 }
 
 /** The overlay saved new reveals (the map window reloads them). */
 const SAVED = 'fog-saved'
+/** A window forgot the explored areas of a world. */
+const RESET = 'fog-reset'
+
+/** The explored areas to send to others, once there are any. */
+export function currentFog(): SavedFog | null {
+  const { fog } = useFogStore.getState()
+  return fog && fog.bits.some((b) => b !== 0) ? saveFog(fog) : null
+}
+
+/** Adds what another player has explored in this world. */
+export function mergeFriendFog(saved: SavedFog) {
+  const { fog } = useFogStore.getState()
+  if (!fog) return
+  const other = loadFog(saved, { ...fog, bits: new Uint8Array(fog.bits.length) })
+  if (mergeFog(fog, other)) {
+    dirty = true
+    changed(true)
+  }
+}
 
 /** Forgets the current world's explored areas. */
 export async function resetFog() {
@@ -70,7 +96,8 @@ export async function resetFog() {
   fog.bits.fill(0)
   changed(true)
   await (await getStore()).set(key, saveFog(fog))
-  void emit(SAVED, key)
+  // To every window: the one recording would otherwise save its copy right back.
+  void emit(RESET, key)
 }
 
 /**
@@ -119,9 +146,15 @@ export function useFog(record: boolean) {
     void save().then(reload)
     // Windows that don't record follow the one that does.
     const unlisten = record ? null : listen<string>(SAVED, ({ payload }) => void (payload === key && reload()))
+    const unlistenReset = listen<string>(RESET, ({ payload }) => {
+      if (payload !== key) return
+      dirty = false
+      void reload()
+    })
     return () => {
       cancelled = true
       void unlisten?.then((f) => f())
+      void unlistenReset.then((f) => f())
     }
   }, [gameId, worldId, map, unitsPerMeter, record])
 
@@ -139,6 +172,8 @@ export function useFog(record: boolean) {
       if (s.snapshot === prev.snapshot || !local || local.layer !== 'surface' || !fog || !s.game) return
       // While a new world's fog loads, the loaded fog still belongs to the previous one.
       if (key !== keys.fog(s.game.id, s.world.id)) return
+      // The game is in a world the map hasn't switched to yet: this spot isn't in this one.
+      if (s.snapshot?.world && s.snapshot.world.id !== s.world.id) return
       const e = local.position[p.east]
       const n = local.position[p.north]
       if (last?.fog === fog && Math.hypot(e - last.e, n - last.n) < fog.cell / 2) return

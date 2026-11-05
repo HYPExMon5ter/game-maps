@@ -17,7 +17,7 @@ bun run app:dev      # builds the agent DLL, then starts the app with hot reload
 ```
 
 In development builds, map data is read from `games/<id>/` in the repository instead
-of downloaded map packs, and the app never updates itself.
+of downloaded map packs, the app never updates itself, and no usage counts are sent.
 
 To try playing together without a multiplayer game, set a room in the overlay's dev
 tools console (focus the open map, **Ctrl+Shift+I**):

@@ -47,6 +47,11 @@ export function Button({
   )
 }
 
+/** Buttons two to a row that fill the width; an odd one out takes the whole last row. */
+export function ButtonGrid({ className = '', children }: { className?: string; children: ReactNode }) {
+  return <div className={`grid grid-cols-2 gap-2 [&>:last-child:nth-child(odd)]:col-span-2 ${className}`}>{children}</div>
+}
+
 export function Slider({
   label,
   value,

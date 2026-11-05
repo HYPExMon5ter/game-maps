@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_WORLD, DEFAULT_WORLD_INFO, EMPTY_INDEX, hasData, isUnsaved, keys, mergeWorldData, pickerWorlds, recordPlayed, worldLabel } from './worlds'
+import { DEFAULT_WORLD, DEFAULT_WORLD_INFO, EMPTY_INDEX, EMPTY_WORLD_DATA, hasData, isUnsaved, keys, mergeWorldData, pickerWorlds, recordPlayed, worldLabel } from './worlds'
 
 describe('worlds', () => {
   it('keeps the default world where data lived before worlds', () => {
@@ -34,15 +34,21 @@ describe('worlds', () => {
   })
 
   it('knows when there is data to move', () => {
-    expect(hasData({ customPins: [], found: [] })).toBe(false)
-    expect(hasData({ customPins: [], found: ['x'] })).toBe(true)
+    expect(hasData(EMPTY_WORLD_DATA)).toBe(false)
+    expect(hasData({ ...EMPTY_WORLD_DATA, found: ['x'] })).toBe(true)
   })
 
   it('merges pins and found items without duplicates', () => {
     const pin = (id: string) => ({ id, name: id, category: 'custom', position: { x: 0, y: 0, z: 0 } })
-    const merged = mergeWorldData({ customPins: [pin('a')], found: ['x'] }, { customPins: [pin('a'), pin('b')], found: ['x', 'y'] })
+    const merged = mergeWorldData({ ...EMPTY_WORLD_DATA, customPins: [pin('a')], found: ['x'] }, { ...EMPTY_WORLD_DATA, customPins: [pin('a'), pin('b')], found: ['x', 'y'] })
     expect(merged.customPins.map((p) => p.id)).toEqual(['a', 'b'])
     expect(merged.found).toEqual(['x', 'y'])
+  })
+
+  it('keeps notes and timers when merging, the first world winning', () => {
+    const merged = mergeWorldData({ ...EMPTY_WORLD_DATA, notes: { a: 'mine' }, timers: { t: 1 } }, { ...EMPTY_WORLD_DATA, notes: { a: 'old', b: 'theirs' }, timers: { t: 2, u: 3 } })
+    expect(merged.notes).toEqual({ a: 'mine', b: 'theirs' })
+    expect(merged.timers).toEqual({ t: 1, u: 3 })
   })
 
   it('tells unsaved new games apart', () => {

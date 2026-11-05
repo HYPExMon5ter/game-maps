@@ -8,14 +8,14 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use game_maps_protocol::{AgentMessage, CameraView, Vec3, Capabilities, Hotkey, HotkeyAction, LogLevel, TeleportTarget, WorldLayer, WorldSnapshot, PROTOCOL_VERSION};
+use game_maps_protocol::{AgentMessage, CameraView, Vec3, Capabilities, Hotkey, HotkeyAction, LogLevel, SnapshotUpdate, TeleportTarget, WorldLayer, WorldSnapshot, PROTOCOL_VERSION};
 use unity_runtime::{Runtime, Unity};
 use tokio::sync::mpsc;
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, GetForegroundWindow, GetWindowThreadProcessId, ASFW_ANY};
 
-use crate::diff::has_meaningful_change;
+use crate::diff::{creatures_changed, live_changed, markers_changed, world_changed};
 use crate::hotkeys::{Hotkeys, KeyState};
 use crate::provider::{default_solid_mask, to_proto, to_unity, Cx, Provider};
 
@@ -33,11 +33,14 @@ const PROBE_HITS: usize = 8;
 pub enum Command {
     SetHotkeys(Vec<Hotkey>),
     SetStreamRate(u32),
+    MapOpened,
     Teleport { request_id: u32, target: TeleportTarget },
     ExportWorld { request_id: u32 },
     FindPath { request_id: u32, to: Vec3 },
     CheckRoute { request_id: u32, points: Vec<Vec3> },
     ProbeGround { request_id: u32, points: Vec<Vec3> },
+    CompanionOrders { request_id: u32, companion: String },
+    CompanionOrder { request_id: u32, companion: String, order: String },
 }
 
 struct MainState {
@@ -214,6 +217,11 @@ impl Shared {
                     st.hotkeys.set(h);
                 }
                 Command::SetStreamRate(hz) => st.min_interval = interval_for(hz),
+                Command::MapOpened => {
+                    if let Some(p) = st.provider.as_mut() {
+                        p.map_opened();
+                    }
+                }
                 Command::Teleport { request_id, target } => {
                     let result = match st.provider.as_mut() {
                         Some(p) => unsafe { p.teleport(&cx, &target) },
@@ -262,6 +270,25 @@ impl Shared {
                     });
                     let (points, error) = split(result);
                     self.send(AgentMessage::GroundProbeResult { request_id, points, error });
+                }
+                Command::CompanionOrders { request_id, companion } => {
+                    let result = match st.provider.as_mut() {
+                        Some(p) => unsafe { p.companion_orders(&cx, &companion) },
+                        None => Err("this game has no companions".into()),
+                    };
+                    let (orders, error) = split(result);
+                    self.send(AgentMessage::CompanionOrdersResult { request_id, orders, error });
+                }
+                Command::CompanionOrder { request_id, companion, order } => {
+                    let result = match st.provider.as_mut() {
+                        Some(p) => unsafe { p.companion_order(&cx, &companion, &order) },
+                        None => Err("this game has no companions".into()),
+                    };
+                    match &result {
+                        Ok(()) => self.log(LogLevel::Info, format!("{companion}: order {order} given")),
+                        Err(e) => self.log(LogLevel::Warn, format!("{companion}: order {order} failed: {e}")),
+                    }
+                    self.send(AgentMessage::CompanionOrderResult { request_id, ok: result.is_ok(), error: result.err() });
                 }
                 Command::ExportWorld { request_id } => {
                     if st.export.is_some() {
@@ -339,6 +366,9 @@ impl Shared {
             return;
         }
         st.last_sample_at = Some(now);
+        if self.resend.load(Ordering::SeqCst) {
+            provider.reconnected();
+        }
         let mut snap = unsafe { provider.snapshot(&cx, st.frame) };
         if let Some(local) = snap.local.as_mut() {
             local.camera = unsafe { self.unity.main_camera(&self.rt) }.map(|c| CameraView {
@@ -349,11 +379,39 @@ impl Shared {
                 aspect: c.aspect,
             });
         }
-        let force = self.resend.swap(false, Ordering::SeqCst) || st.last_sent_at.is_none_or(|t| now - t >= HEARTBEAT);
-        let changed = st.last_sent.as_ref().is_none_or(|prev| has_meaningful_change(prev, &snap));
-        if (force || changed) && self.outbox.try_send(AgentMessage::Snapshot(snap.clone())).is_ok() {
-            st.last_sent_at = Some(now);
-            st.last_sent = Some(snap);
+        let resend = self.resend.swap(false, Ordering::SeqCst);
+        let heartbeat = st.last_sent_at.is_none_or(|t| now - t >= HEARTBEAT);
+        match st.last_sent.as_mut() {
+            Some(prev) if !resend && !world_changed(prev, &snap) => {
+                let live = live_changed(prev, &snap);
+                // Lists that didn't change stay as sent: they're compared with what the app
+                // has, so small moves add up instead of going unnoticed.
+                let markers = markers_changed(prev, &snap).then(|| std::mem::take(&mut snap.markers));
+                let creatures = creatures_changed(prev, &snap).then(|| std::mem::take(&mut snap.creatures));
+                if live || heartbeat || markers.is_some() || creatures.is_some() {
+                    let update = SnapshotUpdate {
+                        frame: snap.frame,
+                        local: snap.local,
+                        others: snap.others,
+                        markers,
+                        creatures,
+                        companions: snap.companions,
+                        environment: snap.environment,
+                        dropped_bag: snap.dropped_bag,
+                        dying: snap.dying,
+                    };
+                    if self.outbox.try_send(AgentMessage::SnapshotUpdate(Box::new(update.clone()))).is_ok() {
+                        st.last_sent_at = Some(now);
+                        update.apply(prev);
+                    }
+                }
+            }
+            _ => {
+                if self.outbox.try_send(AgentMessage::Snapshot(Box::new(snap.clone()))).is_ok() {
+                    st.last_sent_at = Some(now);
+                    st.last_sent = Some(snap);
+                }
+            }
         }
     }
 }

@@ -79,3 +79,12 @@ With the two variables above set in your environment:
 cd apps/overlay
 bun run app:build    # output: target/release/bundle/nsis/
 ```
+
+To try a build on your own machine, skip the update files and you don't need the key:
+
+```sh
+bun run tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
+```
+
+Unlike development builds, these send usage counts if you choose Share, so they show up
+in PostHog alongside real players.

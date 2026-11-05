@@ -38,6 +38,7 @@ api! {
     il2cpp_domain_get: fn() -> Ptr;
     il2cpp_domain_get_assemblies: fn(Ptr, *mut usize) -> *const Ptr;
     il2cpp_assembly_get_image: fn(Ptr) -> Ptr;
+    il2cpp_image_get_name: fn(Ptr) -> *const c_char;
     il2cpp_thread_attach: fn(Ptr) -> Ptr;
     il2cpp_thread_detach: fn(Ptr);
     il2cpp_class_from_name: fn(Ptr, *const c_char, *const c_char) -> Ptr;
@@ -79,6 +80,9 @@ pub(crate) struct Il2Cpp {
 unsafe impl Send for Il2Cpp {}
 unsafe impl Sync for Il2Cpp {}
 
+/// Image of the game's own scripts (`.dll` included in IL2CPP's name for it).
+const GAME_ASSEMBLY: &str = "Assembly-CSharp";
+
 impl Il2Cpp {
     /// Binds to `GameAssembly.dll` in the current process.
     pub(crate) fn load() -> Result<Self> {
@@ -89,12 +93,13 @@ impl Il2Cpp {
             if domain.is_null() {
                 return Err(Error::DomainNotReady);
             }
-            let mut count = 0usize;
-            (api.il2cpp_domain_get_assemblies)(domain, &mut count);
-            if count == 0 {
+            // Assemblies register during startup: the game's own is what the agent needs.
+            let il2cpp = Self { api, domain };
+            let ready = il2cpp.images().iter().any(|&i| cstr((il2cpp.api.il2cpp_image_get_name)(i)).starts_with(GAME_ASSEMBLY));
+            if !ready {
                 return Err(Error::DomainNotReady);
             }
-            Ok(Self { api, domain })
+            Ok(il2cpp)
         }
     }
 }

@@ -1,16 +1,24 @@
 import { Eye, EyeOff, MapPinPlus, Search, X } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { customPinAtPlayer, flyToPin } from '../lib/actions'
 import { formatDistance } from '../lib/compass'
-import { GAME_MARKERS_CATEGORY, iconUrl, LAYER_LABELS, type Category, type Pin } from '../lib/game'
+import { GAME_MARKERS_CATEGORY, iconUrl, LAYER_LABELS, type BadgeShape, type Category, type Pin } from '../lib/game'
 import { glyphColor } from '../map/badges'
 import { groundDistance } from '../lib/projection'
 import { PinSearch } from '../lib/search'
-import { isCategoryVisible, selectAllPins, useStore } from '../state/store'
+import { EMPTY_USER_DATA, isCategoryVisible, selectAllPins, useStore } from '../state/store'
 import { Button, Switch } from './controls'
+import { FilterSets } from './FilterSets'
 import { Progress, UnexploredNote } from './Progress'
 import { usePinFog } from '../state/fog'
 import { useSettings } from '../settings/store'
+
+/** Badge shapes that aren't a rounded box, matching the ones on the map. */
+const BADGE_CLIPS: Partial<Record<BadgeShape, string>> = {
+  diamond: 'polygon(50% 0, 100% 50%, 50% 100%, 0 50%)',
+  hexagon: 'polygon(50% 0, 94% 25%, 94% 75%, 50% 100%, 6% 75%, 6% 25%)',
+  shield: 'polygon(6% 4%, 94% 4%, 94% 60%, 50% 100%, 6% 60%)',
+}
 
 export function CategoryIcon({ gameId, category, icon, color, size = 22 }: { gameId: string; category?: Category; icon?: string; color?: string; size?: number }) {
   const ref = icon ?? category?.icon ?? 'builtin:pin'
@@ -18,10 +26,12 @@ export function CategoryIcon({ gameId, category, icon, color, size = 22 }: { gam
   const user = ref.startsWith('user:')
   const background = color ?? category?.color ?? '#ffffff'
   const darkGlyph = glyphColor(background) !== '#ffffff'
+  const shape = category?.shape ?? 'circle'
+  const outline = shape === 'circle' ? 'rounded-full ring-1 ring-white/70' : shape === 'square' ? 'rounded-[22%] ring-1 ring-white/70' : ''
   return (
     <span
-      className="inline-grid shrink-0 place-items-center overflow-hidden rounded-full ring-1 ring-white/70"
-      style={{ width: size, height: size, background }}
+      className={`inline-grid shrink-0 place-items-center overflow-hidden ${outline}`}
+      style={{ width: size, height: size, background, clipPath: BADGE_CLIPS[shape] }}
     >
       {url ? (
         <img
@@ -37,7 +47,7 @@ export function CategoryIcon({ gameId, category, icon, color, size = 22 }: { gam
   )
 }
 
-export function Sidebar({ onEditPin }: { onEditPin: (pin: Pin) => void }) {
+export function Sidebar({ onEditPin, onPinMenu }: { onEditPin: (pin: Pin) => void; onPinMenu: (pin: Pin, e: ReactMouseEvent) => void }) {
   const game = useStore((s) => s.game)
   const gamePins = useStore((s) => s.gamePins)
   const user = useStore((s) => s.user)
@@ -49,13 +59,15 @@ export function Sidebar({ onEditPin }: { onEditPin: (pin: Pin) => void }) {
   const setAllCategories = useStore((s) => s.setAllCategories)
   const selectPin = useStore((s) => s.selectPin)
   const map = useStore((s) => s.map)
-  const local = useStore((s) => s.snapshot?.local ?? null)
+  const hasLocation = useStore((s) => !!s.snapshot?.local)
+  // Not subscribed: distances in the results don't need the sidebar redrawn 30 times a second.
+  const local = useStore.getState().snapshot?.local ?? null
   const units = useSettings((s) => s.ui.units)
-  const hasLocation = local !== null
   const [view, setView] = useState<'categories' | 'progress'>('categories')
 
   const friendPins = useStore((s) => s.friendPins)
-  const pins = useMemo(() => selectAllPins({ gamePins, user, friendPins }), [gamePins, user, friendPins])
+  const customPins = user.customPins
+  const pins = useMemo(() => selectAllPins({ gamePins, user: { ...EMPTY_USER_DATA, customPins }, friendPins }), [gamePins, customPins, friendPins])
   const index = useMemo(() => (game ? new PinSearch(pins, game.categories) : null), [pins, game])
   const hiddenByFog = usePinFog()
   const gameMarkers = useStore((s) => (s.snapshot?.markers ?? []).filter((m) => m.kind !== 'companion').length)
@@ -147,7 +159,7 @@ export function Sidebar({ onEditPin }: { onEditPin: (pin: Pin) => void }) {
               const dist = local && map ? groundDistance(map.projection, local.position, pin.position) / game.unitsPerMeter : null
               return (
                 <li key={pin.id}>
-                  <button className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-panel-raised" onClick={() => open(pin)}>
+                  <button className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-panel-raised" onClick={() => open(pin)} onContextMenu={(e) => onPinMenu(pin, e)}>
                     <CategoryIcon gameId={game.id} category={cat} icon={pin.icon} color={pin.color} />
                     <span className="min-w-0 flex-1">
                       <span className={`block truncate text-[13px] ${user.found.includes(pin.id) ? 'text-ink-faint line-through' : ''}`}>{pin.name}</span>
@@ -174,6 +186,7 @@ export function Sidebar({ onEditPin }: { onEditPin: (pin: Pin) => void }) {
                 <button className="text-ink-dim hover:text-ink" onClick={() => setAllCategories(false)}>None</button>
               </span>
             </div>
+            <FilterSets />
             <ul>
               {game.categories.map((cat) => {
                 const visible = isCategoryVisible(cat, user)
@@ -203,7 +216,7 @@ export function Sidebar({ onEditPin }: { onEditPin: (pin: Pin) => void }) {
                 <ul>
                   {user.customPins.map((pin) => (
                     <li key={pin.id}>
-                      <button className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-panel-raised" onClick={() => open(pin)}>
+                      <button className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-panel-raised" onClick={() => open(pin)} onContextMenu={(e) => onPinMenu(pin, e)}>
                         <CategoryIcon gameId={game.id} category={categories.get(pin.category)} icon={pin.icon} color={pin.color} />
                         <span className="flex-1 truncate text-[13px]">{pin.name}</span>
                       </button>
