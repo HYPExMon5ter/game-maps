@@ -2,10 +2,11 @@
 // own (`Settings`, saved with the user data) and the backend's (`AppSettings`: keys,
 // how each game connects, updates). `startSettings` loads and syncs them.
 
+import { useMemo } from 'react'
 import { create } from 'zustand'
-import type { AppSettings, GameEntry } from '../lib/backend'
+import type { AppSettings, GameEntry, HookMode } from '../lib/backend'
 import type { Hotkey } from '../lib/protocol'
-import { DEFAULT_SETTINGS, gameSettings, withGameSettings, type GameSettings, type HudSettings, type Settings } from './model'
+import { DEFAULT_SETTINGS, gameHud, gameSettings, withGameSettings, type GameSettings, type HudSettings, type MinimapLayout, type Onboarding, type Settings } from './model'
 
 interface SettingsState {
   ui: Settings
@@ -39,6 +40,31 @@ export const useSettings = create<SettingsState>((set) => ({
 /** One of a game's settings (no game: the default). */
 export function useGameSetting<K extends keyof GameSettings>(gameId: string | null | undefined, key: K): GameSettings[K] {
   return useSettings((s) => gameSettings(s.ui, gameId)[key])
+}
+
+/** The HUD settings as they apply to a game (no game: the shared ones). */
+export function useGameHud(gameId: string | null | undefined): HudSettings {
+  const hud = useSettings((s) => s.ui.hud)
+  const layout = useSettings((s) => (gameId ? s.ui.games[gameId]?.minimapLayout : null))
+  return useMemo(() => gameHud(hud, layout), [hud, layout])
+}
+
+/** Places the mini-map for a game, or for every game without its own placement. */
+export function setMinimapLayout(gameId: string | null | undefined, layout: MinimapLayout) {
+  const { setGameSettings, setHud } = useSettings.getState()
+  if (gameId) setGameSettings(gameId, { minimapLayout: layout })
+  else setHud(layout)
+}
+
+/** Marks a one-time message as dealt with. */
+export function finishOnboarding(step: keyof Onboarding) {
+  const { ui, setUi } = useSettings.getState()
+  setUi({ onboarding: { ...ui.onboarding, [step]: true } })
+}
+
+/** How the app connects to a game: its own choice, or the one for all games. */
+export function hookMode(app: AppSettings | null, gameId: string | null | undefined): HookMode {
+  return (gameId && app?.hook_modes[gameId]) || app?.default_hook_mode || 'auto'
 }
 
 /** The key that opens a game's map: the user's choice or the game's default. */

@@ -26,6 +26,10 @@ pub struct Creatures {
     class_id: Method,
     is_dead: Method,
     list_layout: Option<ListLayout>,
+    /// Companions' actors from the last read, null when they aren't active. Check
+    /// `is_alive` before use: they may have gone since.
+    pub kelvin: *mut ManagedObject,
+    pub virginia: *mut ManagedObject,
     /// Enum names by value (they never change; reading them allocates).
     type_names: HashMap<i32, Option<String>>,
     class_names: HashMap<i32, Option<String>>,
@@ -45,9 +49,17 @@ impl Creatures {
             class_id: rt.method(actor, "get_ClassId", 0).ok()?,
             is_dead: rt.method(actor, "IsDead", 0).ok()?,
             list_layout: None,
+            kelvin: std::ptr::null_mut(),
+            virginia: std::ptr::null_mut(),
             type_names: HashMap::new(),
             class_names: HashMap::new(),
         })
+    }
+
+    /// Drops the companions' actors: they don't outlive the world they're in.
+    pub fn forget_companions(&mut self) {
+        self.kelvin = std::ptr::null_mut();
+        self.virginia = std::ptr::null_mut();
     }
 
     /// Living creatures within `radius` of `around`.
@@ -55,6 +67,7 @@ impl Creatures {
     /// # Safety
     /// Must run on the game's main thread.
     pub unsafe fn read(&mut self, rt: &Runtime, unity: &Unity, around: Vector3, radius: f32) -> Result<Vec<Creature>, String> {
+        self.forget_companions();
         let manager: *mut ManagedObject = rt.static_value(self.instance);
         if !unity.is_alive(manager) {
             return Ok(Vec::new());
@@ -72,6 +85,13 @@ impl Creatures {
             if !unity.is_alive(actor) {
                 continue;
             }
+            // Before the distance check: companions matter wherever they are.
+            let type_name = enum_name(rt, actor, &self.type_id, &mut self.type_names);
+            match type_name.as_deref() {
+                Some("Robby") => self.kelvin = actor,
+                Some("Virginia") => self.virginia = actor,
+                _ => {}
+            }
             let Ok(position) = unity.component_transform(rt, actor).and_then(|t| unity.position(rt, t)) else { continue };
             let (dx, dz) = (position.x - around.x, position.z - around.z);
             if dx * dx + dz * dz > radius * radius {
@@ -80,7 +100,7 @@ impl Creatures {
             if rt.invoke(&self.is_dead, actor, &mut []).and_then(|b| rt.unbox::<bool>(b)).unwrap_or(true) {
                 continue;
             }
-            let Some(name) = enum_name(rt, actor, &self.type_id, &mut self.type_names) else { continue };
+            let Some(name) = type_name else { continue };
             if SKIPPED_TYPES.contains(&name.as_str()) {
                 continue;
             }

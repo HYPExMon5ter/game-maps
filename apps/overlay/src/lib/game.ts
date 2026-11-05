@@ -1,6 +1,8 @@
 // Game definitions (`games/<id>/game.json`) and pin data, served by the app's
 // `gamemaps://` protocol.
 
+import type { ChecklistEntry } from './checklist'
+import { glyphUrl } from './glyphs'
 import type { Projection } from './projection'
 import type { Hotkey, Vec3, WorldLayer } from './protocol'
 
@@ -29,11 +31,16 @@ export interface GameMap {
 /** Display names for world layers ("caves" also covers bunkers and other underground areas). */
 export const LAYER_LABELS: Record<WorldLayer, string> = { surface: 'Surface', caves: 'Underground', other: 'Other' }
 
+/** A badge's outline: what kind of thing a pin is, before reading its symbol. */
+export type BadgeShape = 'circle' | 'square' | 'diamond' | 'hexagon' | 'shield'
+
 export interface Category {
   id: string
   name: string
   color: string
   icon: string
+  /** Circle when left out. */
+  shape?: BadgeShape
   visible: boolean
   /** Collectibles: marked found automatically when the player passes them. */
   autoFound?: boolean
@@ -49,6 +56,10 @@ export interface GameDefinition {
   defaultHotkeys: Hotkey[]
   maps: GameMap[]
   categories: Category[]
+  /** Key items worth a list of their own. */
+  checklist?: ChecklistEntry[]
+  /** Pin icons shown as another: game icons that don't read on a one-color badge. */
+  iconAliases?: Record<string, string>
 }
 
 export interface Pin {
@@ -74,7 +85,12 @@ export async function loadGame(id: string): Promise<{ game: GameDefinition; pins
   if (!gameRes.ok) throw new Error(`game definition for "${id}" not found`)
   const game = withFriendsCategory((await gameRes.json()) as GameDefinition)
   const pins = pinsRes.ok ? (((await pinsRes.json()) as { pins: Pin[] }).pins ?? []) : []
-  return { game, pins }
+  return { game, pins: withIconAliases(pins, game.iconAliases) }
+}
+
+/** `pins` with icons swapped as `aliases` says (pin data comes with the map pack). */
+export function withIconAliases(pins: Pin[], aliases: Record<string, string> = {}): Pin[] {
+  return pins.map((pin) => (pin.icon && aliases[pin.icon] ? { ...pin, icon: aliases[pin.icon] } : pin))
 }
 
 /** Category of the pins friends share in multiplayer (added to every game). */
@@ -91,7 +107,7 @@ function withFriendsCategory(game: GameDefinition): GameDefinition {
   if (game.categories.some((c) => c.id === FRIENDS_CATEGORY)) return game
   const added: Category[] = [
     { id: GAME_MARKERS_CATEGORY, name: 'In-game markers', color: '#475569', icon: 'builtin:pin', visible: true },
-    { id: FRIENDS_CATEGORY, name: "Friends' pins", color: '#56ccf2', icon: 'builtin:pin', visible: true },
+    { id: FRIENDS_CATEGORY, name: "Friends' pins", color: '#f06292', icon: 'builtin:friends', visible: true },
   ]
   return { ...game, categories: [...game.categories, ...added] }
 }
@@ -104,13 +120,13 @@ export function tileUrl(game: GameDefinition, map: GameMap, tiles: TileSource = 
  * Resolves an icon reference:
  * - `game:<Name>`  → icon extracted from the game (`games/<id>/icons/game/<Name>.png`)
  * - `user:<path>`  → user-uploaded file (`user/<path>`)
- * - `builtin:<n>`  → drawn by the app (returns null)
+ * - `builtin:<n>`  → a symbol drawn by the app (see `lib/glyphs`)
  */
 export function iconUrl(gameId: string, ref: string): string | null {
   const [kind, rest] = splitRef(ref)
   if (kind === 'game') return `${ASSET_BASE}/games/${encodeURIComponent(gameId)}/icons/game/${encodeURIComponent(rest)}.png`
   if (kind === 'user') return `${ASSET_BASE}/user/${rest.split('/').map(encodeURIComponent).join('/')}`
-  return null
+  return glyphUrl(rest)
 }
 
 function splitRef(ref: string): [string, string] {

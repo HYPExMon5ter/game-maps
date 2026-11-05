@@ -7,20 +7,25 @@
 // The registry is data with its controls alongside; edits reload the page in development.
 // oxlint-disable react/only-export-components
 
-import { Download, FolderOpen, Gamepad2, Keyboard, Map as MapIcon, MapPinned, Navigation, PictureInPicture2, RefreshCw, SlidersHorizontal, Users, Wrench, type LucideIcon } from 'lucide-react'
-import { useCallback, useEffect, useState, type ComponentType, type ReactNode } from 'react'
+import { Download, ExternalLink, FileText, FolderOpen, Gamepad2, Star, Keyboard, Map as MapIcon, MapPinned, Move, Navigation, PictureInPicture2, RefreshCw, SlidersHorizontal, Users, Wrench, type LucideIcon } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import { agentLogs } from '../lib/agentLogs'
-import { backend, events, type AppSettings, type GameEntry, type HookMode, type MonitorInfo, type UpdateState, type ZoomKeys } from '../lib/backend'
+import { backend, events, type ActionKeys, type AppSettings, type GameEntry, type HookMode, type MonitorInfo, type PackStatus, type UpdateState, type ZoomKeys } from '../lib/backend'
+import { packView } from '../launcher/view'
 import { formatDistance } from '../lib/compass'
-import { maxMinimapSize, MIN_MINIMAP_SIZE } from '../lib/minimap'
 import type { AgentLog, Corner, Hotkey, HotkeyAction, LinkStatus } from '../lib/protocol'
+import { exportPins, importPins, newPinsFrom } from '../lib/pinTransfer'
+import { saveProblemReport } from '../lib/report'
 import { readyPeers, useSyncStore } from '../lib/sync/sync'
 import { MAX_UI_SCALE, MIN_UI_SCALE, useUiScale } from '../lib/uiScale'
+import { ConnectionCheck } from '../ui/ConnectionCheck'
 import { Button, Segmented, Slider, Toggle } from '../ui/controls'
 import { HotkeyInput } from '../ui/HotkeyInput'
 import { resetFog } from '../state/fog'
-import { gameSettings, type GameSettings, type HudSettings, type Settings } from './model'
-import { mapHotkey, useSettings } from './store'
+import { useStore } from '../state/store'
+import { clearTrail } from '../state/trail'
+import { cornerAnchor, gameSettings, type GameSettings, type HudSettings, type Settings } from './model'
+import { hookMode, mapHotkey, setMinimapLayout, useGameHud, useSettings } from './store'
 
 export type CategoryId = 'general' | 'keys' | 'map' | 'minimap' | 'content' | 'tracking' | 'multiplayer' | 'advanced'
 
@@ -73,7 +78,6 @@ export interface SettingDef {
 }
 
 const pct = (v: number) => `${Math.round(v * 100)}%`
-const px = (v: number) => `${v}px`
 const live = (ctx: SettingsContext) => !!ctx.game?.liveFeatures
 
 // Controls -------------------------------------------------------------------------
@@ -120,7 +124,7 @@ function DangerDistance({ label, ctx }: ControlProps) {
 }
 
 function uiSlider(
-  key: 'opacity' | 'panelScale' | 'pinSize',
+  key: 'opacity' | 'pinSize',
   range: { min: number; max: number; step: number },
 ): ComponentType<ControlProps> {
   return function UiSlider({ label }) {
@@ -130,13 +134,16 @@ function uiSlider(
   }
 }
 
-function hudSizeSlider(key: 'width' | 'height'): ComponentType<ControlProps> {
-  return function HudSizeSlider({ label }) {
-    const value = useSettings((s) => s.ui.hud[key])
-    const setHud = useSettings((s) => s.setHud)
-    const max = maxMinimapSize(window.screen)[key]
-    return <Slider label={label} value={Math.min(value, max)} min={MIN_MINIMAP_SIZE} max={max} step={10} format={px} onChange={(v) => setHud({ [key]: v })} />
-  }
+/** Starts moving and resizing the map and mini-map (in the map, where you can see them). */
+function EditLayout({ label, hint, ctx }: ControlProps) {
+  if (ctx.window !== 'map') return null
+  return (
+    <Row label={label} hint={hint}>
+      <Button onClick={() => useStore.getState().setEditingLayout(true)}>
+        <Move className="size-4" /> Edit layout
+      </Button>
+    </Row>
+  )
 }
 
 function Row({ label, hint, children }: { label: ReactNode; hint?: string; children: ReactNode }) {
@@ -204,6 +211,12 @@ function useUpdateState() {
   return state
 }
 
+function Analytics({ label, hint, ctx }: ControlProps) {
+  const enabled = useSettings((s) => s.app?.analytics ?? false)
+  const save = useSaveApp(ctx)
+  return <Toggle label={label} hint={hint} checked={enabled} onChange={(on) => void save(() => backend.setAnalytics(on))} />
+}
+
 function AutoUpdate({ label, hint, ctx }: ControlProps) {
   const enabled = useSettings((s) => s.app?.auto_update ?? true)
   const save = useSaveApp(ctx)
@@ -228,9 +241,48 @@ function AutoUpdate({ label, hint, ctx }: ControlProps) {
   )
 }
 
+function ConnectAll({ label, hint, ctx }: ControlProps) {
+  const auto = useSettings((s) => s.app?.default_hook_mode !== 'manual')
+  const save = useSaveApp(ctx)
+  return <Toggle label={label} hint={hint} checked={auto} onChange={(on) => void save(() => backend.setAllHookModes(on ? 'auto' : 'manual'))} />
+}
+
+/** A game's map data, for the game the panel is on. */
+function MapData({ label, ctx }: ControlProps) {
+  const id = ctx.game?.id
+  const [packs, setPacks] = useState<PackStatus[]>([])
+  useEffect(() => {
+    const unlisten = events.mapPacks(setPacks)
+    void backend.mapPacks().then(setPacks)
+    return () => void unlisten.then((f) => f())
+  }, [])
+  const pack = packs.find((p) => p.game_id === id)
+  if (!id || !pack) return null
+  const view = packView(pack)
+  return (
+    <Row label={label} hint={view.text}>
+      {view.action && (
+        <Button onClick={() => void backend.installMapPack(id).catch((e: unknown) => ctx.onError(String(e)))}>
+          <Download className="size-3.5" /> {view.action}
+        </Button>
+      )}
+    </Row>
+  )
+}
+
+function StarProject({ label, hint, ctx }: ControlProps) {
+  return (
+    <Row label={label} hint={hint}>
+      <Button onClick={() => void backend.openProjectPage().catch((e: unknown) => ctx.onError(String(e)))}>
+        <Star className="size-3.5" /> Star on GitHub
+      </Button>
+    </Row>
+  )
+}
+
 function ConnectMode({ label, hint, ctx }: ControlProps) {
   const id = ctx.game?.id
-  const mode = useSettings((s) => (id && s.app?.hook_modes[id]) || 'auto')
+  const mode = useSettings((s) => hookMode(s.app, id))
   const save = useSaveApp(ctx)
   if (!id) return null
   return (
@@ -258,6 +310,77 @@ function MapKey({ label, hint, ctx }: ControlProps) {
   return (
     <Row label={label} hint={hint}>
       <HotkeyInput value={current} isDefault={isDefault} onChange={set} onReset={() => set(null)} />
+    </Row>
+  )
+}
+
+/** The key for something the map does itself. */
+function actionKey(action: HotkeyAction & keyof ActionKeys): ComponentType<ControlProps> {
+  return function ActionKey({ label, hint, ctx }) {
+    const current = useSettings((s) => s.app?.action_keys[action] ?? null)
+    const save = useSaveApp(ctx)
+    const set = (key: Hotkey | null) => void save(() => backend.setActionKey(action, key))
+    return (
+      <Row label={label} hint={hint}>
+        <HotkeyInput value={current} action={action} label={`${label} key`} onChange={set} onClear={() => set(null)} />
+      </Row>
+    )
+  }
+}
+
+const pinCount = (n: number) => (n === 1 ? '1 pin' : `${n} pins`)
+
+/** Saves this world's custom pins to a file, and adds pins from one. */
+function PinFiles({ label, hint, ctx }: ControlProps) {
+  const fileRef = useRef<HTMLInputElement>(null)
+  if (ctx.window !== 'map') return null
+  const { notify } = useStore.getState()
+  const save = async () => {
+    const { game, user } = useStore.getState()
+    if (!game) return
+    try {
+      if (await backend.saveTextFile(`${game.id}-pins.json`, exportPins(game.id, user.customPins))) notify(`Saved ${pinCount(user.customPins.length)}`)
+    } catch (e) {
+      notify(`Could not save the pins: ${String(e)}`, 'error')
+    }
+  }
+  const load = async (file: File) => {
+    const { game, user, upsertCustomPin } = useStore.getState()
+    if (!game) return
+    try {
+      const added = newPinsFrom(importPins(await file.text(), game.id), user.customPins, () => `custom-${crypto.randomUUID()}`)
+      added.forEach(upsertCustomPin)
+      notify(added.length ? `Added ${pinCount(added.length)}` : 'You already have those pins')
+    } catch (e) {
+      notify(e instanceof Error ? e.message : String(e), 'error')
+    }
+  }
+  return (
+    <Row label={label} hint={hint}>
+      <div className="flex gap-1.5">
+        <Button onClick={() => void save()}>Export</Button>
+        <Button onClick={() => fileRef.current?.click()}>Import</Button>
+      </div>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="application/json,.json"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0]
+          if (f) void load(f)
+          e.target.value = ''
+        }}
+      />
+    </Row>
+  )
+}
+
+/** Forgets the path walked so far. */
+function ClearTrail({ label, hint }: ControlProps) {
+  return (
+    <Row label={label} hint={hint}>
+      <Button onClick={clearTrail}>Clear</Button>
     </Row>
   )
 }
@@ -416,16 +539,21 @@ function FogOfWar({ label, hint, ctx }: ControlProps) {
   )
 }
 
-function MinimapCorner({ label, hint }: ControlProps) {
-  const corner = useSettings((s) => s.ui.hud.corner)
-  const setHud = useSettings((s) => s.setHud)
+function MinimapCorner({ label, hint, ctx }: ControlProps) {
+  const gameId = ctx.game?.id
+  const hud = useGameHud(gameId)
+  const { anchor, width, height } = hud
+  const at = (corner: Corner) => {
+    const a = cornerAnchor(corner)
+    return a.x === anchor.x && a.y === anchor.y
+  }
   return (
     <div className="py-1">
       <span className="block text-[13px]">{label}</span>
       {hint && <span className="block text-[11px] text-ink-faint">{hint}</span>}
       <div className="grid grid-cols-2 gap-1.5 pt-1.5">
         {CORNERS.map((c) => (
-          <Button key={c.id} tone={corner === c.id ? 'primary' : 'default'} onClick={() => setHud({ corner: c.id })}>
+          <Button key={c.id} tone={at(c.id) ? 'primary' : 'default'} onClick={() => setMinimapLayout(gameId, { anchor: cornerAnchor(c.id), width, height })}>
             {c.label}
           </Button>
         ))}
@@ -513,6 +641,31 @@ function LogsFolder({ label, hint, ctx }: ControlProps) {
   )
 }
 
+function ProblemReport({ label, hint, ctx }: ControlProps) {
+  const [saved, setSaved] = useState(false)
+  const save = () => {
+    setSaved(false)
+    saveProblemReport()
+      .then(setSaved)
+      .catch((e: unknown) => ctx.onError(String(e)))
+  }
+  return (
+    <div className="py-1">
+      <span className="block text-[13px]">{label}</span>
+      {hint && <span className="block pb-1.5 text-[11px] text-ink-faint">{hint}</span>}
+      <div className="flex gap-1.5">
+        <Button onClick={save}>
+          <FileText className="size-3.5" /> Save report
+        </Button>
+        <Button onClick={() => void backend.openIssuePage().catch((e: unknown) => ctx.onError(String(e)))}>
+          <ExternalLink className="size-3.5" /> Open issues page
+        </Button>
+      </div>
+      {saved && <p className="pt-1.5 text-[12px] text-ink-dim">Saved. Attach the file to a new issue, or send it to whoever is helping you.</p>}
+    </div>
+  )
+}
+
 /** Dev tooling: saves every loaded item and point of interest for `tools/pins`. */
 function ExportWorld({ label, hint }: ControlProps) {
   const connected = useLinkStatus()?.state === 'connected'
@@ -543,13 +696,19 @@ export const SETTINGS: SettingDef[] = [
   // General
   { id: 'units', category: 'general', scope: 'all', label: 'Metric units', hint: 'Meters and kilometers instead of feet and miles', keywords: 'distance imperial feet', Control: Units },
   { id: 'ui-scale', category: 'general', scope: 'all', label: 'Auto interface size', hint: 'Scales panels and text to your screen', keywords: 'ui scale zoom text font bigger smaller', Control: InterfaceSize },
-  { id: 'connect', category: 'general', scope: 'game', label: 'Connect to the game', hint: 'Automatically when the game starts, or only when you click Connect', keywords: 'hook attach auto manual inject', applies: live, Control: ConnectMode },
+  { id: 'connect-all', category: 'general', scope: 'all', label: 'Connect to games automatically', hint: "For every game: connects when it starts and downloads its map the first time. When off, nothing happens until you click Play or Connect", keywords: 'hook attach auto manual inject download map all games', Control: ConnectAll },
+  { id: 'map-data', category: 'general', scope: 'game', label: 'Map data', keywords: 'download update pack tiles storage', Control: MapData },
+  { id: 'connect', category: 'general', scope: 'game', label: 'Connect to the game', hint: 'Automatically when the game starts, or only when you click Connect. Automatic also downloads the map the first time', keywords: 'hook attach auto manual inject', applies: live, Control: ConnectMode },
   { id: 'autostart', category: 'general', scope: 'all', label: 'Start with Windows', hint: 'Runs quietly in the tray, so the map is ready whenever you play', keywords: 'startup boot login tray', Control: Autostart },
   { id: 'auto-update', category: 'general', scope: 'all', label: 'Install updates automatically', hint: 'Updates install while no game is running', keywords: 'version upgrade check', Control: AutoUpdate },
+  { id: 'analytics', category: 'general', scope: 'all', label: 'Share anonymous usage counts', hint: 'Which games you play, how long, which features you use and what went wrong, with a random ID. Never your name, location, pins or worlds. The README lists everything', keywords: 'analytics telemetry privacy tracking data statistics', Control: Analytics },
 
   // Keys
   { id: 'map-key', category: 'keys', scope: 'game', label: 'Open / close map', hint: "While Game Maps runs, the game doesn't see this key", keywords: 'hotkey keybind toggle', Control: MapKey },
   { id: 'back-key', category: 'keys', scope: 'all', label: 'Teleport back', hint: 'Back to where you were before your last teleport; press again to go further back', keywords: 'hotkey keybind undo return', Control: BackKey },
+  { id: 'quick-mark-key', category: 'keys', scope: 'all', label: 'Quick mark', hint: 'Drops a pin where you stand, without opening the map', keywords: 'hotkey keybind pin marker', Control: actionKey('quick_mark') },
+  { id: 'nearest-key', category: 'keys', scope: 'all', label: 'Track nearest', hint: "Tracks the closest thing you haven't found, in the categories shown on the map", keywords: 'hotkey keybind unfound collectible closest', Control: actionKey('nearest_unfound') },
+  { id: 'accept-key', category: 'keys', scope: 'all', label: 'Accept a track request', hint: "Accepts a friend's request without opening the map", keywords: 'hotkey keybind share friend multiplayer', Control: actionKey('accept_request') },
   { id: 'zoom-in', category: 'keys', scope: 'all', label: 'Zoom in', hint: 'The open map, or the mini-map while playing', keywords: 'hotkey keybind', Control: zoomKey('zoom_in') },
   { id: 'zoom-out', category: 'keys', scope: 'all', label: 'Zoom out', hint: 'The mouse wheel also zooms the open map', keywords: 'hotkey keybind', Control: zoomKey('zoom_out') },
   { id: 'zoom-reset', category: 'keys', scope: 'all', label: 'Default zoom keys', hint: 'Numpad + and −, and = and −', keywords: 'reset restore hotkey', Control: ResetZoomKeys },
@@ -557,21 +716,26 @@ export const SETTINGS: SettingDef[] = [
   // Full map
   { id: 'map-window', category: 'map', scope: 'all', label: 'Map window on another monitor', hint: 'Keeps the full map open on a second screen while you play; closing the window turns it off', keywords: 'second monitor screen display dual window always', Control: MapWindow },
   { id: 'map-opacity', category: 'map', scope: 'all', label: 'Opacity', hint: 'The game shows through below 100%', keywords: 'transparency see through', Control: uiSlider('opacity', { min: 0.4, max: 1, step: 0.02 }) },
-  { id: 'map-size', category: 'map', scope: 'all', label: 'Size', keywords: 'scale panel screen', Control: uiSlider('panelScale', { min: 0.5, max: 1, step: 0.05 }) },
+  { id: 'map-layout', category: 'map', scope: 'all', label: 'Position and size', hint: 'Drag the map and mini-map where you want them, and resize them by their edges', keywords: 'move resize scale panel screen drag layout edit corner', Control: EditLayout },
   { id: 'pin-size', category: 'map', scope: 'all', label: 'Pin size', keywords: 'icon marker bigger smaller', Control: uiSlider('pinSize', { min: 0.6, max: 1.6, step: 0.05 }) },
+  { id: 'teleport', category: 'map', scope: 'all', label: 'Teleport', hint: 'Shows teleport buttons on the map, in games that support it', keywords: 'jump travel fast cheat', Control: uiToggle('teleport') },
   { id: 'fog-of-war', category: 'map', scope: 'all', label: 'Fog of war', hint: "Only what you've explored is revealed, so the map doesn't spoil anything (each world keeps its own)", keywords: 'explored unexplored discover reveal radius distance range reset spoiler spoil hide pins icons', Control: FogOfWar },
+  { id: 'trail', category: 'map', scope: 'all', label: 'Path history', hint: "Draws where you've walked since the app started", keywords: 'trail breadcrumbs route walked history', Control: uiToggle('showTrail') },
+  { id: 'trail-clear', category: 'map', scope: 'all', label: 'Clear path history', keywords: 'trail breadcrumbs reset', Control: ClearTrail },
+  { id: 'pin-files', category: 'map', scope: 'all', label: 'Pins in a file', hint: "Save this world's pins, or add pins someone sent you", keywords: 'import export share backup json', Control: PinFiles },
   { id: 'declutter', category: 'map', scope: 'all', label: 'Declutter pins', hint: 'Where pins overlap, the most important stay; the rest show as dots until you zoom in', keywords: 'overlap clutter icons', Control: uiToggle('declutter') },
 
   // Mini-map
   { id: 'minimap', category: 'minimap', scope: 'all', label: 'Mini-map while playing', hint: 'Click-through map in a corner of the screen', keywords: 'minimap hud radar overlay', Control: hudToggle('minimap') },
   { id: 'minimap-rotate', category: 'minimap', scope: 'all', label: 'Rotate with view', hint: 'The direction you face points up', keywords: 'minimap heading north compass', Control: hudToggle('rotateWithPlayer') },
   { id: 'minimap-auto-hide', category: 'minimap', scope: 'all', label: 'Hide for alerts', hint: 'Fades out while danger markers or pings are on or next to it, so nothing is hidden behind it', keywords: 'minimap auto hide fight enemies overlap danger', Control: hudToggle('autoHide') },
-  { id: 'minimap-corner', category: 'minimap', scope: 'all', label: 'Corner', keywords: 'minimap position place screen', Control: MinimapCorner },
-  { id: 'minimap-width', category: 'minimap', scope: 'all', label: 'Width', keywords: 'minimap size', Control: hudSizeSlider('width') },
-  { id: 'minimap-height', category: 'minimap', scope: 'all', label: 'Height', keywords: 'minimap size', Control: hudSizeSlider('height') },
+  { id: 'minimap-clock', category: 'minimap', scope: 'all', label: 'Time and weather', hint: 'The day, time, season and weather on the mini-map, in games that report them', keywords: 'clock day season', Control: hudToggle('clock') },
+  { id: 'minimap-layout', category: 'minimap', scope: 'game', label: 'Position and size', hint: 'Drag it anywhere on the screen, and resize it by its edges. Each game remembers its own', keywords: 'minimap move resize width height drag layout edit', Control: EditLayout },
+  { id: 'minimap-corner', category: 'minimap', scope: 'game', label: 'Corner', keywords: 'minimap position place screen', Control: MinimapCorner },
   { id: 'minimap-opacity', category: 'minimap', scope: 'all', label: 'Opacity', keywords: 'minimap transparency see through', Control: MinimapOpacity },
 
   // Map content
+  { id: 'death-marker', category: 'content', scope: 'game', label: 'Mark where you die', hint: 'Keeps a pin where you last died, so you can get your gear back', keywords: 'death gear corpse grave', applies: live, Control: gameToggle('deathMarker') },
   { id: 'auto-found', category: 'content', scope: 'game', label: 'Mark collectibles found', hint: 'Items, weapons and notes are marked found when you walk up to them', keywords: 'auto collected pickup', applies: live, Control: gameToggle('autoFound') },
   { id: 'creatures', category: 'content', scope: 'game', label: 'Nearby creatures', hint: 'Enemies, companions and animals around you, as far as the game keeps them', keywords: 'enemies cannibals mutants npc radar', applies: live, Control: gameToggle('showCreatures') },
   { id: 'animals', category: 'content', scope: 'game', label: 'Include animals', hint: 'Wildlife as well as enemies and companions', keywords: 'creatures wildlife deer', applies: live, Control: gameToggle('showAnimals', 'showCreatures') },
@@ -586,10 +750,15 @@ export const SETTINGS: SettingDef[] = [
   // Multiplayer
   { id: 'play-together', category: 'multiplayer', scope: 'game', label: 'Play together', hint: 'Connect with others running Game Maps on your server to share what you track, map pings and pins', keywords: 'sync friends coop share', applies: live, Control: PlayTogether },
 
+  { id: 'connection-check', category: 'multiplayer', scope: 'game', label: 'Connection check', hint: "Tests your connection to friends, and what's in the way if you can't reach them", keywords: 'network firewall nat vpn troubleshoot friends cant connect', applies: (ctx) => live(ctx) && ctx.window === 'map', Control: ({ label, hint, ctx }) => <ConnectionCheck label={label} hint={hint} gameId={ctx.game?.id} /> },
+  { id: 'share-progress', category: 'multiplayer', scope: 'game', label: 'Share progress', hint: 'Found items and explored areas are shared with friends who also turned this on', keywords: 'found fog explored merge friends', applies: live, Control: gameToggle('shareProgress', 'playTogether') },
+  { id: 'friend-markers', category: 'multiplayer', scope: 'game', label: 'Friends over the game', hint: 'Shows where other players are, with their name and distance', keywords: 'players teammates marker hud', applies: live, Control: gameToggle('friendMarkers') },
   { id: 'pings-in-game', category: 'multiplayer', scope: 'game', label: 'Pings in the game', hint: 'Map pings from you and your friends show over the game for 30 seconds', keywords: 'ping marker friends hud', applies: live, Control: gameToggle('pingsInGame') },
 
   // Advanced
   { id: 'diagnostics', category: 'advanced', scope: 'all', label: 'Connection', keywords: 'diagnostics logs debug agent status', Control: Diagnostics },
+  { id: 'star', category: 'advanced', scope: 'all', label: 'Enjoying Game Maps?', hint: 'A star on GitHub helps other players find it', keywords: 'github star project contribute source code', Control: StarProject },
+  { id: 'problem-report', category: 'advanced', scope: 'all', label: 'Report a problem', hint: 'Saves your logs and setup to one file you can read first, then attach. Nothing is sent by itself', keywords: 'bug issue crash diagnostics logs help support', Control: ProblemReport },
   { id: 'logs', category: 'advanced', scope: 'all', label: 'Log files', hint: 'For bug reports', keywords: 'diagnostics debug folder', Control: LogsFolder },
   { id: 'export-world', category: 'advanced', scope: 'all', label: 'Export world data', hint: 'Saves every loaded item and point of interest (for map makers)', keywords: 'dump developer pins', Control: ExportWorld },
 ]

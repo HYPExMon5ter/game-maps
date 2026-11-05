@@ -87,11 +87,14 @@ async fn session(shared: &'static Shared, server: NamedPipeServer, outbox: &mut 
                     Ok(AppMessage::Hello { .. }) => {}
                     Ok(AppMessage::SetHotkeys { hotkeys }) => shared.push_command(Command::SetHotkeys(hotkeys)),
                     Ok(AppMessage::SetStreamRate { max_hz }) => shared.push_command(Command::SetStreamRate(max_hz)),
+                    Ok(AppMessage::MapOpened) => shared.push_command(Command::MapOpened),
                     Ok(AppMessage::Teleport { request_id, target }) => shared.push_command(Command::Teleport { request_id, target }),
                     Ok(AppMessage::ExportWorld { request_id }) => shared.push_command(Command::ExportWorld { request_id }),
                     Ok(AppMessage::FindPath { request_id, to }) => shared.push_command(Command::FindPath { request_id, to }),
                     Ok(AppMessage::CheckRoute { request_id, points }) => shared.push_command(Command::CheckRoute { request_id, points }),
                     Ok(AppMessage::ProbeGround { request_id, points }) => shared.push_command(Command::ProbeGround { request_id, points }),
+                    Ok(AppMessage::CompanionOrders { request_id, companion }) => shared.push_command(Command::CompanionOrders { request_id, companion }),
+                    Ok(AppMessage::CompanionOrder { request_id, companion, order }) => shared.push_command(Command::CompanionOrder { request_id, companion, order }),
                     Ok(AppMessage::Detach) => return true,
                     Err(e) => shared.log(LogLevel::Warn, format!("bad message from app: {e}")),
                 }

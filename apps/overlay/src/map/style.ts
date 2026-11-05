@@ -78,6 +78,7 @@ export function buildStyle(game: GameDefinition, map: GameMap, assetOrigin: stri
       },
       pins: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
       track: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
+      trail: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
       markers: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
       creatures: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
       pings: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
@@ -107,6 +108,13 @@ export function buildStyle(game: GameDefinition, map: GameMap, assetOrigin: stri
             },
           ]
         : []),
+      {
+        id: 'trail-line',
+        type: 'line',
+        source: 'trail',
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': '#7dd3fc', 'line-width': 2, 'line-opacity': 0.55 },
+      },
       {
         id: 'track-line',
         type: 'line',

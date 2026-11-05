@@ -34,7 +34,7 @@ def main() -> None:
 
     missing = REQUIRED_SECRETS - set(gh("secret", "list", "--json", "name", "--jq", ".[].name").split())
     if missing:
-        raise SystemExit(f"missing repository secrets: {', '.join(sorted(missing))} (see README, Publishing)")
+        raise SystemExit(f"missing repository secrets: {', '.join(sorted(missing))} (see docs/releasing.md, Signing key)")
 
     gh("workflow", "run", WORKFLOW, "--ref", "master", "-f", f"bump={bump}", "-f", f"notes={notes}")
     time.sleep(3)  # let GitHub register the run

@@ -10,11 +10,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tauri::{AppHandle, Manager, Runtime, WebviewWindow};
+use tauri_plugin_dialog::DialogExt;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_PROCESS_FAILED_KIND, COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED, COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
     COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE,
 };
 use webview2_com::ProcessFailedEventHandler;
+
+use crate::analytics::{self, Problem};
 
 /// Save files the app can't start properly without.
 const SAVE_FILES: &[&str] = &["user-data.json", "app-settings.json"];
@@ -97,6 +100,8 @@ fn restart<R: Runtime>(app: &AppHandle<R>) {
     let previous: Vec<u64> = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
     let Some(recent) = allow_restart(&previous, now_secs()) else {
         log::error!("the web view keeps failing; not restarting again (more than {MAX_RESTARTS} times in {} minutes)", RESTART_WINDOW.as_secs() / 60);
+        // Every window is dead at this point: this is the only way left to say so.
+        app.dialog().message("Game Maps keeps crashing and stopped restarting itself. Close it from the tray and start it again. If this keeps happening, please report it with the log files.").title("Game Maps").show(|_| {});
         return;
     };
     if let Ok(json) = serde_json::to_vec(&recent) {
@@ -109,7 +114,7 @@ fn restart<R: Runtime>(app: &AppHandle<R>) {
 }
 
 /// Watches a window's web view for crashes.
-pub fn watch_webview<R: Runtime>(window: &WebviewWindow<R>) {
+pub fn watch_webview(window: &WebviewWindow) {
     let app = window.app_handle().clone();
     let label = window.label().to_owned();
     let result = window.with_webview(move |webview| unsafe {
@@ -120,6 +125,7 @@ pub fn watch_webview<R: Runtime>(window: &WebviewWindow<R>) {
                 let _ = args.ProcessFailedKind(&mut kind);
             }
             log::error!("web view process failed in {label}: kind {}", kind.0);
+            analytics::problem(&app, Problem::WebviewCrash);
             if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED {
                 restart(&app);
             } else if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED || kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE {

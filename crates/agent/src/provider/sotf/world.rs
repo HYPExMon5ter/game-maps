@@ -54,6 +54,18 @@ impl World {
         }
     }
 
+    /// Whether the player joined someone else's game (known even before a save id is).
+    ///
+    /// # Safety
+    /// Must run on the game's main thread, while in a world.
+    pub unsafe fn is_client(&self, rt: &Runtime) -> bool {
+        let this: *mut ManagedObject = self.instance.map_or(std::ptr::null_mut(), |f| rt.static_value(f));
+        if self.instance.is_some() && this.is_null() {
+            return false;
+        }
+        self.save_type.as_ref().and_then(|m| rt.enum_name(rt.invoke(m, this, &mut []).ok()?)).as_deref() == Some("MultiplayerClient")
+    }
+
     /// The loaded save, or `None` if there's no valid save id yet.
     ///
     /// # Safety

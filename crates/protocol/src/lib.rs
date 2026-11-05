@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 /// Bumped on any incompatible change. Both sides refuse to talk across versions.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Name of the pipe an agent serves for a given game process id.
 pub fn pipe_name(pid: u32) -> String {
@@ -140,6 +140,103 @@ pub struct WorldSnapshot {
     /// The world or save that's loaded; `None` in menus or when the game doesn't expose it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub world: Option<GameWorld>,
+    /// AI companions the game reports details for.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub companions: Vec<CompanionStatus>,
+    /// Time, season and weather, for games that expose them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<Environment>,
+    /// Where the player's things are after dying, while they're on the ground, in games
+    /// that drop them somewhere of their own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dropped_bag: Option<Vec3>,
+    /// The player is dying or dead right now.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dying: bool,
+}
+
+/// What changed since the last [`WorldSnapshot`]. Sent in its place: looking around would
+/// otherwise send every marker 30 times a second. The two big lists only come when they
+/// changed; the rest is small.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnapshotUpdate {
+    pub frame: u64,
+    pub local: Option<LocalPlayer>,
+    pub others: Vec<RemotePlayer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub markers: Option<Vec<Marker>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creatures: Option<Vec<Creature>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub companions: Vec<CompanionStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<Environment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dropped_bag: Option<Vec3>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dying: bool,
+}
+
+impl SnapshotUpdate {
+    /// Applies this to `snapshot`, leaving lists that didn't change as they were.
+    pub fn apply(self, snapshot: &mut WorldSnapshot) {
+        snapshot.frame = self.frame;
+        snapshot.local = self.local;
+        snapshot.others = self.others;
+        snapshot.companions = self.companions;
+        snapshot.environment = self.environment;
+        snapshot.dropped_bag = self.dropped_bag;
+        snapshot.dying = self.dying;
+        if let Some(markers) = self.markers {
+            snapshot.markers = markers;
+        }
+        if let Some(creatures) = self.creatures {
+            snapshot.creatures = creatures;
+        }
+    }
+}
+
+/// One of a companion's stats, as the game names it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompanionStat {
+    pub name: String,
+    pub value: f32,
+    pub max: f32,
+}
+
+/// What's known about an AI companion right now.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompanionStatus {
+    /// Stable id for the companion in this game.
+    pub id: String,
+    pub name: String,
+    pub position: Option<Vec3>,
+    pub alive: bool,
+    pub injured: bool,
+    /// What they're doing, when the game says.
+    pub activity: Option<String>,
+    pub stats: Vec<CompanionStat>,
+}
+
+/// Something a companion can be told to do.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompanionOrderOption {
+    /// Sent back with `AppMessage::CompanionOrder`; only the agent interprets it.
+    pub id: String,
+    /// Heading it's listed under.
+    pub group: String,
+    pub label: String,
+}
+
+/// Time, season and weather in the world.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Environment {
+    /// Days survived, when the game counts them.
+    pub day: Option<u32>,
+    pub hour: u8,
+    pub minute: u8,
+    pub season: Option<String>,
+    pub weather: Option<String>,
 }
 
 /// A world or save, so the app can keep found items, pins and explored areas apart
@@ -209,6 +306,12 @@ pub enum HotkeyAction {
     ZoomOut,
     /// Return to where the player was before their last teleport.
     TeleportBack,
+    /// Drop a pin where the player stands.
+    QuickMark,
+    /// Track the closest thing not found yet.
+    NearestUnfound,
+    /// Accept the latest track request from another player.
+    AcceptRequest,
 }
 
 /// A key binding using Windows virtual-key codes.
@@ -239,7 +342,14 @@ pub enum LogLevel {
 pub enum TeleportTarget {
     /// World position. When `snap_to_ground` is set, the agent resolves the height
     /// itself (terrain/raycast), so the map can teleport to pins without a known Y.
-    Position { position: Vec3, snap_to_ground: bool },
+    /// `layer` is what's at that position: a surface spot can be within a cave's bounds,
+    /// and only the app knows which it is. Snapping always means the surface.
+    Position {
+        position: Vec3,
+        snap_to_ground: bool,
+        #[serde(default)]
+        layer: WorldLayer,
+    },
     /// Another player's or a companion marker's current position.
     Player { id: String },
 }
@@ -305,7 +415,9 @@ pub enum AgentMessage {
         #[serde(default)]
         module: Option<String>,
     },
-    Snapshot(WorldSnapshot),
+    Snapshot(Box<WorldSnapshot>),
+    /// Changes to the last [`AgentMessage::Snapshot`].
+    SnapshotUpdate(Box<SnapshotUpdate>),
     HotkeyPressed { action: HotkeyAction },
     TeleportResult { request_id: u32, ok: bool, error: Option<String> },
     Log { level: LogLevel, message: String },
@@ -313,6 +425,8 @@ pub enum AgentMessage {
     PathResult { request_id: u32, path: Option<PathInfo>, error: Option<String> },
     RouteCheckResult { request_id: u32, check: Option<RouteCheck>, error: Option<String> },
     GroundProbeResult { request_id: u32, points: Option<Vec<GroundPoint>>, error: Option<String> },
+    CompanionOrdersResult { request_id: u32, orders: Option<Vec<CompanionOrderOption>>, error: Option<String> },
+    CompanionOrderResult { request_id: u32, ok: bool, error: Option<String> },
 }
 
 /// Which legs of a route can't be walked right now (see `AppMessage::CheckRoute`).
@@ -349,6 +463,8 @@ pub enum AppMessage {
     SetHotkeys { hotkeys: Vec<Hotkey> },
     /// Upper bound on snapshot rate. The agent only sends when something changed.
     SetStreamRate { max_hz: u32 },
+    /// The full map opened: a moment when a slow refresh won't be felt in the game.
+    MapOpened,
     Teleport { request_id: u32, target: TeleportTarget },
     /// Scan the loaded world for items and points of interest (slow; dev tooling).
     ExportWorld { request_id: u32 },
@@ -359,6 +475,10 @@ pub enum AppMessage {
     CheckRoute { request_id: u32, points: Vec<Vec3> },
     /// Snaps points near the player to the floor and tells which the camera can see.
     ProbeGround { request_id: u32, points: Vec<Vec3> },
+    /// What `companion` can be told to do right now.
+    CompanionOrders { request_id: u32, companion: String },
+    /// Tells `companion` to do `order` (an id from `CompanionOrders`).
+    CompanionOrder { request_id: u32, companion: String, order: String },
     /// Unhook and unload the agent from the game process.
     Detach,
 }
@@ -389,7 +509,7 @@ mod tests {
                 capabilities: Capabilities { live_location: true, teleport: true, other_players: true, hotkeys: true },
                 module: Some("game_maps_agent-0123.dll".into()),
             },
-            AgentMessage::Snapshot(WorldSnapshot {
+            AgentMessage::Snapshot(Box::new(WorldSnapshot {
                 frame: 42,
                 local: Some(LocalPlayer {
                     position: Vec3::new(1.0, 2.0, 3.0),
@@ -414,8 +534,27 @@ mod tests {
                 creatures: vec![Creature { id: "actor:1".into(), kind: CreatureKind::Hostile, name: "Fingers".into(), position: Vec3::new(6.0, 7.0, 8.0) }],
                 session: Some(MultiplayerSession { id: "lobby:1".into(), player_name: Some("A".into()) }),
                 world: Some(GameWorld { id: "sp:42".into(), name: Some("Island".into()), kind: WorldKind::SinglePlayer }),
-            }),
+                companions: vec![CompanionStatus {
+                    id: "kelvin".into(),
+                    name: "Kelvin".into(),
+                    position: Some(Vec3::new(1.0, 2.0, 3.0)),
+                    alive: true,
+                    injured: false,
+                    activity: Some("Logs".into()),
+                    stats: vec![CompanionStat { name: "Health".into(), value: 90.0, max: 100.0 }],
+                }],
+                environment: Some(Environment { day: Some(3), hour: 14, minute: 5, season: Some("Summer".into()), weather: None }),
+                dropped_bag: Some(Vec3::new(7.0, 8.0, 9.0)),
+                dying: true,
+            })),
             AgentMessage::HotkeyPressed { action: HotkeyAction::ToggleMap },
+            AgentMessage::HotkeyPressed { action: HotkeyAction::QuickMark },
+            AgentMessage::CompanionOrdersResult {
+                request_id: 8,
+                orders: Some(vec![CompanionOrderOption { id: "follow".into(), group: "Basics".into(), label: "Follow me".into() }]),
+                error: None,
+            },
+            AgentMessage::CompanionOrderResult { request_id: 9, ok: false, error: Some("Kelvin isn't around".into()) },
             AgentMessage::HotkeyPressed { action: HotkeyAction::ZoomOut },
             AgentMessage::TeleportResult { request_id: 3, ok: false, error: Some("not in world".into()) },
             AgentMessage::Log { level: LogLevel::Warn, message: "x".into() },
@@ -462,9 +601,10 @@ mod tests {
                 ],
             },
             AppMessage::SetStreamRate { max_hz: 30 },
+            AppMessage::MapOpened,
             AppMessage::Teleport {
                 request_id: 1,
-                target: TeleportTarget::Position { position: Vec3::new(1.0, 0.0, 2.0), snap_to_ground: true },
+                target: TeleportTarget::Position { position: Vec3::new(1.0, 0.0, 2.0), snap_to_ground: true, layer: WorldLayer::Caves },
             },
             AppMessage::Teleport { request_id: 2, target: TeleportTarget::Player { id: "7".into() } },
             AppMessage::ExportWorld { request_id: 5 },

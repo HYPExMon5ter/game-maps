@@ -1,6 +1,8 @@
 import { create } from 'zustand'
+import type { FilterSet } from '../lib/filterSets'
 import type { Category, GameDefinition, GameMap, Pin } from '../lib/game'
 import type { LinkStatus, OverlayMode, PathInfo, Vec3, WorldLayer, WorldSnapshot } from '../lib/protocol'
+import type { PinTimers } from '../lib/timers'
 import { DEFAULT_WORLD_INFO, EMPTY_INDEX, type WorldIndex, type WorldInfo } from './worlds'
 
 export interface GameUserData {
@@ -8,6 +10,12 @@ export interface GameUserData {
   found: string[]
   hiddenCategories: string[]
   shownCategories: string[]
+  /** Saved category filters, the same in every world. */
+  filterSets: FilterSet[]
+  /** The player's notes, by pin id (any pin, not just their own). */
+  notes: Record<string, string>
+  /** When each pin's countdown ends (ms since the epoch), by pin id. */
+  timers: PinTimers
 }
 
 /**
@@ -69,7 +77,7 @@ export function selectSession(s: MapSession): MapSession {
   }
 }
 
-export const EMPTY_USER_DATA: GameUserData = { customPins: [], found: [], hiddenCategories: [], shownCategories: [] }
+export const EMPTY_USER_DATA: GameUserData = { customPins: [], found: [], hiddenCategories: [], shownCategories: [], filterSets: [], notes: {}, timers: {} }
 
 interface AppState {
   status: LinkStatus | null
@@ -104,7 +112,10 @@ interface AppState {
   /** Where the full map was last looking (restored when it opens). */
   mapView: SavedMapView | null
   toast: { id: number; text: string; tone: 'info' | 'error' } | null
+  /** Moving and resizing the map and mini-map (see `ui/LayoutEditor`). */
+  editingLayout: boolean
 
+  setEditingLayout(editing: boolean): void
   setStatus(s: LinkStatus): void
   setMode(m: OverlayMode): void
   setSnapshot(s: WorldSnapshot | null): void
@@ -130,6 +141,11 @@ interface AppState {
   markFound(ids: string[]): void
   upsertCustomPin(pin: Pin): void
   deleteCustomPin(id: string): void
+  /** Sets a pin's note; an empty one removes it. */
+  setPinNote(id: string, note: string): void
+  /** Starts a pin's countdown, or stops it (`null`). */
+  setPinTimer(id: string, endsAt: number | null): void
+  setPinTimers(timers: PinTimers): void
   notify(text: string, tone?: 'info' | 'error'): void
   dismissToast(id: number): void
 }
@@ -159,7 +175,9 @@ export const useStore = create<AppState>((set) => ({
   viewLayerOverride: null,
   mapView: null,
   toast: null,
+  editingLayout: false,
 
+  setEditingLayout: (editingLayout) => set({ editingLayout }),
   setStatus: (status) => set({ status }),
   setMode: (mode) => set({ mode }),
   // A pinned surface/underground view lasts until the player changes layer themselves
@@ -208,7 +226,13 @@ export const useStore = create<AppState>((set) => ({
         user: { ...s.user, hiddenCategories: visible ? [] : ids, shownCategories: visible ? ids : [] },
       }
     }),
-  markFound: (ids) => set((s) => ({ user: { ...s.user, found: [...new Set([...s.user.found, ...ids])] } })),
+  markFound: (ids) =>
+    set((s) => {
+      const known = new Set(s.user.found)
+      const added = ids.filter((id) => !known.has(id))
+      // Nothing new: no change, so nothing to save or send.
+      return added.length ? { user: { ...s.user, found: [...s.user.found, ...new Set(added)] } } : s
+    }),
   toggleFound: (id) =>
     set((s) => {
       const found = new Set(s.user.found)
@@ -227,11 +251,22 @@ export const useStore = create<AppState>((set) => ({
       selectedPinId: s.selectedPinId === id ? null : s.selectedPinId,
       tracked: s.tracked?.kind === 'pin' && s.tracked.id === id ? null : s.tracked,
     })),
+  setPinNote: (id, note) =>
+    set((s) => {
+      const { [id]: _old, ...rest } = s.user.notes
+      return { user: { ...s.user, notes: note ? { ...rest, [id]: note } : rest } }
+    }),
+  setPinTimer: (id, endsAt) =>
+    set((s) => {
+      const { [id]: _old, ...rest } = s.user.timers
+      return { user: { ...s.user, timers: endsAt === null ? rest : { ...rest, [id]: endsAt } } }
+    }),
+  setPinTimers: (timers) => set((s) => ({ user: { ...s.user, timers } })),
   notify: (text, tone = 'info') => set({ toast: { id: ++toastSeq, text, tone } }),
   dismissToast: (id) => set((s) => (s.toast?.id === id ? { toast: null } : {})),
 }))
 
-export function isCategoryVisible(category: Category | undefined, user: GameUserData): boolean {
+export function isCategoryVisible(category: Category | undefined, user: Pick<GameUserData, 'hiddenCategories' | 'shownCategories'>): boolean {
   if (!category) return true
   if (user.hiddenCategories.includes(category.id)) return false
   if (user.shownCategories.includes(category.id)) return true
@@ -245,5 +280,12 @@ export function selectViewLayer(s: Pick<AppState, 'viewLayerOverride' | 'snapsho
 /** Game pins plus the user's custom pins. */
 export function selectAllPins(s: Pick<AppState, 'gamePins' | 'user' | 'friendPins'>): Pin[] {
   if (!s.user.customPins.length && !s.friendPins.length) return s.gamePins
-  return [...s.gamePins, ...s.user.customPins, ...s.friendPins]
+  // Asked for several times per snapshot while tracking; the lists rarely change.
+  const last = mergedPins
+  if (last && last.game === s.gamePins && last.custom === s.user.customPins && last.friends === s.friendPins) return last.all
+  const all = [...s.gamePins, ...s.user.customPins, ...s.friendPins]
+  mergedPins = { game: s.gamePins, custom: s.user.customPins, friends: s.friendPins, all }
+  return all
 }
+
+let mergedPins: { game: Pin[]; custom: Pin[]; friends: Pin[]; all: Pin[] } | null = null

@@ -84,7 +84,7 @@ export function packView(pack: PackStatus): PackView {
   }
   if (pack.installed) return { tone: 'idle', text: `Ready (version ${pack.installed})`, progress: null, action: null }
   if (pack.available) {
-    return { tone: 'idle', text: `Not downloaded yet (${formatSize(pack.available.size)})`, progress: null, action: 'Download now' }
+    return { tone: 'idle', text: `Not downloaded (${formatSize(pack.available.size)}). It downloads when you play, or now`, progress: null, action: 'Download now' }
   }
   return { tone: 'idle', text: 'No map published yet, or you are offline. Game Maps keeps checking.', progress: null, action: null }
 }

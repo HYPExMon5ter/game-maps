@@ -18,19 +18,20 @@ export function autoUiScale(viewportHeight: number): number {
   return Math.round(Math.min(MAX_UI_SCALE, Math.max(MIN_UI_SCALE, s)) * 100) / 100
 }
 
-function useViewportHeight(): number {
-  const [height, setHeight] = useState(() => window.innerHeight)
+/** This window's size, kept current as it changes. */
+export function useWindowSize() {
+  const [size, setSize] = useState(() => ({ width: window.innerWidth, height: window.innerHeight }))
   useEffect(() => {
-    const onResize = () => setHeight(window.innerHeight)
+    const onResize = () => setSize({ width: window.innerWidth, height: window.innerHeight })
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [])
-  return height
+  return size
 }
 
 /** Current interface scale: the user's choice, or automatic for this screen. */
 export function useUiScale(): number {
   const manual = useSettings((s) => s.ui.uiScale)
-  const height = useViewportHeight()
+  const { height } = useWindowSize()
   return manual ?? autoUiScale(height)
 }

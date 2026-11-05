@@ -6,7 +6,7 @@ import { useStore } from '../state/store'
 import { useEffect, useState } from 'react'
 import { nearbyHostiles } from './danger'
 import type { CameraView, Vec3, WorldSnapshot } from './protocol'
-import { useSyncStore } from './sync/sync'
+import { hasSyncNotice, useSyncStore } from './sync/sync'
 import { projectToScreen } from './waypoint'
 
 /** How far in from the screen edge danger chevrons and ping arrows sit (CSS pixels). */
@@ -16,6 +16,8 @@ export const PING_EDGE = 56
 const OBSCURE_PAD = 36
 /** How long the mini-map stays hidden after the last marker left it. */
 const OBSCURE_HOLD_MS = 1500
+/** How long the player's location can drop out before they count as out of the world. */
+const WORLD_HOLD_MS = 4000
 
 export interface Rect {
   left: number
@@ -62,19 +64,30 @@ export function useObscured(rect: Rect, enabled: boolean): boolean {
     if (pingsOn) for (const p of pings) points.push(screenPoint(snapshot, p.position, PING_EDGE))
     return pointsNear(points.filter((p) => p !== null), rect, OBSCURE_PAD)
   })
-  const [held, setHeld] = useState(false)
+  return useHeld(near, OBSCURE_HOLD_MS)
+}
+
+/** `value`, staying true for `ms` after it turns false. */
+function useHeld(value: boolean, ms: number): boolean {
+  const [held, setHeld] = useState(value)
   useEffect(() => {
-    const id = setTimeout(() => setHeld(near), near ? 0 : OBSCURE_HOLD_MS)
+    const id = setTimeout(() => setHeld(value), value ? 0 : ms)
     return () => clearTimeout(id)
-  }, [near])
-  return near || held
+  }, [value, ms])
+  return value || held
 }
 
 /** What's drawn over the game right now. */
 export interface OverGame {
+  /** In a world (not at a menu), so the mini-map and compass have something to show. */
+  playing: boolean
   waypoint: boolean
   pings: boolean
   danger: boolean
+  /** A friend's track request or a playing-together notice. */
+  notice: boolean
+  /** Other players to mark over the game. */
+  friends: boolean
   /**
    * Whether the HUD window should cover the game's screen. Set by what could be drawn,
    * not what is: moving and resizing the window as enemies come and go makes it flash.
@@ -90,10 +103,14 @@ export function useOverGame(): OverGame {
   const pingsOn = useGameSetting(gameId, 'pingsInGame')
   const hasPings = useSyncStore((s) => s.pings.length > 0)
   const inSession = useSyncStore((s) => s.session !== null)
+  const notice = useSyncStore(hasSyncNotice)
+  const friendsOn = useGameSetting(gameId, 'friendMarkers')
+  const friends = useStore((s) => friendsOn && (s.snapshot?.others.length ?? 0) > 0)
   const dangerOn = useGameSetting(gameId, 'dangerAlert')
   const dangerMeters = useGameSetting(gameId, 'dangerMeters')
   const danger = useStore((s) => dangerOn && nearbyHostiles(s.snapshot, dangerMeters * (s.game?.unitsPerMeter ?? 1), 1).length > 0)
-  const waypoint = tracking && waypointOn
-  return { waypoint, pings: hasPings && pingsOn, danger, cover: waypoint || dangerOn || (pingsOn && inSession) || hasPings }
+  const playing = useHeld(useStore((s) => !!s.snapshot?.local), WORLD_HOLD_MS)
+  const waypoint = tracking && waypointOn && playing
+  return { playing, waypoint, pings: hasPings && pingsOn, danger, notice, friends, cover: waypoint || dangerOn || inSession || hasPings || friends || notice }
 }
 

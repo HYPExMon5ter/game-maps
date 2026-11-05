@@ -4,7 +4,7 @@
 mod sotf;
 mod sunkenland;
 
-use game_maps_protocol::{Capabilities, PathInfo, TeleportTarget, Vec3, WorldExport, WorldSnapshot};
+use game_maps_protocol::{Capabilities, CompanionOrderOption, PathInfo, TeleportTarget, Vec3, WorldExport, WorldSnapshot};
 
 /// How far (world units) route ends may be from Unity's NavMesh.
 const NAVMESH_SNAP: f32 = 25.0;
@@ -30,6 +30,13 @@ pub trait Provider: Send {
     /// Drains pending human-readable diagnostics (which members resolved, first-scan
     /// results, …). Forwarded to the app's log.
     fn take_notes(&mut self) -> Vec<String>;
+
+    /// The app connected. Snapshots stop while it's away, so objects held from before may
+    /// be gone: the world can change meanwhile.
+    fn reconnected(&mut self) {}
+
+    /// The full map opened: searches too slow to repeat while playing can run now.
+    fn map_opened(&mut self) {}
 
     /// Reads current world state. Main thread only; must be cheap.
     ///
@@ -77,6 +84,22 @@ pub trait Provider: Send {
     /// Must run on the game's main thread.
     unsafe fn solid_mask(&mut self, cx: &Cx, physics: &Physics, _underground: bool) -> i32 {
         default_solid_mask(cx, physics)
+    }
+
+    /// What `companion` can be told to do right now.
+    ///
+    /// # Safety
+    /// Must run on the game's main thread.
+    unsafe fn companion_orders(&mut self, _cx: &Cx, _companion: &str) -> Result<Vec<CompanionOrderOption>, String> {
+        Err("this game has no companion orders".into())
+    }
+
+    /// Tells `companion` to do `order` (an id from [`Provider::companion_orders`]).
+    ///
+    /// # Safety
+    /// Must run on the game's main thread.
+    unsafe fn companion_order(&mut self, _cx: &Cx, _companion: &str, _order: &str) -> Result<(), String> {
+        Err("this game has no companion orders".into())
     }
 
     /// Whether the game is capturing text input (chat), so hotkeys must not fire.

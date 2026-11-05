@@ -4,7 +4,7 @@
 // game's default world.
 //
 // Storage (user-data.json):
-//   prefs:<game>            category filters (the same in every world)
+//   prefs:<game>            category filters and saved sets (the same in every world)
 //   worlds:<game>           known worlds, the last one played, and whether the default
 //                           world's data has moved to a detected world yet
 //   game:<game>             the default world's pins and found items (where every
@@ -12,6 +12,7 @@
 //   world:<game>:<world>    a detected world's pins and found items
 //   session:<game>[:<world>] map state, `fog:<game>:<world>` explored areas
 
+import type { FilterSet } from '../lib/filterSets'
 import type { Pin } from '../lib/game'
 import type { GameWorld, WorldKind } from '../lib/protocol'
 
@@ -50,15 +51,18 @@ export const DEFAULT_WORLD_INFO: WorldInfo = { id: DEFAULT_WORLD, name: null, ki
 export interface WorldData {
   customPins: Pin[]
   found: string[]
+  notes: Record<string, string>
+  timers: Record<string, number>
 }
 
 export interface GamePrefs {
   hiddenCategories: string[]
   shownCategories: string[]
+  filterSets: FilterSet[]
 }
 
-export const EMPTY_WORLD_DATA: WorldData = { customPins: [], found: [] }
-export const EMPTY_PREFS: GamePrefs = { hiddenCategories: [], shownCategories: [] }
+export const EMPTY_WORLD_DATA: WorldData = { customPins: [], found: [], notes: {}, timers: {} }
+export const EMPTY_PREFS: GamePrefs = { hiddenCategories: [], shownCategories: [], filterSets: [] }
 
 export const keys = {
   prefs: (game: string) => `prefs:${game}`,
@@ -92,13 +96,18 @@ export function recordPlayed(index: WorldIndex, world: GameWorld, now: number): 
 
 /** Whether data is worth keeping (and moving). */
 export function hasData(d: WorldData): boolean {
-  return d.customPins.length > 0 || d.found.length > 0
+  return d.customPins.length > 0 || d.found.length > 0 || Object.keys(d.notes).length > 0 || Object.keys(d.timers).length > 0
 }
 
 /** `a` plus what `b` has that `a` doesn't. */
 export function mergeWorldData(a: WorldData, b: WorldData): WorldData {
   const pinIds = new Set(a.customPins.map((p) => p.id))
-  return { customPins: [...a.customPins, ...b.customPins.filter((p) => !pinIds.has(p.id))], found: [...new Set([...a.found, ...b.found])] }
+  return {
+    customPins: [...a.customPins, ...b.customPins.filter((p) => !pinIds.has(p.id))],
+    found: [...new Set([...a.found, ...b.found])],
+    notes: { ...b.notes, ...a.notes },
+    timers: { ...b.timers, ...a.timers },
+  }
 }
 
 /** Worlds to offer in the world picker: most recently played first, the default world last if it has data. */

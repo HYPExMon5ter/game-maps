@@ -457,6 +457,15 @@ impl Field {
         debug_assert!(!self.is_static);
         std::ptr::read_unaligned((obj as *const u8).add(self.offset) as *const T)
     }
+
+    /// Writes an instance field. Not for references: those need the GC's write barrier.
+    ///
+    /// # Safety
+    /// `obj` must be a live object containing this field, and `T` its storage type.
+    pub unsafe fn set<T: Copy>(&self, obj: *mut ManagedObject, value: T) {
+        debug_assert!(!self.is_static);
+        std::ptr::write_unaligned((obj as *mut u8).add(self.offset) as *mut T, value);
+    }
 }
 
 /// A managed array allocated by [`Runtime::new_array`].

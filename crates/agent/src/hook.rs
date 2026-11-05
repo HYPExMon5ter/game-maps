@@ -304,24 +304,19 @@ pub fn pump_tick() {
     }
 }
 
-/// Removes all hooks and waits until no thread is inside the agent's tick, so the
-/// module can be unloaded safely.
+/// Stops all hooks, waits until no thread is inside the agent's tick, then frees them, so
+/// the module can be unloaded safely. In that order: a tick still running returns through
+/// its trampoline, which freeing the hook would pull out from under it.
 pub fn remove() {
     PUMP_TICKS.store(false, Ordering::SeqCst);
-    crate::focus::remove();
-    let mut any = false;
+    crate::focus::disable();
     for t in TARGETS.iter() {
         let code = t.swap(0, Ordering::SeqCst) as *mut std::ffi::c_void;
         if !code.is_null() {
-            any = true;
             unsafe {
                 let _ = MinHook::disable_hook(code);
-                let _ = MinHook::remove_hook(code);
             }
         }
-    }
-    if !any {
-        return;
     }
     if let Some(s) = SHARED.get() {
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -332,6 +327,7 @@ pub fn remove() {
     // Let any thread still in a thunk (between the tick and its jump) or between a
     // patched jump and the thunk finish.
     std::thread::sleep(Duration::from_millis(50));
+    // Frees every hook and trampoline.
     MinHook::uninitialize();
 }
 

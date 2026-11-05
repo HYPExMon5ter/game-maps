@@ -2,7 +2,7 @@
 // transparent), rendered once per category/icon and registered with MapLibre.
 
 import type { Map as MapLibreMap } from 'maplibre-gl'
-import { iconUrl } from '../lib/game'
+import { iconUrl, type BadgeShape } from '../lib/game'
 
 const SIZE = 44 // logical px; drawn at 2x for crisp HiDPI rendering
 const RATIO = 2
@@ -63,20 +63,41 @@ function drawPinGlyph(ctx: CanvasRenderingContext2D, s: number, color: string) {
   ctx.fill()
 }
 
-/** Renders a badge. `iconRef` may point to a full-color user image, drawn clipped to the disc. */
-export async function renderBadge(gameId: string, color: string, iconRef: string): Promise<ImageData> {
+/** Outlines of the badge shapes, as polygons on a -1..1 square. */
+const OUTLINES: Partial<Record<BadgeShape, [number, number][]>> = {
+  square: [[-0.88, -0.88], [0.88, -0.88], [0.88, 0.88], [-0.88, 0.88]],
+  diamond: [[0, -1.12], [1.12, 0], [0, 1.12], [-1.12, 0]],
+  hexagon: [[0, -1.08], [0.96, -0.54], [0.96, 0.54], [0, 1.08], [-0.96, 0.54], [-0.96, -0.54]],
+  shield: [[-0.92, -0.9], [0.92, -0.9], [0.92, 0.22], [0, 1.1], [-0.92, 0.22]],
+}
+
+/** The path of a badge of `shape` around the middle of a `px` wide canvas. */
+function traceBadge(ctx: CanvasRenderingContext2D, px: number, r: number, shape: BadgeShape) {
+  const outline = OUTLINES[shape]
+  ctx.beginPath()
+  if (!outline) {
+    ctx.arc(px / 2, px / 2, r, 0, Math.PI * 2)
+    return
+  }
+  outline.forEach(([x, y], i) => ctx[i ? 'lineTo' : 'moveTo'](px / 2 + x * r, px / 2 + y * r))
+  ctx.closePath()
+}
+
+/** Renders a badge. `iconRef` may point to a full-color user image, drawn clipped to the badge. */
+export async function renderBadge(gameId: string, color: string, iconRef: string, shape: BadgeShape = 'circle'): Promise<ImageData> {
   const px = SIZE * RATIO
   const canvas = document.createElement('canvas')
   canvas.width = canvas.height = px
   const ctx = canvas.getContext('2d')!
-  const r = px / 2 - 3 * RATIO
+  // The diamond's points need the room.
+  const r = (shape === 'circle' ? px / 2 - 3 * RATIO : px / 2 - 5 * RATIO)
 
   ctx.shadowColor = 'rgba(0,0,0,0.45)'
   ctx.shadowBlur = 4 * RATIO
   ctx.shadowOffsetY = 1 * RATIO
   ctx.fillStyle = color
-  ctx.beginPath()
-  ctx.arc(px / 2, px / 2, r, 0, Math.PI * 2)
+  ctx.lineJoin = 'round'
+  traceBadge(ctx, px, r, shape)
   ctx.fill()
   ctx.shadowColor = 'transparent'
   ctx.lineWidth = 2 * RATIO
@@ -88,8 +109,7 @@ export async function renderBadge(gameId: string, color: string, iconRef: string
   if (img) {
     const user = iconRef.startsWith('user:')
     ctx.save()
-    ctx.beginPath()
-    ctx.arc(px / 2, px / 2, r - 1.5 * RATIO, 0, Math.PI * 2)
+    traceBadge(ctx, px, r - 1.5 * RATIO, shape)
     ctx.clip()
     const inset = user ? 0 : r * 0.45
     const box = (r - inset) * 2
@@ -106,13 +126,23 @@ export async function renderBadge(gameId: string, color: string, iconRef: string
   return ctx.getImageData(0, 0, px, px)
 }
 
+const rendered = new Map<string, Promise<ImageData>>()
+
 /** Ensures a badge image exists on the map under `key`. */
-export async function ensureBadge(map: MapLibreMap, key: string, gameId: string, color: string, iconRef: string) {
+export async function ensureBadge(map: MapLibreMap, key: string, gameId: string, color: string, iconRef: string, shape?: BadgeShape) {
   if (map.hasImage(key)) return
-  const data = await renderBadge(gameId, color, iconRef)
+  // Shared by every map: a game's badges are the same on each.
+  const id = `${gameId}/${key}`
+  let render = rendered.get(id)
+  if (!render) {
+    render = renderBadge(gameId, color, iconRef, shape)
+    rendered.set(id, render)
+    render.catch(() => rendered.delete(id))
+  }
+  const data = await render
   if (!map.hasImage(key)) map.addImage(key, data, { pixelRatio: RATIO })
 }
 
-export function badgeKey(color: string, iconRef: string): string {
-  return `badge:${color}:${iconRef}`
+export function badgeKey(color: string, iconRef: string, shape: BadgeShape = 'circle'): string {
+  return `badge:${color}:${iconRef}:${shape}`
 }

@@ -3,6 +3,7 @@ import { compassReading, formatDistance } from '../lib/compass'
 import { iconUrl } from '../lib/game'
 import { findMover, MOVER_KIND_LABELS } from '../lib/movers'
 import { useStore } from '../state/store'
+import { CompanionPanel } from './CompanionPanel'
 import { LiveActions } from './LiveActions'
 import { useSettings } from '../settings/store'
 
@@ -52,6 +53,7 @@ export function LiveDetails() {
       <div className="mt-4 flex flex-wrap gap-2">
         <LiveActions entity={entity} />
       </div>
+      {entity.kind === 'companion' && <CompanionPanel name={entity.name} />}
     </div>
   )
 }

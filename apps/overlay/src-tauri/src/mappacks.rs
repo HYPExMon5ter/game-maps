@@ -9,7 +9,7 @@
 //! Every supported game's pack is installed and kept on the latest published version:
 //! checked at startup, every 30 minutes, and when a game starts.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -19,12 +19,19 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::analytics::{self, Problem};
+
 pub const MANIFEST_URL: &str = "https://github.com/HYPExMon5ter/game-maps/releases/download/maps/maps.json";
 /// Marks a finished install; written last, so a folder without it is incomplete.
 const PACK_FILE: &str = "pack.json";
 pub const EVENT: &str = "map-packs";
 /// How often published maps are checked while the app runs.
 const CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);
+/// Sooner after a failure: a player without a map shouldn't wait out a dropped connection.
+const RETRY_INTERVAL: Duration = Duration::from_secs(2 * 60);
+/// How many times to try for a map the player asked for: about an hour.
+const REQUEST_TRIES: u32 = 30;
+const MAX_RETRY_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 /// A game start re-checks unless the last check is more recent than this.
 const GAME_START_MAX_AGE: Duration = Duration::from_secs(2 * 60);
 
@@ -77,11 +84,55 @@ pub struct MapPacks {
     client: reqwest::Client,
     statuses: Mutex<HashMap<String, PackStatus>>,
     last_refresh: Mutex<Option<Instant>>,
+    /// Games the player needs the map of (see [`request`]): nothing else gets downloaded.
+    requested: Mutex<HashSet<String>>,
+    /// Games a [`request`] is working on right now.
+    requesting: Mutex<HashSet<String>>,
+    /// Failed downloads in a row by game, and when to try again.
+    failures: Mutex<HashMap<String, (u32, Instant)>>,
+}
+
+/// Wait before trying a failed download again: 2 minutes, doubling up to 6 hours.
+fn failure_delay(tries: u32) -> Duration {
+    RETRY_INTERVAL.saturating_mul(1u32 << tries.min(10)).min(MAX_RETRY_INTERVAL)
+}
+
+/// Whether a background sync should download this pack: updates for maps the player
+/// has, and maps they asked for. Other games' maps stay on the server.
+fn needs_download(status: &PackStatus, requested: bool) -> bool {
+    status.downloading.is_none() && status.available.is_some() && (status.update_available() || (status.installed.is_none() && requested))
+}
+
+/// Removes what an interrupted download left behind.
+fn remove_leftovers(dir: &Path) {
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let (path, name) = (entry.path(), entry.file_name().to_string_lossy().into_owned());
+        let removed = if name.ends_with(".staging") {
+            std::fs::remove_dir_all(&path)
+        } else if name.ends_with(".part") {
+            std::fs::remove_file(&path)
+        } else if let Some(pack) = name.strip_suffix(".old") {
+            // A swap that was cut off: the old pack is the one to keep if the new one
+            // didn't make it.
+            let target = dir.join(pack);
+            if target.exists() {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::rename(&path, target)
+            }
+        } else {
+            continue;
+        };
+        if let Err(e) = removed {
+            log::warn!("could not remove {}: {e}", path.display());
+        }
+    }
 }
 
 impl MapPacks {
     /// `bundled`: the app's game folders; map data found there (development) counts as installed.
     pub fn new(dir: PathBuf, bundled: &Path, game_ids: &[String]) -> Self {
+        remove_leftovers(&dir);
         let statuses = game_ids
             .iter()
             .map(|id| {
@@ -94,9 +145,19 @@ impl MapPacks {
         let client = reqwest::Client::builder()
             .user_agent(concat!("GameMaps/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(15))
+            // Between reads, not for the whole download: a stalled server mustn't hang it.
+            .read_timeout(Duration::from_secs(30))
             .build()
             .expect("http client");
-        Self { dir, client, statuses: Mutex::new(statuses), last_refresh: Mutex::new(None) }
+        Self {
+            dir,
+            client,
+            statuses: Mutex::new(statuses),
+            last_refresh: Mutex::new(None),
+            requested: Mutex::new(HashSet::new()),
+            requesting: Mutex::new(HashSet::new()),
+            failures: Mutex::new(HashMap::new()),
+        }
     }
 
     pub fn dir(&self) -> &Path {
@@ -135,27 +196,40 @@ impl MapPacks {
         Ok(())
     }
 
-    /// Fetches the pack list (unless it was fetched within `max_age`), then installs
-    /// every published pack that is missing or outdated.
-    pub async fn sync(&self, app: &AppHandle, max_age: Duration) {
+    /// Fetches the pack list (unless it was fetched within `max_age`), then updates the
+    /// maps the player has and gets the ones they asked for.
+    /// Returns whether everything worked.
+    pub async fn sync(&self, app: &AppHandle, max_age: Duration) -> bool {
         let fresh = self.last_refresh.lock().unwrap().is_some_and(|t| t.elapsed() < max_age);
         if !fresh {
             if let Err(e) = self.refresh(app).await {
                 log::info!("{e}");
-                return;
+                return false;
             }
         }
-        let wanted: Vec<String> = self
-            .statuses()
-            .into_iter()
-            .filter(|s| s.downloading.is_none() && s.available.is_some() && (s.installed.is_none() || s.update_available()))
-            .map(|s| s.game_id)
-            .collect();
+        let mut ok = true;
+        let requested = self.requested.lock().unwrap().clone();
+        let wanted: Vec<String> = self.statuses().into_iter().filter(|s| needs_download(s, requested.contains(&s.game_id))).map(|s| s.game_id).collect();
         for id in wanted {
-            if let Err(e) = self.install(app, &id).await {
-                log::warn!("map pack {id}: {e}");
+            // A pack that keeps failing shouldn't be downloaded in full every time.
+            if self.failures.lock().unwrap().get(&id).is_some_and(|(_, next)| Instant::now() < *next) {
+                ok = false;
+                continue;
+            }
+            match self.install(app, &id).await {
+                Ok(()) => {
+                    self.failures.lock().unwrap().remove(&id);
+                }
+                Err(e) => {
+                    log::warn!("map pack {id}: {e}");
+                    ok = false;
+                    let mut failures = self.failures.lock().unwrap();
+                    let tries = failures.get(&id).map_or(0, |(n, _)| n + 1);
+                    failures.insert(id, (tries, Instant::now() + failure_delay(tries)));
+                }
             }
         }
+        ok
     }
 
     /// Downloads, verifies and installs the current pack for `id`.
@@ -181,8 +255,11 @@ impl MapPacks {
                 Err(e) => s.error = Some(e.clone()),
             }
         });
-        if result.is_ok() {
-            let _ = app.emit("map-pack-installed", id);
+        match &result {
+            Ok(()) => {
+                let _ = app.emit("map-pack-installed", id);
+            }
+            Err(_) => analytics::problem(app, Problem::MapDownload),
         }
         result
     }
@@ -199,7 +276,8 @@ impl MapPacks {
             tauri::async_runtime::spawn_blocking(move || extract(&zip, &out, &version))
                 .await
                 .map_err(|e| e.to_string())??;
-            swap_into_place(&staging, &self.dir.join(id))
+            let (from, to) = (staging.clone(), self.dir.join(id));
+            tauri::async_runtime::spawn_blocking(move || swap_into_place(&from, &to)).await.map_err(|e| e.to_string())?
         }
         .await;
         let _ = std::fs::remove_file(&zip_path);
@@ -284,8 +362,8 @@ fn retry(mut op: impl FnMut() -> std::io::Result<()>) -> std::io::Result<()> {
 pub fn start_background(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
-            app.state::<MapPacks>().sync(&app, Duration::ZERO).await;
-            tokio::time::sleep(CHECK_INTERVAL).await;
+            let ok = app.state::<MapPacks>().sync(&app, Duration::ZERO).await;
+            tokio::time::sleep(if ok { CHECK_INTERVAL } else { RETRY_INTERVAL }).await;
         }
     });
 }
@@ -296,9 +374,87 @@ pub fn sync_soon(app: &AppHandle) {
     tauri::async_runtime::spawn(async move { app.state::<MapPacks>().sync(&app, GAME_START_MAX_AGE).await });
 }
 
+/// The player needs `id`'s map: gets it unless it's already here, retrying through a
+/// dropped connection.
+pub fn request(app: &AppHandle, id: &str) {
+    let packs = app.state::<MapPacks>();
+    if packs.statuses().iter().any(|s| s.game_id == id && s.installed.is_some()) {
+        return;
+    }
+    if !packs.requesting.lock().unwrap().insert(id.to_owned()) {
+        return;
+    }
+    log::info!("map pack {id}: needed, getting it");
+    packs.requested.lock().unwrap().insert(id.to_owned());
+    let (app, id) = (app.clone(), id.to_owned());
+    tauri::async_runtime::spawn(async move {
+        let packs = app.state::<MapPacks>();
+        for _ in 0..REQUEST_TRIES {
+            if packs.sync(&app, GAME_START_MAX_AGE).await {
+                break;
+            }
+            tokio::time::sleep(RETRY_INTERVAL).await;
+        }
+        packs.requesting.lock().unwrap().remove(&id);
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pack(installed: Option<&str>, available: Option<&str>) -> PackStatus {
+        let remote = |v: &str| RemotePack { version: v.into(), url: String::new(), sha256: String::new(), size: 1 };
+        PackStatus { game_id: "game".into(), installed: installed.map(Into::into), available: available.map(remote), downloading: None, error: None }
+    }
+
+    #[test]
+    fn maps_nobody_asked_for_stay_on_the_server() {
+        assert!(!needs_download(&pack(None, Some("1")), false));
+        assert!(needs_download(&pack(None, Some("1")), true));
+    }
+
+    #[test]
+    fn maps_the_player_has_stay_up_to_date() {
+        assert!(needs_download(&pack(Some("1"), Some("2")), false));
+        assert!(!needs_download(&pack(Some("2"), Some("2")), false));
+        assert!(!needs_download(&pack(Some("development"), Some("2")), false));
+    }
+
+    #[test]
+    fn nothing_to_download_without_a_published_map() {
+        assert!(!needs_download(&pack(None, None), true));
+    }
+
+    #[test]
+    fn leftovers_of_an_interrupted_download_are_removed() {
+        let dir = temp_dir("leftovers");
+        std::fs::create_dir_all(dir.join("game")).unwrap();
+        std::fs::create_dir_all(dir.join("game-1.staging")).unwrap();
+        std::fs::write(dir.join("game-1.zip.part"), b"x").unwrap();
+        std::fs::create_dir_all(dir.join("game.old")).unwrap();
+        remove_leftovers(&dir);
+        assert!(dir.join("game").exists());
+        assert!(!dir.join("game-1.staging").exists());
+        assert!(!dir.join("game-1.zip.part").exists());
+        assert!(!dir.join("game.old").exists());
+    }
+
+    #[test]
+    fn an_interrupted_swap_keeps_the_old_pack() {
+        let dir = temp_dir("interrupted-swap");
+        std::fs::create_dir_all(dir.join("game.old")).unwrap();
+        remove_leftovers(&dir);
+        assert!(dir.join("game").exists());
+        assert!(!dir.join("game.old").exists());
+    }
+
+    #[test]
+    fn failed_downloads_wait_longer_each_time() {
+        assert_eq!(failure_delay(0), Duration::from_secs(120));
+        assert_eq!(failure_delay(1), Duration::from_secs(240));
+        assert_eq!(failure_delay(30), Duration::from_secs(6 * 60 * 60));
+    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("gm-packs-{name}-{}", std::process::id()));

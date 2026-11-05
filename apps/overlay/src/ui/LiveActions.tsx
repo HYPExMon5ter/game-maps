@@ -4,6 +4,7 @@
 import { Crosshair, Navigation, Zap } from 'lucide-react'
 import { teleportToPlayer } from '../lib/actions'
 import type { Mover } from '../lib/movers'
+import { useCanTeleport, useTeleportOffered } from '../lib/teleport'
 import { useStore } from '../state/store'
 import { Button } from './controls'
 
@@ -11,7 +12,8 @@ import { Button } from './controls'
 export function LiveActions({ entity, compact = false }: { entity: Mover; compact?: boolean }) {
   const isTracked = useStore((s) => s.tracked?.kind === 'live' && s.tracked.id === entity.id)
   const isFollowed = useStore((s) => s.followId === entity.id)
-  const canTeleport = useStore((s) => s.status?.state === 'connected' && !!s.status.capabilities?.teleport)
+  const teleportOffered = useTeleportOffered()
+  const canTeleport = useCanTeleport()
   const { setTracked, setFollow } = useStore.getState()
   const size = compact ? 'size-3.5' : 'size-4'
   const button = compact ? '!px-2' : ''
@@ -39,16 +41,18 @@ export function LiveActions({ entity, compact = false }: { entity: Mover; compac
         <Crosshair className={size} />
         {label(isFollowed ? 'Following' : 'Follow')}
       </Button>
-      <Button
-        className={button}
-        disabled={!canTeleport}
-        title={canTeleport ? `Teleport to ${entity.name}` : 'Teleport needs the game running'}
-        aria-label={`Teleport to ${entity.name}`}
-        onClick={() => teleportToPlayer(entity.id, entity.name)}
-      >
-        <Zap className={size} />
-        {label('Teleport')}
-      </Button>
+      {teleportOffered && (
+        <Button
+          className={button}
+          disabled={!canTeleport}
+          title={canTeleport ? `Teleport to ${entity.name}` : 'Teleport needs the game running'}
+          aria-label={`Teleport to ${entity.name}`}
+          onClick={() => teleportToPlayer(entity.id, entity.name)}
+        >
+          <Zap className={size} />
+          {label('Teleport')}
+        </Button>
+      )}
     </>
   )
 }

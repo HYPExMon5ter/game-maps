@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use game_maps_protocol::{
-    decode_line, encode_line, pipe_name, AgentMessage, AppMessage, Capabilities, Hotkey, HotkeyAction, LogLevel, TeleportTarget,
-    GroundPoint, PathInfo, RouteCheck, Vec3, WorldExport, WorldSnapshot, PROTOCOL_VERSION,
+    decode_line, encode_line, pipe_name, AgentMessage, AppMessage, Capabilities, CompanionOrderOption, Hotkey, HotkeyAction, LogLevel, TeleportTarget,
+    GroundPoint, PathInfo, RouteCheck, Vec3, WorldExport, WorldLayer, WorldSnapshot, PROTOCOL_VERSION,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -21,15 +21,25 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
 use tokio::sync::{mpsc, oneshot, Notify};
 
+use crate::analytics::{self, Feature, HookFailure};
 use crate::games::GameEntry;
-use crate::injector;
+use crate::injector::{self, InjectError};
 use crate::map_window;
 use crate::overlay;
 use crate::settings::{self, HookMode};
 
-const SNAPSHOT_HZ: u32 = 30;
+pub const SNAPSHOT_HZ: u32 = 30;
+/// Sampling while nothing is on screen: the agent samples on the game's main thread.
+pub const HIDDEN_SNAPSHOT_HZ: u32 = 2;
+/// How often running games are looked for while none is: walking the process list is the
+/// one thing the app does all the time.
+const GAME_SCAN_INTERVAL: Duration = Duration::from_secs(3);
+/// How long a write to the agent may take before the session counts as lost.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const TELEPORT_TIMEOUT: Duration = Duration::from_secs(5);
 const PATH_TIMEOUT: Duration = Duration::from_secs(3);
+/// Under the UI's 1.5 s between routes: a window asking again still gets a fresh one.
+const ROUTE_SHARED_FOR: Duration = Duration::from_millis(1200);
 /// Route checks and ground probes take a frame or two in the game.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 /// How often the UI gets a snapshot while the map is hidden.
@@ -43,15 +53,32 @@ const EXPORT_TIMEOUT: Duration = Duration::from_secs(600);
 const CONNECT_AFTER_INJECT: Duration = Duration::from_secs(180);
 /// The agent sends something at least this often while it's working.
 const LIVE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Silence this long means the game hung (or a load is taking very long): stop showing
+/// live data that's out of date, and connect again.
+const STALL_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long the game's window must have been up before injecting.
+const GAME_SETTLE: Duration = Duration::from_secs(3);
 /// Longest wait between attempts to get an agent going again.
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
 /// A session this long counts as a success: the next failure starts over.
 const STABLE_SESSION: Duration = Duration::from_secs(30);
 /// How long an outdated agent may take to unhook and unload after being told to detach.
 const AGENT_UNLOAD_TIMEOUT: Duration = Duration::from_secs(15);
+/// A connected agent ticks from the menus on: this long without data means it can't.
+const NO_DATA_TIMEOUT: Duration = Duration::from_secs(120);
 
 const ERROR_FILE_NOT_FOUND: i32 = 2;
 const ERROR_PIPE_BUSY: i32 = 231;
+
+/// Whether the UI should hear about this snapshot. Hidden map: a slow trickle keeps
+/// background features (marking collectibles found) working without busy-updating it.
+fn ui_wants_update(app: &AppHandle, inner: &mut Inner) -> bool {
+    let wanted = overlay::is_visible(app) || map_window::is_open(app) || inner.hidden_sent_at.is_none_or(|t| t.elapsed() >= HIDDEN_SNAPSHOT_INTERVAL);
+    if wanted {
+        inner.hidden_sent_at = Some(Instant::now());
+    }
+    wanted
+}
 
 /// Wait before the next attempt after `failures` failed ones: 5 s, doubling up to a minute.
 fn retry_delay(failures: u32) -> Duration {
@@ -63,6 +90,8 @@ enum SessionEnd {
     Disconnected,
     /// An outdated agent was told to unload; the current build should be injected.
     AgentReplaced,
+    /// The agent went silent.
+    Stalled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -96,11 +125,17 @@ struct Inner {
     snapshot: Option<WorldSnapshot>,
     sender: Option<mpsc::UnboundedSender<AppMessage>>,
     /// Where the player was before each teleport this session (most recent last).
-    teleported_from: Vec<Vec3>,
+    teleported_from: Vec<(Vec3, WorldLayer)>,
     /// Last snapshot sent to the UI while the map was hidden.
     hidden_sent_at: Option<Instant>,
     /// Last message from the agent.
     last_message: Option<Instant>,
+    /// The world last reported, for telling when the player is in another one.
+    world_id: Option<String>,
+    /// A whole snapshot was held back from the UI, so it can't take updates yet.
+    ui_behind: bool,
+    /// The last route found: every window showing the map asks for it.
+    route: Option<(Vec3, Instant, PathInfo)>,
 }
 
 /// Per-process hooking decisions.
@@ -111,17 +146,39 @@ struct Control {
     /// Processes the user disconnected from.
     detached: HashSet<u32>,
     connect_requested: Option<u32>,
+    /// A game process and when its window was first seen.
+    window_seen: Option<(u32, Instant)>,
+    /// Processes already counted as connected: reconnects aren't new sessions.
+    counted_connected: HashSet<u32>,
+    /// Failures already counted: attempts repeat every minute while one lasts.
+    counted_failures: HashSet<(u32, HookFailure)>,
 }
 
 enum ConnectError {
     /// No agent in the game, and injecting wasn't allowed.
     NotLoaded,
-    Failed(String),
+    /// The game is still starting: too early to inject.
+    Starting,
+    /// What to show the player, and what to count (`None`: nothing went wrong with the app).
+    Failed(String, Option<HookFailure>),
+}
+
+impl From<InjectError> for ConnectError {
+    fn from(e: InjectError) -> Self {
+        let failure = match e {
+            InjectError::MissingAgent(_) | InjectError::Stage(_) => HookFailure::AgentFiles,
+            InjectError::OpenProcess(_) => HookFailure::ProcessAccess,
+            InjectError::Win32(_) | InjectError::LoadFailed => HookFailure::Injection,
+        };
+        Self::Failed(e.to_string(), Some(failure))
+    }
 }
 
 pub struct AgentLink {
     inner: Mutex<Inner>,
     control: Mutex<Control>,
+    /// The agent build staged for injecting.
+    staged: Mutex<Option<PathBuf>>,
     /// Wakes the link loop early (connect requests, hook mode changes).
     wake: Notify,
     teleports: Pending<()>,
@@ -129,6 +186,8 @@ pub struct AgentLink {
     paths: Pending<PathInfo>,
     route_checks: Pending<RouteCheck>,
     ground_probes: Pending<Vec<GroundPoint>>,
+    companion_orders: Pending<Vec<CompanionOrderOption>>,
+    companion_results: Pending<()>,
     next_request: AtomicU32,
 }
 
@@ -173,14 +232,20 @@ impl AgentLink {
                 teleported_from: Vec::new(),
                 hidden_sent_at: None,
                 last_message: None,
+                world_id: None,
+                ui_behind: false,
+                route: None,
             }),
             control: Mutex::new(Control::default()),
+            staged: Mutex::new(None),
             wake: Notify::new(),
             teleports: Pending::default(),
             exports: Pending::default(),
             paths: Pending::default(),
             route_checks: Pending::default(),
             ground_probes: Pending::default(),
+            companion_orders: Pending::default(),
+            companion_results: Pending::default(),
             next_request: AtomicU32::new(1),
         });
         let l = link.clone();
@@ -211,7 +276,7 @@ impl AgentLink {
         let pid = self.status().pid.ok_or("the game is not running")?;
         let mut control = self.control.lock().unwrap();
         control.connect_requested = Some(pid);
-        // Retry after a failed injection (loading the same agent twice is harmless).
+        // Retry after a failed injection (`connect` won't load a copy that's still there).
         control.injected.remove(&pid);
         drop(control);
         self.wake.notify_one();
@@ -232,6 +297,19 @@ impl AgentLink {
         }
         self.wake.notify_one();
         Ok(())
+    }
+
+    /// How often the agent should sample the game.
+    pub fn set_stream_rate(&self, max_hz: u32) {
+        if let Some(tx) = &self.inner.lock().unwrap().sender {
+            let _ = tx.send(AppMessage::SetStreamRate { max_hz });
+        }
+    }
+
+    pub fn map_opened(&self) {
+        if let Some(tx) = &self.inner.lock().unwrap().sender {
+            let _ = tx.send(AppMessage::MapOpened);
+        }
     }
 
     /// Re-evaluates hooking right away (e.g. after a hook mode change).
@@ -265,9 +343,10 @@ impl AgentLink {
     }
 
     /// Teleports the player, remembering where they were for [`AgentLink::teleport_back`].
-    pub async fn teleport(&self, target: TeleportTarget) -> Result<(), String> {
-        let from = self.inner.lock().unwrap().snapshot.as_ref().and_then(|s| s.local.as_ref()).map(|l| l.position);
+    pub async fn teleport(&self, app: &AppHandle, target: TeleportTarget) -> Result<(), String> {
+        let from = self.inner.lock().unwrap().snapshot.as_ref().and_then(|s| s.local.as_ref()).map(|l| (l.position, l.layer));
         self.send_teleport(target).await?;
+        analytics::count(app, Feature::Teleport);
         if let Some(from) = from {
             let mut inner = self.inner.lock().unwrap();
             if inner.teleported_from.len() == TELEPORT_HISTORY {
@@ -282,7 +361,8 @@ impl AgentLink {
     /// one teleport further back.
     pub async fn teleport_back(&self) -> Result<(), String> {
         let from = self.inner.lock().unwrap().teleported_from.pop().ok_or("no teleport to go back from")?;
-        let result = self.send_teleport(TeleportTarget::Position { position: from, snap_to_ground: false }).await;
+        let (position, layer) = from;
+        let result = self.send_teleport(TeleportTarget::Position { position, snap_to_ground: false, layer }).await;
         if result.is_err() {
             self.inner.lock().unwrap().teleported_from.push(from);
         }
@@ -308,7 +388,13 @@ impl AgentLink {
 
     /// A walking route from the player to `to` on the game's navigation mesh.
     pub async fn find_path(&self, to: Vec3) -> Result<PathInfo, String> {
-        self.request(&self.paths, PATH_TIMEOUT, |request_id| AppMessage::FindPath { request_id, to }).await
+        // Finding a route blocks the game's main thread: two windows can share one.
+        if let Some((_, _, path)) = self.inner.lock().unwrap().route.as_ref().filter(|(target, at, _)| *target == to && at.elapsed() < ROUTE_SHARED_FOR) {
+            return Ok(path.clone());
+        }
+        let path = self.request(&self.paths, PATH_TIMEOUT, |request_id| AppMessage::FindPath { request_id, to }).await?;
+        self.inner.lock().unwrap().route = Some((to, Instant::now(), path.clone()));
+        Ok(path)
     }
 
     /// Which legs of a route (floor points about a meter apart) can't be walked now.
@@ -319,6 +405,16 @@ impl AgentLink {
     /// The floor under points near the player, and whether the camera sees them.
     pub async fn probe_ground(&self, points: Vec<Vec3>) -> Result<Vec<GroundPoint>, String> {
         self.request(&self.ground_probes, PROBE_TIMEOUT, |request_id| AppMessage::ProbeGround { request_id, points }).await
+    }
+
+    /// What `companion` can be told to do right now.
+    pub async fn companion_orders(&self, companion: String) -> Result<Vec<CompanionOrderOption>, String> {
+        self.request(&self.companion_orders, PROBE_TIMEOUT, |request_id| AppMessage::CompanionOrders { request_id, companion }).await
+    }
+
+    /// Tells `companion` to do `order`.
+    pub async fn companion_order(&self, companion: String, order: String) -> Result<(), String> {
+        self.request(&self.companion_results, PROBE_TIMEOUT, |request_id| AppMessage::CompanionOrder { request_id, companion, order }).await
     }
 
     /// Sends the message `make` builds for a new request id and waits for its answer.
@@ -344,6 +440,13 @@ impl AgentLink {
         }
     }
 
+    /// Counts `failure` once per game process.
+    fn count_failure(&self, app: &AppHandle, game: &GameEntry, pid: u32, failure: HookFailure) {
+        if self.control.lock().unwrap().counted_failures.insert((pid, failure)) {
+            analytics::hook_failed(app, &game.id, failure);
+        }
+    }
+
     fn set_status(&self, app: &AppHandle, status: LinkStatus) {
         let changed = {
             let mut inner = self.inner.lock().unwrap();
@@ -364,11 +467,15 @@ impl AgentLink {
         // Failed attempts in a row.
         let mut failures: u32 = 0;
         loop {
-            let found = config.games.iter().find_map(|g| injector::find_process(&g.process).map(|pid| (g, pid)));
+            let names: Vec<&str> = config.games.iter().map(|g| g.process.as_str()).collect();
+            let found = injector::find_first(&names).map(|(index, pid)| (&config.games[index], pid));
             let Some((game, pid)) = found else {
+                analytics::game_closed(&app);
                 *self.control.lock().unwrap() = Control::default();
+                // Places from a game that's gone mean nothing in the next one.
+                self.inner.lock().unwrap().teleported_from.clear();
                 self.set_status(&app, LinkStatus { state: LinkState::WaitingForGame, game_id: None, pid: None, capabilities: None, message: None });
-                self.idle(Duration::from_secs(2)).await;
+                self.idle(GAME_SCAN_INTERVAL).await;
                 continue;
             };
             overlay::set_game_window(&app, pid);
@@ -380,14 +487,14 @@ impl AgentLink {
                 message,
             };
 
-            let (may_inject, detached) = {
+            let (may_inject, detached, requested) = {
                 let mut control = self.control.lock().unwrap();
                 if control.connect_requested.take() == Some(pid) {
                     control.detached.remove(&pid);
-                    (true, false)
+                    (true, false, true)
                 } else {
                     let detached = control.detached.contains(&pid);
-                    (!detached && settings::get(&app).hook_mode(&game.id) == HookMode::Auto, detached)
+                    (!detached && settings::get(&app).hook_mode(&game.id) == HookMode::Auto, detached, false)
                 }
             };
             if detached {
@@ -408,8 +515,17 @@ impl AgentLink {
                         // The outdated agent unloads itself; inject the current one next.
                         self.control.lock().unwrap().injected.remove(&pid);
                     }
-                    if started.elapsed() >= STABLE_SESSION {
+                    let stable = started.elapsed() >= STABLE_SESSION;
+                    if stable {
                         failures = 0;
+                    }
+                    if end == SessionEnd::Stalled {
+                        self.set_status(&app, status(LinkState::Error, Some("The game stopped responding (it may be loading). Reconnecting…".into())));
+                    }
+                    // A session that ends right away is a failure too, not a reason to spin.
+                    if end == SessionEnd::Stalled || (end == SessionEnd::Disconnected && !stable) {
+                        self.idle(retry_delay(failures)).await;
+                        failures = failures.saturating_add(1);
                     }
                 }
                 Err(ConnectError::NotLoaded) => {
@@ -417,11 +533,22 @@ impl AgentLink {
                     self.idle(Duration::from_secs(2)).await;
                     continue;
                 }
-                Err(ConnectError::Failed(message)) => {
+                Err(ConnectError::Starting) => {
+                    // Keeps a Connect click waiting too, in games connected by hand.
+                    if requested {
+                        self.control.lock().unwrap().connect_requested = Some(pid);
+                    }
+                    self.idle(Duration::from_secs(1)).await;
+                    continue;
+                }
+                Err(ConnectError::Failed(message, failure)) => {
                     log::warn!("cannot connect to {}: {message}", game.id);
+                    if let Some(failure) = failure {
+                        self.count_failure(&app, game, pid, failure);
+                    }
                     self.set_status(&app, status(LinkState::Error, Some(message)));
                     // Keep trying, less often the longer it fails. The agent may have died:
-                    // inject it again (a copy that's still loaded makes this harmless).
+                    // inject it again (`connect` skips this if it's still loaded).
                     self.control.lock().unwrap().injected.remove(&pid);
                     self.idle(retry_delay(failures)).await;
                     failures = failures.saturating_add(1);
@@ -431,15 +558,46 @@ impl AgentLink {
         }
     }
 
+    /// The agent build to inject, staged once: hashing it on every poll is wasted work.
+    fn staged_agent(&self, config: &LinkConfig) -> Result<PathBuf, InjectError> {
+        let mut staged = self.staged.lock().unwrap();
+        if let Some(dll) = staged.as_ref().filter(|p| p.exists()) {
+            return Ok(dll.clone());
+        }
+        let dll = injector::stage_agent(&config.agent_dll, &config.staging_dir)?;
+        *staged = Some(dll.clone());
+        Ok(dll)
+    }
+
+    /// Whether the game has been up long enough to inject into. An agent injected the
+    /// moment the process starts can hang the game before its window ever opens.
+    fn game_settled(&self, pid: u32) -> bool {
+        let mut control = self.control.lock().unwrap();
+        if injector::main_window(pid).is_none() {
+            control.window_seen = None;
+            return false;
+        }
+        match control.window_seen {
+            Some((seen_pid, at)) if seen_pid == pid => at.elapsed() >= GAME_SETTLE,
+            _ => {
+                control.window_seen = Some((pid, Instant::now()));
+                false
+            }
+        }
+    }
+
     /// Connects to the agent in `pid`, injecting it first if allowed and needed. Also
     /// returns the file name of the current agent build, to detect outdated agents.
     async fn connect(&self, pid: u32, config: &LinkConfig, may_inject: bool) -> Result<(NamedPipeClient, String), ConnectError> {
-        let failed = ConnectError::Failed;
         let name = pipe_name(pid);
-        let dll = injector::stage_agent(&config.agent_dll, &config.staging_dir).map_err(|e| failed(e.to_string()))?;
+        let dll = self.staged_agent(config)?;
         let expected = dll.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let mut deadline = Instant::now() + Duration::from_secs(2);
         loop {
+            // The player disconnected while this was waiting.
+            if self.control.lock().unwrap().detached.contains(&pid) {
+                return Err(ConnectError::NotLoaded);
+            }
             match ClientOptions::new().open(&name) {
                 Ok(pipe) => return Ok((pipe, expected)),
                 Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) => {}
@@ -447,24 +605,34 @@ impl AgentLink {
                     if !may_inject {
                         return Err(ConnectError::NotLoaded);
                     }
+                    let injected = self.control.lock().unwrap().injected.contains(&pid);
+                    if !injected && !self.game_settled(pid) {
+                        return Err(ConnectError::Starting);
+                    }
                     let first = self.control.lock().unwrap().injected.insert(pid);
                     if first {
-                        let dll = dll.clone();
-                        log::info!("injecting {} into pid {pid}", dll.display());
-                        let res = tokio::task::spawn_blocking(move || injector::inject(pid, &dll))
-                            .await
-                            .map_err(|e| failed(e.to_string()))?;
-                        res.map_err(|e| failed(e.to_string()))?;
+                        // A second load of a loaded DLL does nothing but keep it from ever
+                        // unloading. It may be waiting for the game's runtime: give it time.
+                        if injector::module_loaded(pid, &expected) == Some(true) {
+                            log::info!("the agent is already in pid {pid}; waiting for it");
+                        } else {
+                            let dll = dll.clone();
+                            log::info!("injecting {} into pid {pid}", dll.display());
+                            tokio::task::spawn_blocking(move || injector::inject(pid, &dll))
+                                .await
+                                .map_err(|e| ConnectError::Failed(e.to_string(), Some(HookFailure::Injection)))??;
+                        }
                         deadline = Instant::now() + CONNECT_AFTER_INJECT;
                     }
                 }
-                Err(e) => return Err(failed(format!("cannot open agent pipe: {e}"))),
+                Err(e) => return Err(ConnectError::Failed(format!("cannot open agent pipe: {e}"), Some(HookFailure::Pipe))),
+            }
+            // First: a game that closed while this waited isn't a failed agent.
+            if !injector::is_alive(pid) {
+                return Err(ConnectError::Failed("the game exited".into(), None));
             }
             if Instant::now() > deadline {
-                return Err(failed("the game is running but the agent did not start; is it still loading?".into()));
-            }
-            if !injector::is_alive(pid) {
-                return Err(failed("the game exited".into()));
+                return Err(ConnectError::Failed("the game is running but the agent did not start; is it still loading?".into(), Some(HookFailure::AgentTimeout)));
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
@@ -479,26 +647,42 @@ impl AgentLink {
         for msg in [
             AppMessage::Hello { protocol_version: PROTOCOL_VERSION },
             AppMessage::SetHotkeys { hotkeys },
-            AppMessage::SetStreamRate { max_hz: SNAPSHOT_HZ },
+            AppMessage::SetStreamRate { max_hz: overlay::stream_rate(app) },
         ] {
             let _ = tx.send(msg);
         }
         {
             let mut inner = self.inner.lock().unwrap();
             inner.sender = Some(tx);
-            // Places from another game process (or world) are meaningless here.
-            if inner.status.pid != Some(pid) {
-                inner.teleported_from.clear();
-            }
+            inner.last_message = Some(Instant::now());
         }
 
         let mut end = SessionEnd::Disconnected;
         let mut replaced_module = None;
+        let started = Instant::now();
+        let mut watchdog = tokio::time::interval(Duration::from_secs(1));
         loop {
             tokio::select! {
+                _ = watchdog.tick() => {
+                    // Only once snapshots have come: an agent that can't tick at all (an
+                    // unknown game version) is connected, just not live.
+                    let inner = self.inner.lock().unwrap();
+                    let silent = inner.snapshot.as_ref().and(inner.last_message).map(|t| t.elapsed());
+                    // A game it doesn't recognize is counted as that, on hello.
+                    let no_data = inner.snapshot.is_none() && inner.status.state == LinkState::Connected && inner.status.message.is_none();
+                    drop(inner);
+                    if no_data && started.elapsed() >= NO_DATA_TIMEOUT {
+                        self.count_failure(app, game, pid, HookFailure::NoGameData);
+                    }
+                    if silent.is_some_and(|t| t >= STALL_TIMEOUT) {
+                        log::warn!("no word from the agent in {}: reconnecting", game.id);
+                        end = SessionEnd::Stalled;
+                        break;
+                    }
+                }
                 msg = rx.recv() => {
                     let Some(msg) = msg else { break };
-                    if write_half.write_all(&encode_line(&msg)).await.is_err() {
+                    if !matches!(tokio::time::timeout(WRITE_TIMEOUT, write_half.write_all(&encode_line(&msg))).await, Ok(Ok(()))) {
                         break;
                     }
                 }
@@ -529,6 +713,8 @@ impl AgentLink {
         self.paths.fail_all("connection closed");
         self.route_checks.fail_all("connection closed");
         self.ground_probes.fail_all("connection closed");
+        self.companion_orders.fail_all("connection closed");
+        self.companion_results.fail_all("connection closed");
         let _ = app.emit("world-snapshot", WorldSnapshot::default());
         if end == SessionEnd::AgentReplaced {
             // Inject the new agent only once the old one has unhooked and unloaded: a copy
@@ -556,10 +742,15 @@ impl AgentLink {
         match msg {
             AgentMessage::Hello { protocol_version, agent_version, game: agent_game, capabilities, .. } => {
                 let (state, message) = if protocol_version != PROTOCOL_VERSION {
+                    self.count_failure(app, game, pid, HookFailure::ProtocolMismatch);
                     (LinkState::Error, Some(format!("agent protocol {protocol_version} is incompatible; restart the game to load the new agent")))
                 } else if agent_game.as_deref() != Some(game.id.as_str()) {
+                    self.count_failure(app, game, pid, HookFailure::GameNotRecognized);
                     (LinkState::Connected, Some("live features are not available for this game yet".into()))
                 } else {
+                    if self.control.lock().unwrap().counted_connected.insert(pid) {
+                        analytics::game_connected(app, &game.id);
+                    }
                     (LinkState::Connected, None)
                 };
                 log::info!("agent {agent_version} attached (game={agent_game:?}, caps={capabilities:?})");
@@ -567,19 +758,43 @@ impl AgentLink {
             }
             AgentMessage::Snapshot(snap) => {
                 let mut inner = self.inner.lock().unwrap();
-                inner.snapshot = Some(snap.clone());
-                // Hidden map: a slow trickle keeps background features (marking
-                // collectibles found) working without busy-updating the UI.
-                let send = overlay::is_visible(app) || map_window::is_open(app) || inner.hidden_sent_at.is_none_or(|t| t.elapsed() >= HIDDEN_SNAPSHOT_INTERVAL);
-                if send {
-                    inner.hidden_sent_at = Some(Instant::now());
+                if let Some(world) = snap.world.as_ref().filter(|w| Some(&w.id) != inner.world_id.as_ref()) {
+                    // "Teleport back" has nowhere to go in another world.
+                    inner.world_id = Some(world.id.clone());
+                    inner.teleported_from.clear();
+                }
+                inner.snapshot = Some((*snap).clone());
+                if ui_wants_update(app, &mut inner) {
+                    inner.ui_behind = false;
                     drop(inner);
                     let _ = app.emit("world-snapshot", snap);
+                } else {
+                    inner.ui_behind = true;
+                }
+            }
+            AgentMessage::SnapshotUpdate(update) => {
+                let mut inner = self.inner.lock().unwrap();
+                let Some(snapshot) = inner.snapshot.as_mut() else { return };
+                (*update).clone().apply(snapshot);
+                if ui_wants_update(app, &mut inner) {
+                    // An update only means something on top of the last whole snapshot.
+                    if std::mem::take(&mut inner.ui_behind) {
+                        let whole = inner.snapshot.clone();
+                        drop(inner);
+                        let _ = app.emit("world-snapshot", whole);
+                    } else {
+                        drop(inner);
+                        let _ = app.emit("world-update", update);
+                    }
                 }
             }
             AgentMessage::HotkeyPressed { action: HotkeyAction::ToggleMap } => overlay::toggle(app),
             AgentMessage::HotkeyPressed { action: HotkeyAction::ZoomIn } => overlay::zoom(app, 1),
             AgentMessage::HotkeyPressed { action: HotkeyAction::ZoomOut } => overlay::zoom(app, -1),
+            // The map does these itself.
+            AgentMessage::HotkeyPressed { action: action @ (HotkeyAction::QuickMark | HotkeyAction::NearestUnfound | HotkeyAction::AcceptRequest) } => {
+                let _ = app.emit("hotkey-action", action);
+            }
             AgentMessage::HotkeyPressed { action: HotkeyAction::TeleportBack } => {
                 // Runs outside this handler: the result arrives through this same session.
                 let app = app.clone();
@@ -596,6 +811,8 @@ impl AgentLink {
             AgentMessage::PathResult { request_id, path, error } => self.paths.resolve(request_id, path, error, "no route"),
             AgentMessage::RouteCheckResult { request_id, check, error } => self.route_checks.resolve(request_id, check, error, "route check failed"),
             AgentMessage::GroundProbeResult { request_id, points, error } => self.ground_probes.resolve(request_id, points, error, "ground probe failed"),
+            AgentMessage::CompanionOrdersResult { request_id, orders, error } => self.companion_orders.resolve(request_id, orders, error, "no orders"),
+            AgentMessage::CompanionOrderResult { request_id, ok, error } => self.companion_results.resolve(request_id, ok.then_some(()), error, "order failed"),
             AgentMessage::ExportResult { request_id, export, error } => self.exports.resolve(request_id, export, error, "export failed"),
             AgentMessage::Log { level, message } => {
                 match level {

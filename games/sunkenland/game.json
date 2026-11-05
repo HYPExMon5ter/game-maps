@@ -45,101 +45,111 @@
     {
       "id": "location",
       "name": "Locations",
-      "color": "#f2c94c",
+      "color": "#fbc02d",
       "icon": "game:Island",
+      "shape": "square",
       "visible": true
     },
     {
       "id": "trader",
       "name": "Traders",
-      "color": "#27ae60",
-      "icon": "game:icon trade",
+      "color": "#2e9e4f",
+      "icon": "builtin:trade",
+      "shape": "hexagon",
       "visible": true
     },
     {
       "id": "companion",
       "name": "Companions",
-      "color": "#bb6bd9",
-      "icon": "builtin:pin",
+      "color": "#ab47bc",
+      "icon": "builtin:person",
+      "shape": "shield",
       "visible": true
     },
     {
       "id": "captive",
       "name": "Captives",
-      "color": "#eb5757",
-      "icon": "game:Cage",
+      "color": "#e53935",
+      "icon": "builtin:lock",
+      "shape": "shield",
       "visible": true
     },
     {
       "id": "research",
       "name": "Research & Blueprints",
-      "color": "#2f80ed",
-      "icon": "game:ICON RESEARCH",
+      "color": "#1e88e5",
+      "icon": "builtin:research",
+      "shape": "hexagon",
       "visible": true,
       "autoFound": true
     },
     {
       "id": "fragment",
       "name": "Map Fragments",
-      "color": "#9b51e0",
-      "icon": "game:icon map",
+      "color": "#5e35b1",
+      "icon": "builtin:map",
+      "shape": "diamond",
       "visible": true,
       "autoFound": true
     },
     {
       "id": "airdrop",
       "name": "Airdrop Platforms",
-      "color": "#f2994a",
-      "icon": "game:icon radio",
+      "color": "#fb8c00",
+      "icon": "builtin:radio",
+      "shape": "hexagon",
       "visible": true
     },
     {
       "id": "supply",
       "name": "Supply Crates",
-      "color": "#d4a373",
-      "icon": "game:Box-Outline-Icon",
+      "color": "#a1887f",
+      "icon": "builtin:box",
+      "shape": "diamond",
       "visible": true
     },
     {
       "id": "valuable",
       "name": "Safes & Military Crates",
-      "color": "#ff8a65",
-      "icon": "game:Box-Outline-Icon",
+      "color": "#ec407a",
+      "icon": "builtin:gem",
+      "shape": "diamond",
       "visible": false
     },
     {
       "id": "ore",
       "name": "Ore & Mining",
-      "color": "#8d7b6a",
-      "icon": "game:icon chiop pickaxe",
+      "color": "#78909c",
+      "icon": "builtin:pickaxe",
       "visible": false
     },
     {
       "id": "fish",
       "name": "Fish",
-      "color": "#56ccf2",
-      "icon": "game:icon fish",
+      "color": "#29b6f6",
+      "icon": "builtin:fish",
       "visible": false
     },
     {
       "id": "forage",
       "name": "Plants & Foraging",
-      "color": "#6fcf97",
-      "icon": "builtin:pin",
+      "color": "#66bb6a",
+      "icon": "builtin:leaf",
       "visible": false
     },
     {
       "id": "container",
       "name": "Other Containers",
-      "color": "#a3b13a",
-      "icon": "game:Box-Outline-Icon",
+      "color": "#9e9d24",
+      "icon": "builtin:chest",
       "visible": false
     },
     {
       "id": "hazard",
       "name": "Radiation",
-      "color": "#ff5252",
-      "icon": "builtin:pin",
+      "color": "#ffeb3b",
+      "icon": "builtin:hazard",
+      "shape": "hexagon",
       "visible": true
     },
     {

@@ -4,12 +4,14 @@
 // connects, updates) are `AppSettings` in `lib/backend`.
 
 import type { Units } from '../lib/compass'
+import type { FractionRect } from '../lib/layout'
 import type { Corner, Hotkey } from '../lib/protocol'
 
 export interface HudSettings {
   /** Keep a mini-map on screen while playing. */
   minimap: boolean
-  corner: Corner
+  /** Where it sits: 0..1 across the room on the screen (see `anchoredRect`). */
+  anchor: { x: number; y: number }
   /** Mini-map size in logical pixels (capped at half the screen, see `hudSize`). */
   width: number
   height: number
@@ -22,10 +24,17 @@ export interface HudSettings {
   waypoint: boolean
   /** Fade the mini-map out while danger markers or pings are on or next to it. */
   autoHide: boolean
+  /** Show the in-game time, day and weather on the mini-map. */
+  clock: boolean
 }
+
+/** Where the mini-map sits and how big it is. */
+export type MinimapLayout = Pick<HudSettings, 'anchor' | 'width' | 'height'>
 
 /** Settings for one game; what a game shows or does differs between games. */
 export interface GameSettings {
+  /** This game's mini-map placement; null uses the one in `HudSettings`. */
+  minimapLayout: MinimapLayout | null
   /** Collectibles are marked found when the player passes them. */
   autoFound: boolean
   /** Dots for creatures around the player (as far as the game simulates them). */
@@ -40,14 +49,35 @@ export interface GameSettings {
   dangerMeters: number
   /** Draw map pings over the game, like the waypoint. */
   pingsInGame: boolean
+  /** Share found items and explored areas with others in the same world. */
+  shareProgress: boolean
+  /** Show where other players are over the game. */
+  friendMarkers: boolean
+  /** Drop a pin where the player last died. */
+  deathMarker: boolean
+}
+
+/** One-time messages already dealt with. */
+export interface Onboarding {
+  /** Chose how to play (see `lib/playStyle`). */
+  welcomed: boolean
+  /** Saw what the dark parts of the map are. */
+  fogTip: boolean
+  /** Answered the request to star the project. */
+  star: boolean
 }
 
 /** Settings for every game. */
 export interface Settings {
+  onboarding: Onboarding
+  /** Offer teleporting, in games that can. */
+  teleport: boolean
   /** Opacity of the full map (the game shows through below 1). */
   opacity: number
-  /** Fraction of the screen the full map panel uses. */
-  panelScale: number
+  /** Where the floating map sits on the screen. */
+  mapPanel: FractionRect
+  /** The map fills the screen instead of floating. */
+  mapMaximized: boolean
   /** Interface scale; null picks one from the screen size. */
   uiScale: number | null
   /** Pin badge size multiplier (1 = default; badges also scale with zoom). */
@@ -57,6 +87,8 @@ export interface Settings {
   units: Units
   /** Show the walking route to what you track (map and mini-map). */
   showRoute: boolean
+  /** Show where you've walked this session. */
+  showTrail: boolean
   /** Keep track of the parts of the map you've been near (see `fogHideMap`, `fogHidePins`). */
   fogOfWar: boolean
   /** Fog of war: cover unexplored parts of the map (else they're only shaded). */
@@ -71,6 +103,7 @@ export interface Settings {
 }
 
 export const DEFAULT_GAME_SETTINGS: GameSettings = {
+  minimapLayout: null,
   autoFound: true,
   showCreatures: true,
   showAnimals: true,
@@ -78,27 +111,49 @@ export const DEFAULT_GAME_SETTINGS: GameSettings = {
   dangerAlert: true,
   dangerMeters: 30,
   pingsInGame: true,
+  shareProgress: false,
+  friendMarkers: true,
+  deathMarker: true,
+}
+
+/** A map panel in the middle of the screen, `scale` of its size. */
+export function centeredPanel(scale: number): FractionRect {
+  return { x: (1 - scale) / 2, y: (1 - scale) / 2, width: scale, height: scale }
+}
+
+/** The anchor of a screen corner. */
+export function cornerAnchor(corner: Corner): { x: number; y: number } {
+  return { x: corner.endsWith('right') ? 1 : 0, y: corner.startsWith('bottom') ? 1 : 0 }
 }
 
 export const DEFAULT_SETTINGS: Settings = {
+  onboarding: { welcomed: false, fogTip: false, star: false },
+  teleport: true,
   opacity: 0.96,
-  panelScale: 1,
+  mapPanel: centeredPanel(0.8),
+  mapMaximized: false,
   uiScale: null,
   pinSize: 1,
   declutter: true,
   units: 'imperial',
   showRoute: true,
+  showTrail: true,
   fogOfWar: true,
   fogHideMap: true,
   fogHidePins: true,
   fogRadius: 100,
-  hud: { minimap: false, corner: 'top_right', width: 300, height: 300, zoom: 0, opacity: 0.92, rotateWithPlayer: false, waypoint: true, autoHide: true },
+  hud: { minimap: false, anchor: { x: 1, y: 0 }, width: 300, height: 300, zoom: 0, opacity: 0.92, rotateWithPlayer: false, waypoint: true, autoHide: true, clock: true },
   games: {},
 }
 
 /** A game's settings, defaults filled in. */
 export function gameSettings(settings: Settings, gameId: string | null | undefined): GameSettings {
   return { ...DEFAULT_GAME_SETTINGS, ...(gameId ? settings.games[gameId] : undefined) }
+}
+
+/** The HUD settings for a game: its own mini-map placement over the shared ones. */
+export function gameHud(hud: HudSettings, layout: MinimapLayout | null | undefined): HudSettings {
+  return layout ? { ...hud, ...layout } : hud
 }
 
 export function withGameSettings(settings: Settings, gameId: string, patch: Partial<GameSettings>): Settings {
@@ -110,7 +165,10 @@ const LEGACY_GAME_KEYS = ['autoFound', 'showCreatures', 'showAnimals', 'playToge
 const SETTING_KEYS = Object.keys(DEFAULT_SETTINGS) as (keyof Settings)[]
 
 /** Saved settings as older versions may have left them. */
-export type SavedSettings = Partial<Settings> & Partial<GameSettings> & { hotkey?: Hotkey | null; followPlayer?: boolean }
+export type SavedSettings = Partial<Omit<Settings, 'hud'>> & Partial<GameSettings> & { hud?: SavedHud; hotkey?: Hotkey | null; followPlayer?: boolean; panelScale?: number }
+
+/** Saved HUD settings: older versions had one `size`, and a `corner` to sit in. */
+type SavedHud = Partial<HudSettings> & { size?: number; corner?: Corner }
 
 /**
  * Reads saved settings. Older versions kept the per-game settings for all games at the
@@ -125,6 +183,10 @@ export function readSettings(saved: SavedSettings | null | undefined, gameIds: s
     if (raw[key] !== undefined) (settings as unknown as Record<string, unknown>)[key] = raw[key]
   }
   settings.hud = migrateHud(raw.hud)
+  // Settings from before these messages: this isn't a first run.
+  if (saved && !raw.onboarding) settings.onboarding = { welcomed: true, fogTip: true, star: false }
+  // Older versions scaled the map around the screen's center.
+  if (!raw.mapPanel && raw.panelScale !== undefined && raw.panelScale < 1) settings.mapPanel = centeredPanel(raw.panelScale)
   const legacy: Partial<GameSettings> = {}
   for (const key of LEGACY_GAME_KEYS) {
     const value = raw[key]
@@ -138,9 +200,10 @@ export function readSettings(saved: SavedSettings | null | undefined, gameIds: s
   return { settings, legacyHotkey: raw.hotkey ?? null }
 }
 
-/** Saved HUD settings with defaults filled in. Older versions had a square mini-map with one `size`. */
-export function migrateHud(saved: (Partial<HudSettings> & { size?: number }) | undefined): HudSettings {
-  const { size, ...rest } = saved ?? {}
+/** Saved HUD settings with defaults filled in. */
+export function migrateHud(saved: SavedHud | undefined): HudSettings {
+  const { size, corner, ...rest } = saved ?? {}
   const square = size === undefined ? {} : { width: size, height: size }
-  return { ...DEFAULT_SETTINGS.hud, ...square, ...rest }
+  const anchor = corner ? { anchor: cornerAnchor(corner) } : {}
+  return { ...DEFAULT_SETTINGS.hud, ...square, ...anchor, ...rest }
 }

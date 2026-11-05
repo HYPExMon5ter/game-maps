@@ -94,6 +94,20 @@ export function saveFog(fog: Fog): SavedFog {
   return { cell: fog.cell, minEast: fog.minEast, minNorth: fog.minNorth, width: fog.width, height: fog.height, bits: btoa(binary) }
 }
 
+/** Adds what `other` has explored to `fog`; true if that revealed anything. */
+export function mergeFog(fog: Fog, other: Fog): boolean {
+  if (other.bits.length !== fog.bits.length) return false
+  let changed = false
+  for (let i = 0; i < fog.bits.length; i++) {
+    const merged = fog.bits[i] | other.bits[i]
+    if (merged !== fog.bits[i]) {
+      fog.bits[i] = merged
+      changed = true
+    }
+  }
+  return changed
+}
+
 /** A saved fog, if it still fits `blank` (the map's extent may change with a map update). */
 export function loadFog(saved: SavedFog | null | undefined, blank: Fog): Fog {
   if (!saved || saved.cell !== blank.cell || saved.minEast !== blank.minEast || saved.minNorth !== blank.minNorth || saved.width !== blank.width || saved.height !== blank.height) {

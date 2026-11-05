@@ -1,5 +1,5 @@
 import { Navigation, Users, X } from 'lucide-react'
-import { acceptRequest, dismissRequest, useSyncStore } from '../lib/sync/sync'
+import { acceptRequest, dismissRequest, hasSyncNotice, useSyncStore } from '../lib/sync/sync'
 import { Button } from './controls'
 
 /** "Track this with me" requests from other players, to accept or dismiss. */
@@ -31,14 +31,32 @@ export function SyncRequests() {
   )
 }
 
-/** While playing (the HUD can't be clicked): a note that a request waits on the map. */
-export function SyncRequestNotice() {
-  const latest = useSyncStore((s) => s.requests.at(-1))
-  if (!latest) return null
+/**
+ * While playing, drawn over the game (which can't be clicked): track requests waiting on
+ * the map, and what friends just did. Sits below the danger count at the top of the screen.
+ */
+export function SyncNotices() {
+  const requests = useSyncStore((s) => s.requests)
+  const notices = useSyncStore((s) => s.notices)
+  if (!hasSyncNotice({ requests, notices })) return null
+  const item = 'glass flex items-center gap-2.5 rounded-xl px-3.5 py-2 text-[13px] leading-snug'
   return (
-    <div className="glass rounded-xl px-3 py-2 text-[12px] leading-snug">
-      <span className="font-semibold">{latest.from}</span> wants you to track <span className="font-semibold">{latest.target.name}</span>
-      <span className="text-ink-faint"> · open the map to accept</span>
+    <div className="pointer-events-none absolute left-1/2 top-12 flex max-w-[90%] -translate-x-1/2 flex-col items-center gap-2">
+      {requests.map((r) => (
+        <div key={r.id} className={item}>
+          <Navigation className="size-4 shrink-0 text-accent" />
+          <p>
+            <span className="font-semibold">{r.from}</span> wants you to track <span className="font-semibold">{r.target.name}</span>
+            <span className="text-ink-faint"> · open the map to accept</span>
+          </p>
+        </div>
+      ))}
+      {notices.map((n) => (
+        <div key={n.id} className={item}>
+          <Users className="size-4 shrink-0 text-accent" />
+          <p>{n.text}</p>
+        </div>
+      ))}
     </div>
   )
 }

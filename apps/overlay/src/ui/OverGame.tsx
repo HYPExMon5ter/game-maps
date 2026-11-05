@@ -10,6 +10,9 @@ import { PING_MS, useSyncStore, type Ping } from '../lib/sync/sync'
 import { useGameSetting, useSettings } from '../settings/store'
 import { useStore } from '../state/store'
 
+/** How far above a player's feet their marker sits. */
+const FRIEND_HEAD_METERS = 2
+
 /** The time, updated every `ms` while `active` (for fading). */
 function useNow(active: boolean, ms: number): number {
   const [now, setNow] = useState(() => Date.now())
@@ -19,6 +22,36 @@ function useNow(active: boolean, ms: number): number {
     return () => clearInterval(id)
   }, [active, ms])
   return now
+}
+
+/** Other players over the game: their name and distance, at the screen edge when off screen. */
+export function FriendMarkers() {
+  const snapshot = useStore((s) => s.snapshot)
+  const game = useStore((s) => s.game)
+  const enabled = useGameSetting(game?.id, 'friendMarkers')
+  const units = useSettings((s) => s.ui.units)
+  if (!enabled || !snapshot?.local || !game) return null
+  const local = snapshot.local.position
+  return snapshot.others.map((player) => {
+    const screen = screenPoint(snapshot, { ...player.position, y: player.position.y + FRIEND_HEAD_METERS * game.unitsPerMeter }, PING_EDGE)
+    if (!screen) return null
+    const meters = Math.hypot(player.position.x - local.x, player.position.y - local.y, player.position.z - local.z) / game.unitsPerMeter
+    const color = player.color ? `rgb(${player.color.join(',')})` : '#f472b6'
+    return (
+      <div key={player.id} className="pointer-events-none absolute flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-1" style={{ left: screen.x, top: screen.y }}>
+        {screen.onScreen ? (
+          <span className="size-2.5 rounded-full border-2 border-white shadow-[0_2px_6px_rgba(0,0,0,0.7)]" style={{ background: color }} />
+        ) : (
+          <svg width="20" height="20" viewBox="0 0 30 30" aria-hidden="true" style={{ transform: `rotate(${screen.angle}deg)` }} className="drop-shadow-[0_2px_4px_rgba(0,0,0,0.7)]">
+            <path d="M15 2 L26 26 L15 20 L4 26 Z" fill={color} stroke="#fff" strokeWidth="2" strokeLinejoin="round" />
+          </svg>
+        )}
+        <div className="whitespace-nowrap rounded-full bg-black/65 px-2 py-0.5 text-[11.5px] font-semibold text-white shadow">
+          {player.name} <span className="font-normal text-white/75">· {formatDistance(meters, units)}</span>
+        </div>
+      </div>
+    )
+  })
 }
 
 /** Pings over the game, fading out over 30 seconds. */

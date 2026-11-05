@@ -61,9 +61,48 @@ impl ZoomKeys {
     }
 }
 
+/// Keys for actions the map handles itself, the same for every game; `None` turns one off.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ActionKeys {
+    pub quick_mark: Option<Hotkey>,
+    pub nearest_unfound: Option<Hotkey>,
+    pub accept_request: Option<Hotkey>,
+}
+
+impl Default for ActionKeys {
+    /// F6 to F8: free in the games so far, and easy to find without looking.
+    fn default() -> Self {
+        let key = |action, vk| Some(Hotkey { action, vk, ctrl: false, shift: false, alt: false });
+        Self {
+            quick_mark: key(HotkeyAction::QuickMark, 0x75),
+            nearest_unfound: key(HotkeyAction::NearestUnfound, 0x76),
+            accept_request: key(HotkeyAction::AcceptRequest, 0x77),
+        }
+    }
+}
+
+impl ActionKeys {
+    /// The slot for `action`, if it's one of these.
+    pub fn slot(&mut self, action: HotkeyAction) -> Option<&mut Option<Hotkey>> {
+        match action {
+            HotkeyAction::QuickMark => Some(&mut self.quick_mark),
+            HotkeyAction::NearestUnfound => Some(&mut self.nearest_unfound),
+            HotkeyAction::AcceptRequest => Some(&mut self.accept_request),
+            _ => None,
+        }
+    }
+
+    fn bindings(&self) -> impl Iterator<Item = &Hotkey> {
+        [&self.quick_mark, &self.nearest_unfound, &self.accept_request].into_iter().flatten()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
+    /// How to connect to games without a choice of their own in `hook_modes`.
+    pub default_hook_mode: HookMode,
     pub hook_modes: HashMap<String, HookMode>,
     /// Per-game override of the key that opens the map; absent uses the game's default.
     pub map_hotkeys: HashMap<String, Hotkey>,
@@ -71,9 +110,13 @@ pub struct AppSettings {
     /// Key that returns the player to where they were before their last teleport (all
     /// games); `None` turns it off.
     pub back_key: Option<Hotkey>,
+    pub action_keys: ActionKeys,
     pub auto_update: bool,
     /// Monitor (by name) the map window is kept open on; `None` when it's off.
     pub map_window: Option<String>,
+    /// Whether anonymous usage counts may be sent (see [`crate::analytics`]); `None`
+    /// until the player has answered, and nothing is sent before that.
+    pub analytics: Option<bool>,
 }
 
 /// Backspace: rarely bound by games, and easy to reach.
@@ -84,19 +127,28 @@ pub fn default_back_key() -> Hotkey {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            default_hook_mode: HookMode::default(),
             hook_modes: HashMap::new(),
             map_hotkeys: HashMap::new(),
             zoom_keys: ZoomKeys::default(),
             back_key: Some(default_back_key()),
+            action_keys: ActionKeys::default(),
             auto_update: true,
             map_window: None,
+            analytics: None,
         }
     }
 }
 
 impl AppSettings {
     pub fn hook_mode(&self, game_id: &str) -> HookMode {
-        self.hook_modes.get(game_id).copied().unwrap_or_default()
+        self.hook_modes.get(game_id).copied().unwrap_or(self.default_hook_mode)
+    }
+
+    /// Uses `mode` for every game, replacing their own choices.
+    pub fn set_all_hook_modes(&mut self, mode: HookMode) {
+        self.default_hook_mode = mode;
+        self.hook_modes.clear();
     }
 
     /// Hotkeys sent to the agent for `game`: its map key plus the zoom keys.
@@ -107,6 +159,7 @@ impl AppSettings {
         };
         keys.extend(self.zoom_keys.bindings().cloned());
         keys.extend(self.back_key.clone());
+        keys.extend(self.action_keys.bindings().cloned());
         keys
     }
 }
@@ -153,6 +206,26 @@ pub fn update(app: &AppHandle, change: impl FnOnce(&mut AppSettings)) -> Result<
 #[cfg(test)]
 mod tests {
     use game_maps_protocol::HotkeyAction;
+
+    #[test]
+    fn players_from_before_analytics_have_not_answered() {
+        let saved: super::AppSettings = serde_json::from_str(r#"{ "auto_update": false }"#).unwrap();
+        assert_eq!(saved.analytics, None);
+    }
+
+    #[test]
+    fn a_game_can_differ_from_the_default_until_all_are_set() {
+        use super::{AppSettings, HookMode};
+        let mut settings = AppSettings::default();
+        assert_eq!(settings.hook_mode("a"), HookMode::Auto);
+        settings.hook_modes.insert("a".into(), HookMode::Manual);
+        assert_eq!(settings.hook_mode("a"), HookMode::Manual);
+        assert_eq!(settings.hook_mode("b"), HookMode::Auto);
+        settings.set_all_hook_modes(HookMode::Manual);
+        assert_eq!(settings.hook_mode("b"), HookMode::Manual);
+        settings.set_all_hook_modes(HookMode::Auto);
+        assert_eq!(settings.hook_mode("a"), HookMode::Auto);
+    }
 
     use super::*;
 

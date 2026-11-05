@@ -14,9 +14,12 @@
 //! - `GameSetupManager.GetSelectedSaveId()`, `GetSaveGameType()`: the loaded save.
 
 mod astar;
+mod bag;
 mod cave_scan;
 mod caves;
+mod companions;
 mod creatures;
+mod environment;
 mod export;
 mod gps;
 mod session;
@@ -25,7 +28,7 @@ mod world;
 use std::ffi::c_void;
 use std::time::{Duration, Instant};
 
-use game_maps_protocol::{Capabilities, Creature, GameWorld, WorldKind, LocalPlayer, Marker, MultiplayerSession, PathInfo, RemotePlayer, TeleportTarget, Vec3, WorldExport, WorldLayer, WorldSnapshot};
+use game_maps_protocol::{Capabilities, CompanionOrderOption, CompanionStatus, Creature, Environment, GameWorld, WorldKind, LocalPlayer, Marker, MultiplayerSession, PathInfo, RemotePlayer, TeleportTarget, Vec3, WorldExport, WorldLayer, WorldSnapshot};
 use unity_runtime::{read_string, Class, Color, Field, ListLayout, ManagedObject, Method, Physics, Runtime, Vector3};
 
 use super::{to_proto, to_unity, Cx, Provider};
@@ -43,6 +46,9 @@ const LAYER_REFRESH: Duration = Duration::from_millis(250);
 const MARKER_REFRESH: Duration = Duration::from_millis(250);
 const CREATURE_REFRESH: Duration = Duration::from_millis(250);
 const SESSION_REFRESH: Duration = Duration::from_secs(2);
+const STATUS_REFRESH: Duration = Duration::from_secs(1);
+/// How long the player has to be missing before a new game counts as left.
+const LEFT_WORLD: Duration = Duration::from_secs(5);
 /// Numbers worlds loaded without a save id (new games until they're saved).
 static UNSAVED_WORLDS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
 /// Creatures farther than this from the player are left out (the game simulates some
@@ -70,6 +76,8 @@ struct LocalMembers {
     camera: Option<Field>,
     is_in_caves: Option<Method>,
     teleport: Option<Method>,
+    /// `LocalPlayer.Stats` and its `IsDying()` / `IsDead()`.
+    stats: Option<(Field, Method, Method)>,
 }
 
 struct RemoteMembers {
@@ -88,6 +96,13 @@ struct TerrainMembers {
 }
 
 pub struct SonsOfTheForest {
+    companions: Option<companions::Companions>,
+    environment: Option<environment::EnvironmentMembers>,
+    companion_status: Vec<CompanionStatus>,
+    world_status: Option<Environment>,
+    bag: Option<bag::DroppedBag>,
+    dropped_bag: Option<Vec3>,
+    last_status_refresh: Option<Instant>,
     local: LocalMembers,
     remote: Option<RemoteMembers>,
     terrain: Option<TerrainMembers>,
@@ -120,6 +135,8 @@ pub struct SonsOfTheForest {
     last_session_refresh: Option<Instant>,
     world: Option<GameWorld>,
     logged_world_miss: bool,
+    /// When the player went missing, while they are.
+    no_player_since: Option<Instant>,
     /// Id for the world loaded now while it has no save id (see `refresh_session`).
     unsaved_world: Option<String>,
     session: Option<MultiplayerSession>,
@@ -141,7 +158,12 @@ impl SonsOfTheForest {
             camera: first_field(rt, lp, &["<MainCamTr>k__BackingField", "_mainCamTr"]),
             is_in_caves: rt.method(lp, "get_IsInCaves", 0).ok(),
             teleport: rt.method_with_params(lp, "TeleportTo", &["UnityEngine.Vector3"]).ok(),
+            stats: (|| {
+                let stats = rt.class("", "PlayerStats").ok()?;
+                Some((first_field(rt, lp, &["<Stats>k__BackingField", "_stats"])?, rt.method(stats, "IsDying", 0).ok()?, rt.method(stats, "IsDead", 0).ok()?))
+            })(),
         };
+        notes.push(format!("Death detection: {}", local.stats.is_some()));
         notes.push(format!(
             "LocalPlayer: transform(static={}) camera={} caves={} teleport={}",
             local.transform.is_static,
@@ -213,7 +235,29 @@ impl SonsOfTheForest {
             }
         };
 
+        let companions = match companions::Companions::resolve(rt) {
+            Ok(c) => {
+                notes.push("Companions: ok".into());
+                Some(c)
+            }
+            Err(e) => {
+                notes.push(format!("Companions: unavailable ({e})"));
+                None
+            }
+        };
+        let environment = environment::EnvironmentMembers::resolve(rt);
+        notes.push(format!("Time and weather: {}", environment.is_some()));
+        let bag = bag::DroppedBag::resolve(rt);
+        notes.push(format!("Dropped bag: {}", bag.is_some()));
+
         Some(Self {
+            companions,
+            environment,
+            companion_status: Vec::new(),
+            world_status: None,
+            bag,
+            dropped_bag: None,
+            last_status_refresh: None,
             local,
             remote,
             terrain,
@@ -242,6 +286,7 @@ impl SonsOfTheForest {
             last_session_refresh: None,
             world: None,
             logged_world_miss: false,
+            no_player_since: None,
             unsaved_world: None,
             session: None,
         })
@@ -396,7 +441,13 @@ impl SonsOfTheForest {
                         let n = UNSAVED_WORLDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         format!("unsaved:{}-{n}", std::process::id())
                     });
-                    let kind = if self.session.is_some() { WorldKind::Hosted } else { WorldKind::SinglePlayer };
+                    let kind = if w.is_client(cx.rt) {
+                        WorldKind::Joined
+                    } else if self.session.is_some() {
+                        WorldKind::Hosted
+                    } else {
+                        WorldKind::SinglePlayer
+                    };
                     Some(GameWorld { id: id.clone(), name: None, kind })
                 }
             };
@@ -412,10 +463,39 @@ impl SonsOfTheForest {
         let session = members.id(cx.rt).map(|id| MultiplayerSession { id, player_name: members.player_name(cx.rt) });
         if session != self.session {
             self.notes.push(match &session {
-                Some(s) => format!("Multiplayer session joined: {} as {:?}", s.id, s.player_name),
+                // Never the id: it's the room's password, and logs get shared.
+                Some(s) => format!("Multiplayer session joined as {:?}", s.player_name),
                 None => "Not in a multiplayer session".into(),
             });
             self.session = session;
+        }
+    }
+
+    unsafe fn is_dying(&self, cx: &Cx) -> bool {
+        let Some((field, dying, dead)) = &self.local.stats else { return false };
+        let stats: *mut ManagedObject = cx.rt.read_field(*field, self.local_instance(cx));
+        if !cx.unity.is_alive(stats) {
+            return false;
+        }
+        let flag = |m: &Method| cx.rt.invoke(m, stats, &mut []).and_then(|b| cx.rt.unbox::<bool>(b)).unwrap_or(false);
+        flag(dying) || flag(dead)
+    }
+
+    unsafe fn refresh_status(&mut self, cx: &Cx) {
+        self.world_status = self.environment.as_ref().and_then(|e| e.read(cx.rt, cx.unity));
+        if let (Some(c), Some(creatures)) = (self.companions.as_mut(), self.creatures.as_ref()) {
+            self.companion_status = c.read(cx.rt, cx.unity, creatures.kelvin, creatures.virginia);
+        }
+        let dying = self.is_dying(cx);
+        if let Some(bag) = self.bag.as_mut() {
+            let dropped = bag.read(cx.rt, cx.unity, dying);
+            if dropped != self.dropped_bag {
+                self.notes.push(match dropped {
+                    Some(p) => format!("Dropped bag at {:.1}, {:.1}, {:.1}", p.x, p.y, p.z),
+                    None => "No dropped bag".into(),
+                });
+                self.dropped_bag = dropped;
+            }
         }
     }
 
@@ -471,8 +551,32 @@ impl Provider for SonsOfTheForest {
         FRAME_HOOKS
     }
 
+    fn reconnected(&mut self) {
+        if let Some(bag) = self.bag.as_mut() {
+            bag.forget();
+        }
+    }
+
     fn take_notes(&mut self) -> Vec<String> {
         std::mem::take(&mut self.notes)
+    }
+
+    unsafe fn companion_orders(&mut self, cx: &Cx, companion: &str) -> Result<Vec<CompanionOrderOption>, String> {
+        if companion != companions::KELVIN {
+            return Err(format!("{companion} doesn't take orders"));
+        }
+        let kelvin = self.creatures.as_ref().map(|c| c.kelvin).unwrap_or(std::ptr::null_mut());
+        self.companions.as_mut().ok_or("companions aren't available")?.orders(cx.rt, cx.unity, kelvin)
+    }
+
+    unsafe fn companion_order(&mut self, cx: &Cx, companion: &str, order: &str) -> Result<(), String> {
+        if companion != companions::KELVIN {
+            return Err(format!("{companion} doesn't take orders"));
+        }
+        let kelvin = self.creatures.as_ref().map(|c| c.kelvin).unwrap_or(std::ptr::null_mut());
+        let client = self.world.as_ref().is_some_and(|w| w.kind == WorldKind::Joined);
+        let player = self.local_transform(cx);
+        self.companions.as_mut().ok_or("companions aren't available")?.give_order(cx.rt, cx.unity, kelvin, player, order, client)
     }
 
     unsafe fn snapshot(&mut self, cx: &Cx, frame: u64) -> WorldSnapshot {
@@ -484,8 +588,22 @@ impl Provider for SonsOfTheForest {
             self.nearby.clear();
             self.session = None;
             self.world = None;
-            self.unsaved_world = None;
+            // A new game keeps its id through a moment without a player: a new id tells
+            // the app it's another game, and it drops the old one's data.
+            if now - *self.no_player_since.get_or_insert(now) >= LEFT_WORLD {
+                self.unsaved_world = None;
+            }
+            self.companion_status = Default::default();
+            self.world_status = None;
+            self.dropped_bag = None;
+            if let Some(creatures) = self.creatures.as_mut() {
+                creatures.forget_companions();
+            }
+            if let Some(bag) = self.bag.as_mut() {
+                bag.forget();
+            }
         } else {
+            self.no_player_since = None;
             if self.last_remote_refresh.is_none_or(|t| now - t >= REMOTE_REFRESH) {
                 self.last_remote_refresh = Some(now);
                 let lt = self.local_transform(cx);
@@ -505,8 +623,24 @@ impl Provider for SonsOfTheForest {
                     self.refresh_creatures(cx, to_unity(p.position));
                 }
             }
+            if self.last_status_refresh.is_none_or(|t| now - t >= STATUS_REFRESH) {
+                self.last_status_refresh = Some(now);
+                self.refresh_status(cx);
+            }
         }
-        WorldSnapshot { frame, local, others: self.others.clone(), markers: self.markers.clone(), creatures: self.nearby.clone(), session: self.session.clone(), world: self.world.clone() }
+        WorldSnapshot {
+            frame,
+            local,
+            others: self.others.clone(),
+            markers: self.markers.clone(),
+            creatures: self.nearby.clone(),
+            session: self.session.clone(),
+            world: self.world.clone(),
+            companions: self.companion_status.clone(),
+            environment: self.world_status.clone(),
+            dropped_bag: self.dropped_bag,
+            dying: self.is_dying(cx),
+        }
     }
 
     unsafe fn teleport(&mut self, cx: &Cx, target: &TeleportTarget) -> Result<(), String> {
@@ -514,13 +648,13 @@ impl Provider for SonsOfTheForest {
         if !cx.unity.is_alive(self.local_transform(cx)) {
             return Err("not in a world".into());
         }
-        let mut dest = match target {
-            TeleportTarget::Position { position, snap_to_ground } => {
+        let (mut dest, underground) = match target {
+            TeleportTarget::Position { position, snap_to_ground, layer } => {
                 let mut p = to_unity(*position);
                 if *snap_to_ground {
                     p.y = self.ground_height(cx, p).ok_or("could not sample ground height here")? + GROUND_CLEARANCE;
                 }
-                p
+                (p, !*snap_to_ground && *layer == WorldLayer::Caves)
             }
             TeleportTarget::Player { id } => {
                 let position = self
@@ -535,7 +669,7 @@ impl Provider for SonsOfTheForest {
                 let mut p = to_unity(position);
                 p.x += 1.0;
                 p.y += 0.5;
-                p
+                (p, self.ground_height(cx, p).is_some_and(|g| g - p.y > UNDERGROUND_DEPTH))
             }
         };
         if !(dest.x.is_finite() && dest.y.is_finite() && dest.z.is_finite()) {
@@ -550,7 +684,11 @@ impl Provider for SonsOfTheForest {
         }
         if let Some(caves) = &self.caves {
             let systems = caves.systems(cx.rt, cx.unity);
-            caves.activate(cx.rt, &systems, caves.containing(cx.rt, &systems, dest))?;
+            // A cave's extents reach past its entrances and up through the ground above it:
+            // being within them doesn't make a spot underground. Entering the cave there
+            // puts the game in cave mode out on the surface.
+            let target = if underground { caves.containing(cx.rt, &systems, dest) } else { None };
+            caves.activate(cx.rt, &systems, target)?;
         }
         let mut args = [&mut dest as *mut Vector3 as *mut c_void];
         cx.rt.invoke(&method, instance, &mut args).map(|_| ()).map_err(|e| e.to_string())

@@ -107,7 +107,7 @@ impl GpsMarkers {
             self.debug = line.clone();
         }
         // Forget cached icons of locators that are gone.
-        if self.icon_names.len() > markers.len() * 4 + 64 {
+        if self.icon_names.len() > total * 4 + 64 {
             self.icon_names.clear();
         }
         Ok(markers)

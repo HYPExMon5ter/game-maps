@@ -13,12 +13,15 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
+use crate::analytics::{self, Problem};
 use crate::link::{AgentLink, LinkState};
 use crate::settings;
 
 pub const EVENT: &str = "update-state";
 const CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const TICK: Duration = Duration::from_secs(60);
+/// A stalled server mustn't hold up checks and installs for good.
+const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -72,7 +75,7 @@ impl Updates {
         if manual {
             self.set(app, UpdateState::Checking);
         }
-        let result = async { app.updater().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string()) }.await;
+        let result = async { tokio::time::timeout(CHECK_TIMEOUT, app.updater().map_err(|e| e.to_string())?.check()).await.map_err(|_| "timed out".to_string())?.map_err(|e| e.to_string()) }.await;
         match result {
             Ok(Some(update)) => {
                 log::info!("update available: {}", update.version);
@@ -121,6 +124,7 @@ impl Updates {
             }
             Err(e) => {
                 log::warn!("update install failed: {e}");
+                analytics::problem(app, Problem::UpdateInstall);
                 self.set(app, UpdateState::Error { message: format!("The update failed to install: {e}") });
                 *self.pending.lock().unwrap() = Some(update);
                 Err(e.to_string())

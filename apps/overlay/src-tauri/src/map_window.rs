@@ -74,6 +74,7 @@ pub fn apply(app: &AppHandle, monitor: Option<&str>) -> Result<(), String> {
     win.set_position(PhysicalPosition::new(x + (40.0 * scale) as i32, y + (40.0 * scale) as i32)).map_err(|e| e.to_string())?;
     win.maximize().map_err(|e| e.to_string())?;
     win.show().map_err(|e| e.to_string())?;
+    crate::overlay::update_stream_rate(app);
     Ok(())
 }
 
@@ -93,5 +94,8 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
         if let Err(e) = settings::update(window.app_handle(), |s| s.map_window = None) {
             log::warn!("map window: {e}");
         }
+    }
+    if let WindowEvent::Destroyed = event {
+        crate::overlay::update_stream_rate(window.app_handle());
     }
 }

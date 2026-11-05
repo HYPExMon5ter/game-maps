@@ -3,8 +3,9 @@
 //!
 //! `ABPath.Construct(start, end, null)` → `AstarPath.StartPath(path, false)` →
 //! `AstarPath.BlockUntilCalculated(path)`, then the corners in `path.vectorPath`.
-//! Blocking runs the search right away on the main thread; routes are requested about
-//! once every 1.5 s and take a millisecond or two.
+//! Blocking runs the search right away on the main thread: about 4 ms on average, 15 ms for
+//! the longest routes. The app asks at most every 1.5 s, and only after the player or the
+//! target has moved (or every 15 s).
 
 use std::ffi::c_void;
 
@@ -69,7 +70,8 @@ impl AStar {
         if path.is_null() {
             return Err("could not create a path".into());
         }
-        let (mut front, mut in_play_mode) = (false, false);
+        // At the front of the queue: this blocks the game's main thread until it's done.
+        let (mut front, mut in_play_mode) = (true, false);
         let mut args = [path as *mut c_void, &mut front as *mut bool as *mut c_void, &mut in_play_mode as *mut bool as *mut c_void];
         rt.invoke(&self.start_path, std::ptr::null_mut(), &mut args[..self.start_path_args]).map_err(|e| e.to_string())?;
         let mut args = [path as *mut c_void];

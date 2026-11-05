@@ -9,7 +9,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use windows::core::{s, w};
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, WAIT_TIMEOUT};
 use windows::Win32::System::Diagnostics::Debug::WriteProcessMemory;
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Module32FirstW, Module32NextW, Process32FirstW, Process32NextW, MODULEENTRY32W, PROCESSENTRY32W,
@@ -39,19 +39,21 @@ pub enum InjectError {
     LoadFailed,
 }
 
-/// Returns the pid of the first running process whose executable name matches.
-pub fn find_process(exe_name: &str) -> Option<u32> {
+/// Finds the running process for the earliest of `exe_names` that's running, as its index
+/// and pid. One pass over the process list, which is the slow part, whatever their number.
+pub fn find_first(exe_names: &[&str]) -> Option<(usize, u32)> {
     unsafe {
         let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?;
         let mut entry = PROCESSENTRY32W { dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
-        let mut found = None;
+        let mut found: Option<(usize, u32)> = None;
         if Process32FirstW(snap, &mut entry).is_ok() {
             loop {
                 let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
                 let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
-                if name.eq_ignore_ascii_case(exe_name) {
-                    found = Some(entry.th32ProcessID);
-                    break;
+                if let Some(index) = exe_names.iter().position(|exe| name.eq_ignore_ascii_case(exe)) {
+                    if found.is_none_or(|(best, _)| index < best) {
+                        found = Some((index, entry.th32ProcessID));
+                    }
                 }
                 if Process32NextW(snap, &mut entry).is_err() {
                     break;
@@ -170,6 +172,7 @@ pub fn inject(pid: u32, dll: &Path) -> Result<(), InjectError> {
         if remote.is_null() {
             return Err(InjectError::Win32(windows::core::Error::from_thread()));
         }
+        let mut still_loading = false;
         let result = (|| {
             WriteProcessMemory(process, remote, path.as_ptr() as *const c_void, bytes, None).map_err(InjectError::Win32)?;
             // kernel32 is mapped at the same address in every process of a boot session.
@@ -181,7 +184,11 @@ pub fn inject(pid: u32, dll: &Path) -> Result<(), InjectError> {
             >(load_library));
             let thread = CreateRemoteThread(process, None, 0, start, Some(remote), 0, None).map_err(InjectError::Win32)?;
             let _thread = HandleGuard(thread);
-            WaitForSingleObject(thread, 15_000);
+            if WaitForSingleObject(thread, 15_000) == WAIT_TIMEOUT {
+                // The thread still needs the path: freeing it could crash the game.
+                still_loading = true;
+                return Err(InjectError::LoadFailed);
+            }
             let mut code = 0u32;
             GetExitCodeThread(thread, &mut code).map_err(InjectError::Win32)?;
             // Exit code is the low 32 bits of the loaded module handle; 0 means failure.
@@ -190,7 +197,9 @@ pub fn inject(pid: u32, dll: &Path) -> Result<(), InjectError> {
             }
             Ok(())
         })();
-        let _ = VirtualFreeEx(process, remote, 0, MEM_RELEASE);
+        if !still_loading {
+            let _ = VirtualFreeEx(process, remote, 0, MEM_RELEASE);
+        }
         result
     }
 }
@@ -217,8 +226,10 @@ mod tests {
     fn finds_own_process() {
         let exe = std::env::current_exe().unwrap();
         let name = exe.file_name().unwrap().to_string_lossy().into_owned();
-        assert!(find_process(&name).is_some());
-        assert!(find_process("definitely-not-running-xyz.exe").is_none());
+        let missing = "definitely-not-running-xyz.exe";
+        assert_eq!(find_first(&[&name]).map(|(index, _)| index), Some(0));
+        assert_eq!(find_first(&[missing, &name]).map(|(index, _)| index), Some(1));
+        assert!(find_first(&[missing]).is_none());
     }
 
     #[test]

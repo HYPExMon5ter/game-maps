@@ -3,7 +3,8 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import './setup'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { events } from '../lib/backend'
-import { GAME_MARKERS_CATEGORY, type Pin } from '../lib/game'
+import { logUiError } from '../lib/errors'
+import { GAME_MARKERS_CATEGORY, type BadgeShape, type Pin } from '../lib/game'
 import { LiveMarkerFilter, markerName } from '../lib/markers'
 import { findMover } from '../lib/movers'
 import { resolveTracked } from '../lib/tracking'
@@ -11,10 +12,14 @@ import { bearingOf, mapBounds, mapCenter, toLngLat, zoomToFit, type LngLat, type
 import { CREATURE_COLORS, creatureName, visibleCreatures } from '../lib/creatures'
 import { PING_MS, useSyncStore, type Ping } from '../lib/sync/sync'
 import type { Creature, Marker, Vec3 } from '../lib/protocol'
-import { fogPixels } from '../lib/fog'
+import { CLOUD_BACKGROUND } from '../lib/clouds'
+import { drawFog } from '../lib/fogCanvas'
 import { useFogStore, usePinFog } from '../state/fog'
+import { trailLines } from '../lib/trail'
 import { steppedZoom } from '../lib/zoom'
-import { isCategoryVisible, selectAllPins, selectViewLayer, useStore } from '../state/store'
+import { useTrailStore } from '../state/trail'
+import { IS_MAP_WINDOW } from '../lib/view'
+import { EMPTY_USER_DATA, isCategoryVisible, selectAllPins, selectViewLayer, useStore } from '../state/store'
 import { badgeKey, ensureBadge } from './badges'
 import { mapHandle } from './handle'
 import { PlayerMarkers } from './players'
@@ -25,6 +30,8 @@ export interface MapContextMenuEvent {
   lngLat: LngLat
   x: number
   y: number
+  /** The pin clicked on, if any. */
+  pinId?: string
 }
 
 interface Props {
@@ -77,7 +84,16 @@ function fitIsland(m: MlMap, p: Projection, padding: Insets) {
   )
 }
 
-export function MapView({ variant, onContextMenu, fitPadding = NO_PADDING }: Props) {
+/** One map per game: its layers and images don't carry over to another. */
+export function MapView(props: Props) {
+  const gameId = useStore((s) => s.game?.id)
+  return <GameMapView key={gameId} {...props} />
+}
+
+function GameMapView({ variant, onContextMenu, fitPadding = NO_PADDING }: Props) {
+  // Both maps stay mounted while out of sight, so coming back is instant. Nothing keeps
+  // them up to date meanwhile: they would be redrawing for nobody.
+  const active = useStore((s) => IS_MAP_WINDOW || s.mode === (variant === 'mini' ? 'pinned' : 'open'))
   const containerRef = useRef<HTMLDivElement>(null)
   const [map, setMap] = useState<MlMap | null>(null)
   const game = useStore((s) => s.game)
@@ -122,12 +138,16 @@ export function MapView({ variant, onContextMenu, fitPadding = NO_PADDING }: Pro
       dragRotate: false,
       pitchWithRotate: false,
       touchPitch: false,
+      // A fade keeps the map redrawing for its whole length after every move: at walking
+      // pace the mini-map would never stop. Without one it draws only when asked to.
       fadeDuration: 0,
     })
     m.touchZoomRotate.disableRotation()
     m.keyboard.disable() // the overlay handles its own keys (M / Esc)
 
     m.on('load', () => setMap(m))
+    // A missing tile or image: the map carries on, but the log should say so.
+    m.on('error', (e) => logUiError(`map (${variant}): ${e.error?.message ?? 'unknown error'}`))
     if (full) {
       fitIsland(m, p, fitPaddingRef.current)
       mapHandle.current = m
@@ -155,7 +175,11 @@ export function MapView({ variant, onContextMenu, fitPadding = NO_PADDING }: Pro
         useStore.getState().selectPin(null)
         useStore.getState().selectLive(null)
       })
-      m.on('contextmenu', (e) => contextMenuRef.current?.({ lngLat: e.lngLat, x: e.point.x, y: e.point.y }))
+      m.on('contextmenu', (e) => {
+        // On a pin, the menu is for the pin.
+        const pinId = m.queryRenderedFeatures(e.point, { layers: ['pins', 'pin-dots'] })[0]?.properties?.id as string | undefined
+        contextMenuRef.current?.({ lngLat: e.lngLat, x: e.point.x, y: e.point.y, pinId })
+      })
       m.on('dragstart', () => {
         const s = useStore.getState()
         if (s.followPlayer) s.setFollowPlayer(false)
@@ -170,15 +194,17 @@ export function MapView({ variant, onContextMenu, fitPadding = NO_PADDING }: Pro
   }, [game, gameMap, variant, hasSize])
 
   useRefitOnResize(map, variant, containerRef, fitPadding)
-  usePinsLayer(map)
+  const live = active ? map : null
+  usePinsLayer(live)
   usePinDisplay(map)
-  useLiveMarkers(map)
-  useCreatures(map)
-  useFogLayer(map)
-  usePings(map)
+  useLiveMarkers(live)
+  useCreatures(live)
+  useFogLayer(live)
+  usePings(live)
   useLayerShading(map)
-  useTrackLine(map)
-  usePlayers(map, variant)
+  useTrackLine(live)
+  useTrailLine(live)
+  usePlayers(live, variant)
   useMiniZoomKeys(map, variant)
   // MapLibre's CSS forces `position: relative` on its container, so size it from a wrapper.
   return (
@@ -204,16 +230,23 @@ function useRefitOnResize(map: MlMap | null, variant: 'full' | 'mini', container
     const saved = useStore.getState().mapView
     if (saved) map.jumpTo(saved)
     else fitIsland(map, gameMap.projection, pad)
-    const save = () => useStore.getState().setMapView({ center: map.getCenter().toArray() as [number, number], zoom: map.getZoom() })
+    // After the map settles: following the player moves it with every snapshot.
+    let saving: ReturnType<typeof setTimeout> | undefined
+    const save = () => {
+      clearTimeout(saving)
+      saving = setTimeout(() => useStore.getState().setMapView({ center: map.getCenter().toArray() as [number, number], zoom: map.getZoom() }), VIEW_SAVE_MS)
+    }
     map.on('moveend', save)
     const ro = new ResizeObserver(() => {
       const size = `${el.clientWidth}x${el.clientHeight}`
       if (size === last || el.clientWidth === 0 || el.clientHeight === 0) return
       last = size
       map.resize() // keeps the center
+      map.redraw() // in this frame: resizing clears the canvas, which would flicker
     })
     ro.observe(el)
     return () => {
+      clearTimeout(saving)
       ro.disconnect()
       map.off('moveend', save)
     }
@@ -221,6 +254,7 @@ function useRefitOnResize(map: MlMap | null, variant: 'full' | 'mini', container
 }
 
 function usePinsLayer(map: MlMap | null) {
+  const drawn = useRef<{ map: MlMap; key: string } | null>(null)
   const game = useStore((s) => s.game)
   const gameMap = useStore((s) => s.map)
   const gamePins = useStore((s) => s.gamePins)
@@ -229,7 +263,8 @@ function usePinsLayer(map: MlMap | null) {
   const showFound = useStore((s) => s.showFound)
   const viewLayer = useStore(selectViewLayer)
   const friendPins = useStore((s) => s.friendPins)
-  const pins = useMemo(() => selectAllPins({ gamePins, user, friendPins }), [gamePins, user, friendPins])
+  const customPins = user.customPins
+  const pins = useMemo(() => selectAllPins({ gamePins, user: { ...EMPTY_USER_DATA, customPins }, friendPins }), [gamePins, customPins, friendPins])
   const hiddenByFog = usePinFog()
 
   useEffect(() => {
@@ -238,7 +273,7 @@ function usePinsLayer(map: MlMap | null) {
     const categories = new Map(game.categories.map((c) => [c.id, c]))
     const rank = new Map(game.categories.map((c, i) => [c.id, i]))
     const found = new Set(user.found)
-    const visible: { pin: Pin; key: string; color: string; icon: string }[] = []
+    const visible: { pin: Pin; key: string; color: string; icon: string; shape?: BadgeShape }[] = []
     for (const pin of pins) {
       const cat = categories.get(pin.category)
       if (!isCategoryVisible(cat, user) && pin.id !== selected) continue
@@ -246,11 +281,15 @@ function usePinsLayer(map: MlMap | null) {
       if (hiddenByFog?.(pin)) continue
       const color = pin.color ?? cat?.color ?? '#ffffff'
       const icon = pin.icon ?? cat?.icon ?? 'builtin:pin'
-      visible.push({ pin, key: badgeKey(color, icon), color, icon })
+      visible.push({ pin, key: badgeKey(color, icon, cat?.shape), color, icon, shape: cat?.shape })
     }
+    // Exploring re-runs this every couple of seconds, usually with the same pins showing.
+    const key = [viewLayer, selected, ...visible.map(({ pin, key }) => `${pin.id}:${key}:${pin.name}:${found.has(pin.id)}:${pin.position.x},${pin.position.z}`)].join('|')
+    if (drawn.current?.map === map && drawn.current.key === key) return
     const needed = new Map(visible.map((v) => [v.key, v]))
-    void Promise.all([...needed.values()].map((v) => ensureBadge(map, v.key, game.id, v.color, v.icon))).then(() => {
+    void Promise.all([...needed.values()].map((v) => ensureBadge(map, v.key, game.id, v.color, v.icon, v.shape))).then(() => {
       if (cancelled) return
+      drawn.current = { map, key }
       const source = map.getSource<GeoJSONSource>('pins')
       source?.setData({
         type: 'FeatureCollection',
@@ -329,7 +368,7 @@ function useLiveMarkers(map: MlMap | null) {
     }
     apply(useStore.getState().snapshot?.markers ?? [])
     const unsubscribe = useStore.subscribe((s, prev) => {
-      if (s.snapshot !== prev.snapshot) apply(s.snapshot?.markers ?? [])
+      if (s.snapshot?.markers !== prev.snapshot?.markers) apply(s.snapshot?.markers ?? [])
     })
     return () => {
       cancelled = true
@@ -346,13 +385,17 @@ function useCreatures(map: MlMap | null) {
   const animals = useGameSetting(gameId, 'showAnimals')
   useEffect(() => {
     if (!map || !gameMap) return
-    let last: Creature[] | undefined
+    // Not a possible key, so the first pass always draws.
+    let last: string | null = null
     const apply = (creatures: Creature[] = []) => {
-      if (creatures === last) return
-      last = creatures
+      const visible = visibleCreatures(creatures, show, animals)
+      // Every snapshot is new data; most of the time nothing on the map has moved.
+      const key = visible.map((c) => `${c.id}:${c.position.x.toFixed(0)},${c.position.z.toFixed(0)}`).join('|')
+      if (key === last) return
+      last = key
       map.getSource<GeoJSONSource>('creatures')?.setData({
         type: 'FeatureCollection',
-        features: visibleCreatures(creatures, show, animals).map((c) => {
+        features: visible.map((c) => {
           const ll = toLngLat(gameMap.projection, c.position)
           return {
             type: 'Feature',
@@ -364,7 +407,7 @@ function useCreatures(map: MlMap | null) {
     }
     apply(useStore.getState().snapshot?.creatures)
     return useStore.subscribe((s, prev) => {
-      if (s.snapshot !== prev.snapshot) apply(s.snapshot?.creatures)
+      if (s.snapshot?.creatures !== prev.snapshot?.creatures) apply(s.snapshot?.creatures)
     })
   }, [map, gameMap, show, animals])
 }
@@ -374,7 +417,10 @@ function usePings(map: MlMap | null) {
   const gameMap = useStore((s) => s.map)
   useEffect(() => {
     if (!map || !gameMap) return
-    const apply = (pings: Ping[]) => {
+    let last: Ping[] | null = null
+    const apply = (pings: Ping[], fading = false) => {
+      if (pings === last && !fading) return
+      last = pings
       const now = Date.now()
       map.getSource<GeoJSONSource>('pings')?.setData({
         type: 'FeatureCollection',
@@ -393,7 +439,7 @@ function usePings(map: MlMap | null) {
     // Pings fade with age: redraw while any are up.
     const timer = setInterval(() => {
       const { pings } = useSyncStore.getState()
-      if (pings.length) apply(pings)
+      if (pings.length) apply(pings, true)
     }, 1000)
     return () => {
       unsubscribe()
@@ -402,14 +448,14 @@ function usePings(map: MlMap | null) {
   }, [map, gameMap])
 }
 
+/** How long the map has to stay put before its position is saved. */
+const VIEW_SAVE_MS = 500
+
 const FOG_SOURCE = 'fog'
 const FOG_LAYER = 'fog'
 
 /** Most often the fog image is redrawn while exploring. */
 const FOG_REDRAW_MS = 1500
-const FOG_COLOR: [number, number, number] = [14, 18, 22]
-/** Fog image pixels per fog cell (for soft edges). */
-const FOG_SCALE = 2
 /** Opacity of the fog when it only shades unexplored areas. */
 const FOG_SHADE = 0.55
 
@@ -422,26 +468,20 @@ function useFogLayer(map: MlMap | null) {
   const fog = useFogStore((s) => s.fog)
   const version = useFogStore((s) => s.version)
   const drawnAt = useRef(0)
+  const drawnFog = useRef<{ fog: unknown; version: number } | null>(null)
   const pending = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Counts draws: the layer appears with the first, and needs its settings applied then.
+  const [drawn, setDrawn] = useState(0)
 
   useEffect(() => {
-    if (!map || !gameMap || !fog) return
+    if (!map || !gameMap || !fog || !enabled) return
+    // Turning fog off and on, or waking the map, changes nothing that's drawn.
+    if (drawnFog.current?.fog === fog && drawnFog.current.version === version && map.getSource(FOG_SOURCE)) return
     const draw = () => {
       pending.current = null
       drawnAt.current = Date.now()
-      const cells = document.createElement('canvas')
-      cells.width = fog.width
-      cells.height = fog.height
-      cells.getContext('2d')?.putImageData(new ImageData(fogPixels(fog, FOG_COLOR), fog.width, fog.height), 0, 0)
-      // Upscaled and blurred, so explored areas have soft edges rather than 8 m steps.
-      const canvas = document.createElement('canvas')
-      canvas.width = fog.width * FOG_SCALE
-      canvas.height = fog.height * FOG_SCALE
-      const ctx = canvas.getContext('2d')
-      if (ctx) {
-        ctx.filter = `blur(${FOG_SCALE * 1.5}px)`
-        ctx.drawImage(cells, 0, 0, canvas.width, canvas.height)
-      }
+      drawnFog.current = { fog, version }
+      const canvas = drawFog(fog)
       const p = gameMap.projection
       const corner = (east: number, north: number) => {
         const v: Vec3 = { x: 0, y: 0, z: 0 }
@@ -452,78 +492,115 @@ function useFogLayer(map: MlMap | null) {
       }
       const [w, s, e, n] = [fog.minEast, fog.minNorth, fog.minEast + fog.width * fog.cell, fog.minNorth + fog.height * fog.cell]
       const coordinates: [[number, number], [number, number], [number, number], [number, number]] = [corner(w, n), corner(e, n), corner(e, s), corner(w, s)]
-      const url = canvas.toDataURL()
-      const source = map.getSource<ImageSource>(FOG_SOURCE)
-      if (source) {
-        source.updateImage({ url, coordinates })
-      } else {
-        map.addSource(FOG_SOURCE, { type: 'image', url, coordinates })
+      if (!map.getSource(FOG_SOURCE)) {
+        map.addSource(FOG_SOURCE, { type: 'image', coordinates })
         map.addLayer(
           { id: FOG_LAYER, type: 'raster', source: FOG_SOURCE, paint: { 'raster-opacity': FOG_SHADE, 'raster-fade-duration': 0, 'raster-resampling': 'linear' } },
           // Above the imagery and cave layouts (hidden on the surface), under routes and pins.
-          'track-line',
+          'trail-line',
         )
       }
+      // The canvas itself: encoding it to an image and decoding that takes far longer.
+      map.getSource<ImageSource>(FOG_SOURCE)?.updateImage({ image: canvas, coordinates })
+      setDrawn((n) => n + 1)
     }
     // Exploring changes the fog every few steps: redraw at most every FOG_REDRAW_MS.
     const wait = FOG_REDRAW_MS - (Date.now() - drawnAt.current)
     if (wait <= 0) draw()
-    else pending.current ??= setTimeout(draw, wait)
-  }, [map, gameMap, fog, version])
-
-  useEffect(() => () => void (pending.current && clearTimeout(pending.current)), [])
+    else pending.current = setTimeout(draw, wait)
+    return () => {
+      if (pending.current) clearTimeout(pending.current)
+      pending.current = null
+    }
+  }, [map, gameMap, fog, version, enabled])
 
   useEffect(() => {
     if (!map?.getLayer(FOG_LAYER)) return
     map.setLayoutProperty(FOG_LAYER, 'visibility', enabled && surface ? 'visible' : 'none')
     // Covering hides what hasn't been explored; shading only marks it.
     map.setPaintProperty(FOG_LAYER, 'raster-opacity', hideMap ? 1 : FOG_SHADE)
-  }, [map, enabled, hideMap, surface, fog, version])
+  }, [map, enabled, hideMap, surface, drawn])
 }
 
 /** Underground view: dims the surface imagery and shows the cave layouts on top. */
 function useLayerShading(map: MlMap | null) {
   const underground = useStore(selectViewLayer) === 'caves'
+  const clouded = useSettings((s) => s.ui.fogOfWar && s.ui.fogHideMap)
   useEffect(() => {
     if (!map) return
     map.setPaintProperty('base', 'raster-brightness-max', underground ? 0.32 : 1)
     map.setPaintProperty('base', 'raster-saturation', underground ? -0.7 : 0)
     if (map.getLayer(CAVES_LAYER)) map.setLayoutProperty(CAVES_LAYER, 'visibility', underground ? 'visible' : 'none')
-    map.setPaintProperty('background', 'background-color', underground ? '#11161c' : (useStore.getState().map?.background ?? '#000'))
-  }, [map, underground])
+    const surface = clouded ? CLOUD_BACKGROUND : (useStore.getState().map?.background ?? '#000')
+    map.setPaintProperty('background', 'background-color', underground ? '#11161c' : surface)
+  }, [map, underground, clouded])
 }
 
 function useTrackLine(map: MlMap | null) {
   const gameMap = useStore((s) => s.map)
-  const tracked = useStore((s) => s.tracked)
-  const snapshot = useStore((s) => s.snapshot)
-  const gamePins = useStore((s) => s.gamePins)
-  const user = useStore((s) => s.user)
-  const route = useStore((s) => s.route)
 
+  // Subscribed rather than selected: re-rendering the map with every snapshot is wasted.
   useEffect(() => {
     if (!map || !gameMap) return
     const source = map.getSource<GeoJSONSource>('track')
-    const from = snapshot?.local?.position
-    const to = tracked ? resolveTracked(tracked, snapshot).position : undefined
-    if (!from || !to) {
-      source?.setData({ type: 'FeatureCollection', features: [] })
-      return
+    // Not a possible key, so the first pass always draws.
+    let last: string | null = null
+    const apply = () => {
+      const { snapshot, tracked, route } = useStore.getState()
+      const from = snapshot?.local?.position
+      const to = tracked ? resolveTracked(tracked, snapshot).position : undefined
+      // The walking route when there is one, else a straight line.
+      const points = !from || !to ? [] : route && route.corners.length >= 2 ? [from, ...route.corners.slice(1), to] : [from, to]
+      // Whole units: finer, and walking would rebuild the line on every snapshot.
+      const key = points.map((p) => `${Math.round(p.x)},${Math.round(p.z)}`).join('|')
+      if (key === last) return
+      last = key
+      if (points.length === 0) {
+        source?.setData({ type: 'FeatureCollection', features: [] })
+        return
+      }
+      source?.setData({
+        type: 'Feature',
+        geometry: {
+          type: 'LineString',
+          coordinates: points.map((p) => {
+            const ll = toLngLat(gameMap.projection, p)
+            return [ll.lng, ll.lat]
+          }),
+        },
+        properties: {},
+      })
     }
-    // The walking route when there is one, else a straight line.
-    const points = route && route.corners.length >= 2 ? [from, ...route.corners.slice(1), to] : [from, to]
-    source?.setData({
+    apply()
+    return useStore.subscribe((s, prev) => {
+      if (s.snapshot !== prev.snapshot || s.tracked !== prev.tracked || s.route !== prev.route || s.gamePins !== prev.gamePins || s.user !== prev.user) apply()
+    })
+  }, [map, gameMap])
+}
+
+/** Where the player has walked, on the layer shown (see `state/trail`). */
+function useTrailLine(map: MlMap | null) {
+  const gameMap = useStore((s) => s.map)
+  const points = useTrailStore((s) => s.points)
+  const shown = useSettings((s) => s.ui.showTrail)
+  const layer = useStore(selectViewLayer)
+  useEffect(() => {
+    if (!map || !gameMap) return
+    const lines = shown ? trailLines(points, layer) : []
+    map.getSource<GeoJSONSource>('trail')?.setData({
       type: 'Feature',
       geometry: {
-        type: 'LineString',
-        coordinates: points.map((p) => {
-          const ll = toLngLat(gameMap.projection, p)
-          return [ll.lng, ll.lat]
-        }),
+        type: 'MultiLineString',
+        coordinates: lines.map((line) =>
+          line.map((p) => {
+            const ll = toLngLat(gameMap.projection, p)
+            return [ll.lng, ll.lat]
+          }),
+        ),
       },
       properties: {},
     })
-  }, [map, gameMap, tracked, snapshot, gamePins, user, route])
+  }, [map, gameMap, points, shown, layer])
 }
 
 function usePlayers(map: MlMap | null, variant: 'full' | 'mini') {
@@ -534,6 +611,9 @@ function usePlayers(map: MlMap | null, variant: 'full' | 'mini') {
     if (!map || !gameMap) return
     const pm = new PlayerMarkers(map, gameMap.projection, variant === 'mini', variant === 'full' ? (id) => useStore.getState().selectLive(id) : undefined)
     markers.current = pm
+    // Where the mini-map last moved to: a camera move on the same spot, with the map not
+    // turning with the player, isn't worth a repaint.
+    let view = ''
     const apply = () => {
       const { snapshot, followPlayer } = useStore.getState()
       const { hud } = useSettings.getState().ui
@@ -544,11 +624,13 @@ function usePlayers(map: MlMap | null, variant: 'full' | 'mini') {
         if (!local) return map.jumpTo({ zoom })
         const center = toLngLat(gameMap.projection, local.position)
         const heading = local.forward ? bearingOf(gameMap.projection, local.forward) : null
-        map.jumpTo({
-          center: [center.lng, center.lat],
-          zoom,
-          bearing: hud.rotateWithPlayer && heading !== null ? heading : 0,
-        })
+        const bearing = hud.rotateWithPlayer && heading !== null ? heading : 0
+        // Moves under half a pixel can't be seen, and each one would repaint the whole map.
+        const halfPixel = 180 / (512 * 2 ** zoom)
+        const next = `${Math.round(center.lng / halfPixel)},${Math.round(center.lat / halfPixel)},${zoom},${bearing.toFixed(1)}`
+        if (next === view) return
+        view = next
+        map.jumpTo({ center: [center.lng, center.lat], zoom, bearing })
         return
       }
       const followed = useStore.getState().followId

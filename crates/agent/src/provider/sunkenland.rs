@@ -45,11 +45,12 @@ const NAME_REFRESH: Duration = Duration::from_secs(5);
 /// How often the loaded world and session are read (they only change when loading another).
 const WORLD_REFRESH: Duration = Duration::from_secs(2);
 const CREATURE_REFRESH: Duration = Duration::from_millis(250);
-/// How often placed flags are searched for (an object search; they rarely change), and
-/// how often if a search takes longer than `SLOW_FLAG_SEARCH`, to stay out of the way.
+/// How often placed flags are searched for (an object search; they rarely change). A
+/// search over `SLOW_FLAG_SEARCH` stutters the game (50 ms or more in a late-game world),
+/// so those wait for the map to open, with this as the longest gap.
 const FLAG_REFRESH: Duration = Duration::from_secs(10);
-const SLOW_FLAG_REFRESH: Duration = Duration::from_secs(300);
-const SLOW_FLAG_SEARCH: Duration = Duration::from_millis(10);
+const SLOW_FLAG_REFRESH: Duration = Duration::from_secs(3600);
+const SLOW_FLAG_SEARCH: Duration = Duration::from_millis(2);
 /// Creatures farther than this from the player are left out.
 const CREATURE_RADIUS: f32 = 500.0;
 const MAX_ENTITIES: usize = 256;
@@ -138,7 +139,17 @@ struct ConsoleMembers {
 struct TeleportMembers {
     set_position: Method,
     raycast: Option<Method>,
-    walker: Option<(Field, Method)>,
+    walker: Option<WalkerMembers>,
+    /// `RPGCamera.code` and its `cam`.
+    camera: Option<(Field, Field)>,
+}
+
+/// `FPSRigidBodyWalker`, which moves the player.
+struct WalkerMembers {
+    instance: Field,
+    reset_parent: Method,
+    /// `isFloating` and the rest of the water state (bools), cleared when teleporting.
+    water_state: Vec<Field>,
 }
 
 /// Fields of the companion and vehicle classes used for markers.
@@ -167,11 +178,13 @@ pub struct Sunkenland {
     /// Map marks, read with the world (they rarely change).
     map_marks: Vec<Marker>,
     logged_marks: bool,
+    logged_mark_error: bool,
     flag_members: Option<marks::Flags>,
     flags: Vec<Marker>,
     last_flag_refresh: Option<Instant>,
     flag_refresh: Duration,
     logged_flags: bool,
+    logged_flag_error: bool,
     session_members: Option<session::Session>,
     /// One layout serves every `List<T>` of reference types.
     list_layout: Option<ListLayout>,
@@ -266,6 +279,7 @@ impl Sunkenland {
             let transform = rt.class("UnityEngine", "Transform").ok()?;
             let physics = rt.class("UnityEngine", "Physics").ok();
             let walker = rt.class("", "FPSRigidBodyWalker").ok();
+            let camera = rt.class("", "RPGCamera").ok();
             Some(TeleportMembers {
                 set_position: rt.method_with_params(transform, "set_position", &["UnityEngine.Vector3"]).ok()?,
                 raycast: physics.and_then(|p| {
@@ -283,7 +297,14 @@ impl Sunkenland {
                     )
                     .ok()
                 }),
-                walker: walker.and_then(|w| Some((static_field(rt, w, "code")?, rt.method(w, "ResetParent", 0).ok()?))),
+                walker: walker.and_then(|w| {
+                    Some(WalkerMembers {
+                        instance: static_field(rt, w, "code")?,
+                        reset_parent: rt.method(w, "ResetParent", 0).ok()?,
+                        water_state: ["isFloating", "isSwimming", "isUnderWater", "isInWater"].into_iter().filter_map(|n| rt.field(w, n).ok()).collect(),
+                    })
+                }),
+                camera: camera.and_then(|c| Some((static_field(rt, c, "code")?, rt.field(c, "cam").ok()?))),
             })
         })();
 
@@ -363,11 +384,13 @@ impl Sunkenland {
             mark_members,
             map_marks: Vec::new(),
             logged_marks: false,
+            logged_mark_error: false,
             flag_members,
             flags: Vec::new(),
             last_flag_refresh: None,
             flag_refresh: FLAG_REFRESH,
             logged_flags: false,
+            logged_flag_error: false,
             session_members,
             list_layout: None,
             notes,
@@ -427,6 +450,10 @@ impl Sunkenland {
             let kind = if self.session.is_some() { WorldKind::Hosted } else { WorldKind::SinglePlayer };
             return Some(GameWorld { id: format!("world:{id}"), name, kind });
         }
+        // Your own world, still loading: nothing to report yet.
+        if !joined {
+            return None;
+        }
         let world_manager = call(s.world_manager.as_ref()?, mainframe)?;
         let name = read_string(call(s.session_world_name.as_ref()?, world_manager)?).filter(|n| !n.is_empty())?;
         let id = s.session_world_id.as_ref().and_then(|m| read_string(call(m, world_manager)?)).filter(|i| !i.is_empty());
@@ -450,9 +477,12 @@ impl Sunkenland {
                     crate::filelog::write(&format!("slow flag search: {:.1} ms", took.as_secs_f32() * 1000.0));
                 }
             }
+            // Often only that the world isn't fully up yet: the next search tries again.
             Err(e) => {
-                self.notes.push(format!("Flags disabled: {e}"));
-                self.flag_members = None;
+                if !self.logged_flag_error {
+                    self.logged_flag_error = true;
+                    self.notes.push(format!("Flags unavailable: {e}"));
+                }
             }
         }
     }
@@ -474,8 +504,10 @@ impl Sunkenland {
                 self.map_marks = marks;
             }
             Err(e) => {
-                self.notes.push(format!("Map marks disabled: {e}"));
-                self.mark_members = None;
+                if !self.logged_mark_error {
+                    self.logged_mark_error = true;
+                    self.notes.push(format!("Map marks unavailable: {e}"));
+                }
             }
         }
     }
@@ -700,6 +732,10 @@ impl Provider for Sunkenland {
         FRAME_HOOKS
     }
 
+    fn map_opened(&mut self) {
+        self.last_flag_refresh = None;
+    }
+
     fn take_notes(&mut self) -> Vec<String> {
         std::mem::take(&mut self.notes)
     }
@@ -714,6 +750,9 @@ impl Provider for Sunkenland {
             self.game_world = None;
             self.session = None;
             self.nearby.clear();
+            self.map_marks.clear();
+            self.flags.clear();
+            self.last_flag_refresh = None;
         } else {
             if self.last_world_refresh.is_none_or(|t| now - t >= WORLD_REFRESH) {
                 self.last_world_refresh = Some(now);
@@ -722,7 +761,8 @@ impl Provider for Sunkenland {
                 let session = state.and_then(|s| s.session);
                 if session != self.session {
                     self.notes.push(match &session {
-                        Some(s) => format!("Multiplayer session joined: {} as {:?}", s.id, s.player_name),
+                        // Never the id: it's the room's password, and logs get shared.
+                        Some(s) => format!("Multiplayer session joined as {:?}", s.player_name),
                         None => "Not in a multiplayer session".into(),
                     });
                     self.session = session;
@@ -760,7 +800,7 @@ impl Provider for Sunkenland {
                 self.refresh_markers(cx);
             }
         }
-        WorldSnapshot { frame, local, others: self.others.clone(), markers: self.markers.iter().chain(&self.map_marks).chain(&self.flags).cloned().collect(), creatures: self.nearby.clone(), session: self.session.clone(), world: self.game_world.clone() }
+        WorldSnapshot { frame, local, others: self.others.clone(), markers: self.markers.iter().chain(&self.map_marks).chain(&self.flags).cloned().collect(), creatures: self.nearby.clone(), session: self.session.clone(), world: self.game_world.clone(), ..Default::default() }
     }
 
     unsafe fn teleport(&mut self, cx: &Cx, target: &TeleportTarget) -> Result<(), String> {
@@ -784,7 +824,7 @@ impl Provider for Sunkenland {
         }
 
         let mut dest = match target {
-            TeleportTarget::Position { position, snap_to_ground } => {
+            TeleportTarget::Position { position, snap_to_ground, .. } => {
                 let mut p = to_unity(*position);
                 let sea = self.sea_level(cx);
                 if *snap_to_ground {
@@ -816,10 +856,33 @@ impl Provider for Sunkenland {
 
         // Standing on a boat deck parents the player to the boat; detach first so the
         // boat doesn't carry them off.
-        if let Some((walker_f, reset)) = &t.walker {
-            let walker: *mut ManagedObject = cx.rt.static_value(*walker_f);
+        if let Some(w) = &t.walker {
+            let walker: *mut ManagedObject = cx.rt.static_value(w.instance);
             if cx.unity.is_alive(walker) {
-                cx.rt.invoke(reset, walker, &mut []).map_err(|e| format!("leaving the boat deck failed: {e}"))?;
+                cx.rt.invoke(&w.reset_parent, walker, &mut []).map_err(|e| format!("leaving the boat deck failed: {e}"))?;
+                // While floating, the walker pulls the player toward the water height with
+                // no collision, which would drag them through the ground at the
+                // destination on the first frame. The game clears this when it moves the
+                // player out of the water, and sets it again next frame if they're in it.
+                for field in &w.water_state {
+                    field.set(walker, false);
+                }
+            }
+        }
+        // The game takes the water depth from the camera, which follows a frame later: left
+        // behind, it would put the player back in the water for that frame.
+        if let Some((instance, cam)) = &t.camera {
+            let rig: *mut ManagedObject = cx.rt.static_value(*instance);
+            let camera = if cx.unity.is_alive(rig) { cam.get::<*mut ManagedObject>(rig) } else { std::ptr::null_mut() };
+            if cx.unity.is_alive(camera) {
+                if let Ok(camera) = cx.unity.component_transform(cx.rt, camera) {
+                    if let (Ok(from), Ok(seen)) = (cx.unity.position(cx.rt, transform), cx.unity.position(cx.rt, camera)) {
+                        let mut at = Vector3 { x: seen.x + dest.x - from.x, y: seen.y + dest.y - from.y, z: seen.z + dest.z - from.z };
+                        let mut args = [&mut at as *mut Vector3 as *mut c_void];
+                        // It catches up by itself, so a failure here doesn't stop the teleport.
+                        let _ = cx.rt.invoke(&t.set_position, camera, &mut args);
+                    }
+                }
             }
         }
         let mut args = [&mut dest as *mut Vector3 as *mut c_void];
