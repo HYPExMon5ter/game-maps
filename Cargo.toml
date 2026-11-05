@@ -5,7 +5,7 @@ members = ["crates/protocol", "crates/unity-runtime", "crates/agent", "apps/over
 [workspace.package]
 edition = "2021"
 version = "0.3.0"
-license = "UNLICENSED"
+license = "PolyForm-Noncommercial-1.0.0"
 publish = false
 
 [workspace.dependencies]
