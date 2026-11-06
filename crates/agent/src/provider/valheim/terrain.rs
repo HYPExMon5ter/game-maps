@@ -267,7 +267,7 @@ mod tests {
             }
         }
         let image = draw(size, 12.0, &biome, &vec![Color32::default(); size * size], &height).image;
-        assert!(image.chunks_exact(3).all(|c| c[0] < 235), "no white pixels");
+        assert!(image.iter().step_by(3).all(|&red| red < 235), "no white pixels");
     }
 
     #[test]
