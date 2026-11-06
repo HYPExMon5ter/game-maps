@@ -21,8 +21,11 @@ other players, and teleport. Press a key and it's there.**
 ## Features
 
 - **Interactive map** of the whole world, built from the game's own files, with every
-  cave, bunker, weapon, tool, key item and collectible pinned. Search and filter
-  by category, save the filters you use as a named view, and mark pins as found.
+  cave, bunker, weapon, tool, key item and collectible pinned. Search, mark pins as found,
+  and save the filters you use as a named view.
+- **Filter down to one thing**: categories sit in groups that open up into each kind of
+  thing, like iron ore or copper ore. Hide any of them, or click **Only** to see nothing
+  else, and **Show all** to get your filters back.
 - **Live location** of you, other players in multiplayer, and what the game itself puts
   on its map: companions, placed GPS locators and flags, moved vehicles. Hide these with
   the **In-game markers** category.
@@ -39,8 +42,16 @@ other players, and teleport. Press a key and it's there.**
   track something, ping spots on the map, and share custom pins. See friends' names and
   distances over the game, and optionally share found items and explored areas. Peer to
   peer, no account or server.
-- **Order Kelvin from the map** in Sons of the Forest: see how he's doing, send him for
-  logs or anything else he can fetch, and help him up.
+- **Order companions from the map**: see how Kelvin is doing in Sons of the Forest, send
+  him for logs or anything else he can fetch, and help him up. In Sunkenland, give your
+  crew their jobs and send them to a spot. You get a notice when one is hurt or going
+  hungry.
+- **What's on an island** in Sunkenland: click a location for its level, how much of it
+  you've scavenged, and the loot, plants and minerals the game lists for it.
+- **Places you've been, marked**: caves and bunkers in Sons of the Forest, dungeons in
+  Valheim and discovered locations in Sunkenland are marked found by themselves.
+- **Your pins on the game's own map** in Valheim and Sunkenland, so friends without Game
+  Maps see them too.
 - **Your bag, marked**: when you die in Sons of the Forest, a pin goes where your gear
   dropped, and it's gone once you pick it up.
 - **Collectibles are marked found** as you walk up to them.
@@ -86,7 +97,11 @@ other players, and teleport. Press a key and it's there.**
 </tr>
 <tr>
 <td><img src="docs/images/edit-mode.png" alt="Moving and resizing the map and mini-map"><br><sub>Move and resize the map and mini-map</sub></td>
-<td><img src="docs/images/sunkenland.png" alt="The Sunkenland map"><br><sub>Sunkenland, drawn from the game's own world</sub></td>
+<td><img src="docs/images/sunkenland.png" alt="The Sunkenland map showing only iron ore"><br><sub>Sunkenland, filtered down to iron ore</sub></td>
+</tr>
+<tr>
+<td><img src="docs/images/valheim.png" alt="A Valheim world map showing only raspberries"><br><sub>Valheim: each world's map comes from the game itself</sub></td>
+<td><img src="docs/images/sunkenland-companion.png" alt="Freya's card in Sunkenland with her health and orders"><br><sub>A Sunkenland companion's condition and orders</sub></td>
 </tr>
 </table>
 
@@ -104,6 +119,15 @@ someone else's world, the game only shares bosses, traders and the like, unless 
 Game Maps too. Ore, plants, ships and carts are remembered as you pass them, and you can
 filter each resource. Valheim also has boss progress, biome tools, a wind arrow on the
 mini-map, and options for silver without the wishbone and teleporting with ores.
+
+Sunkenland adds your companions' stats and orders, what's on each island, your pins as
+marks on the game's map, and a wind arrow on the mini-map. Marks are shared with everyone
+in the world, the game limits how many there can be, and their names are cut to 8
+characters. Sons of the Forest has no map marks a player can place, so pins stay in Game
+Maps there.
+
+Games with anti-cheat aren't supported. If Game Maps finds Easy Anti-Cheat or BattlEye in
+a game's folder, it won't connect to that game, since doing so could get you banned.
 
 More games can be added; see [Adding a game](docs/development.md#adding-a-game).
 
@@ -173,6 +197,9 @@ icon.
 | Move and resize the map and mini-map | **Four arrows** in the top bar |
 | Switch world | World name in the top bar |
 | See what's left to find | **Progress** tab in the sidebar |
+| Show or hide a category | The **eye** next to it, or next to a group for all of it |
+| See one thing and nothing else | Open its group and click **Only**; **Show all** puts your filters back |
+| Send a Sunkenland companion somewhere | Right-click the map, then **Send them here** |
 | Keep a set of categories | **Save view** in the sidebar, then click it to switch back |
 | Keys, map and mini-map look, what the map shows | **Settings** (gear icon; type to search) |
 
@@ -185,19 +212,42 @@ the F6 to F8 keys can be changed or turned off in **Settings**.
 Click a pin for what's there, then **Track** it, **Teleport**, or **Mark found**. Players,
 companions and vehicles work the same way, with **Follow** to keep them centered. While
 tracking, a compass and a waypoint show over the game, and a walking route shows on the
-map (Settings → Tracking turns either off). Hide a whole category with the eye next to
-it, and use **Show found** to leave out what you've collected. Collectibles are marked
-found when you walk up to them.
+map (Settings → Tracking turns either off). Use **Show found** to leave out what you've
+collected. Collectibles are marked found when you walk up to them.
+
+<img src="docs/images/sidebar.png" alt="The sidebar with groups open" width="220" align="right">
+
+The sidebar groups the categories, and big ones open up into each kind of thing: Ores &
+Mining into iron, copper and so on. Each line has its own eye, and hovering one shows
+**Only**, for when you just want the iron. Groups you leave open stay open for that game.
+A search also lists matching categories above the pins it finds.
+
+<br clear="right">
 
 Any pin, including the game's, can hold your own note and a countdown of 5 to 60 minutes;
 both are in its details. To back up this world's pins or add some from a friend, use
 **Pins in a file** under Settings → Map content.
 
-### Kelvin and your bag
+### Companions and your bag
 
 In Sons of the Forest, click Kelvin on the map or under **Players** to see his health,
 energy and mood and give him orders: follow you, take a break, fetch things, clear an
 area or build. If he's hurt, **Help him up** walks you over to him.
+
+In Sunkenland, click a companion you've recruited for their health, what they're doing
+and the same orders as in the game: follow, stand by, rest, the jobs they can do, charge
+enemies (they need a weapon) and hold fire. Right-click the map to send them there.
+
+<img src="docs/images/sunkenland-island.png" alt="A Sunkenland location's details" width="200" align="right">
+
+### Islands in Sunkenland
+
+Click a location's pin while connected for its level, how much of it you've scavenged, and
+what the game lists there. Key finds are crossed off as they're taken.
+
+<br clear="right">
+
+### Your bag
 
 When you die, a pin marks the spot. It moves to your bag once the game drops it, so
 tracking it leads you to your gear, and it goes away when you pick the bag up. Turn this
@@ -264,7 +314,8 @@ ask each other to track something. **Friends over the game** shows other players
 and distances, and **Share progress** merges found items and explored areas with friends
 who also turned it on. In Valheim your pins also go on the game's own map, where a
 cartography table can share them, and your pings use the game's ping, so players without
-Game Maps see them too. If you can't reach a friend, **Connection check** under
+Game Maps see them too. In Sunkenland your pins become map marks everyone in the world
+can see. If you can't reach a friend, **Connection check** under
 Settings → Multiplayer tests your connection and says what's in the way.
 
 <br clear="right">
@@ -291,6 +342,14 @@ Publishing new map data, after a game update moves things, is covered in
 [Map data](docs/development.md#map-data) and [Releasing](docs/releasing.md#map-updates).
 
 ## Troubleshooting
+
+<details>
+<summary><b>It says Easy Anti-Cheat or BattlEye was found</b></summary>
+
+Game Maps won't connect to a game with anti-cheat, because that could get you banned. The
+map still opens by itself. This can also happen if a game adds anti-cheat in an update.
+
+</details>
 
 <details>
 <summary><b>The map doesn't appear when I press M</b></summary>
@@ -364,7 +423,8 @@ costs the game almost nothing to render.
 
 Map tiles, icons and pins are generated from the game's own files, so they line up
 exactly with live positions. They're published separately from the app, so map
-fixes reach everyone without an app update.
+fixes reach everyone without an app update. A game with generated worlds, like Valheim,
+has no download: each world's map is read from the running game.
 
 More detail: [Architecture](docs/architecture.md) ·
 [Development](docs/development.md) · [Releasing](docs/releasing.md)

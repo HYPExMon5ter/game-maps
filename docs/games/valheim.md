@@ -121,3 +121,17 @@ before its main menu is up: Unity saves it as a 1x1 resolution, and the next lau
 
 The game only builds navigation around what's loaded, so a route could only reach a few
 hundred meters. `find_path` is refused and the app shows the straight line and compass.
+
+## Creatures
+
+`Character.m_faction` doesn't say what's dangerous: only hares are in `AnimalsVeg`, and deer,
+chickens, seals, gem goblins and young animals are in monster factions. They all have
+`AnimalAI`, which only runs away, so `Character.m_baseAI` being one is what makes an animal
+(`creature_kind`). Boars and necks have `MonsterAI` and do attack, so they count as hostile,
+and so do hens and Asksvin hatchlings for now, though most players' hens are tamed.
+
+## Portals
+
+The game pairs portals with the same tag (`Game.FindRandomUnconnectedPortal`), so a portal's
+pin works out what it links to from the names, with no read from the game. Three or more
+with one tag could link either way, and the pin says so.
