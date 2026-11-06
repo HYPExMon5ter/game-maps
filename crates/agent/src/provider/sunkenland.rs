@@ -725,6 +725,7 @@ impl Provider for Sunkenland {
             teleport: self.teleport.is_some(),
             other_players: self.dummy.is_some() && self.world.as_ref().is_some_and(|w| w.players.is_some()),
             hotkeys: true,
+            game_map: false,
         }
     }
 

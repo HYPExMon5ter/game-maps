@@ -17,6 +17,7 @@ import { acceptLatestRequest, announce, useSync, useSyncMirror } from './lib/syn
 import { startPersisting } from './state/persist'
 import { useTrail } from './state/trail'
 import { loadWorldView, useWorldTracking } from './state/useWorlds'
+import { useGamePins, useWorldExtras, useWorldMaps } from './state/worldMaps'
 import { useFog } from './state/fog'
 import { selectAllPins, useStore } from './state/store'
 import type { Hotkey } from './lib/protocol'
@@ -50,7 +51,7 @@ function useBackendSync(windowed: boolean) {
       events.snapshotUpdate((u) => {
         const { snapshot } = useStore.getState()
         // Lists stay the same arrays: whatever draws them can tell nothing changed.
-        if (snapshot) setSnapshot(u.local || u.others.length ? { ...snapshot, companions: undefined, environment: undefined, dropped_bag: undefined, dying: false, ...u } : null)
+        if (snapshot) setSnapshot(u.local || u.others.length ? { ...snapshot, companions: undefined, environment: undefined, dropped_bag: undefined, dying: false, indoors: false, progress: undefined, ...u } : null)
         else if (u.local) void backend.lastSnapshot().then(setSnapshot)
       }),
       events.overlayMode(async (mode) => {
@@ -275,9 +276,10 @@ function useGameLoader() {
       try {
         id ??= (await backend.listGames())[0]?.id
         if (!id || id === current) return
-        const [{ game, pins }, view] = await Promise.all([loadGame(id), loadWorldView(id)])
+        const { game, pins } = await loadGame(id)
+        const view = await loadWorldView(game)
         if (cancelled) return
-        useStore.getState().setGame(game, pins, view.user, view.world, view.index, view.session)
+        useStore.getState().setGame(game, view.pins ?? pins, view.user, view.world, view.index, view.session, !!view.pins)
         setRequested(null)
       } catch (e) {
         logUiError(`could not load map ${id}: ${String(e)}`)
@@ -377,6 +379,7 @@ function MapWindowApp() {
   useGameLoader()
   useWorldTracking(false)
   useFog(false)
+  useWorldMaps(false)
   useSyncMirror()
   useTrail()
   const hasGame = useStore((s) => s.game !== null)
@@ -402,6 +405,9 @@ function OverlayApp() {
   useGameLoader()
   useWorldTracking(true)
   useFog(true)
+  useWorldMaps(true)
+  useGamePins()
+  useWorldExtras()
   useHudSync()
   useTrackedCount()
   useOverlayKeys()

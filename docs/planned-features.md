@@ -73,6 +73,31 @@ yet), **Deferred** (wanted, waiting on something).
 | Map window on a second monitor | Built | Mirrors the overlay's connection: friends' pins, requests, pings and Share all work there. |
 | Connection check | Built | Tests the servers that find friends and your network type, says how each friend is connected, and who isn't and why. Connections stay direct: there's no relay, so two strict networks can't link. |
 | Regroup key | Idea | One press asks everyone to track you. |
+| In-game pins and pings | Built (Valheim) | Your pins go on the game's own map and your pings use the game's own ping, so players without Game Maps see them too (`Capabilities.game_map`), and theirs show in Game Maps. Wanted in every game that has a map or pings: see each game's section. |
+
+## Valheim
+
+| Feature | Status | Notes |
+|---|---|---|
+| Map from the running game | Built | Worlds are generated, so each one's map, pins and explored areas are read from the game the first time it's loaded. |
+| In-game pins and pings | Built | Pins go on the game's map and are shared through a cartography table; pings reach everyone in the world. |
+| Resource filters | Built | Tar pits, dragon eggs, giant remains and so on each have their own category and icon. |
+| Possible trader spots | Built | A trader's spots read "possible spot" until the game places one and drops the rest. |
+| Remembered resources | Built | Ore, plants, ships and carts are remembered as they load near the player, one 64 m area every 200 ms (35 µs on average, measured). |
+| Silver without the wishbone | Built | Off by default: silver only shows once found with a wishbone on. |
+| Regrowth timers | Built | Off by default: a timer on picked berries and plants. |
+| Cleared dungeons | Built | Marked found once the player has been inside. |
+| Boss progress | Built | A checklist of bosses and what each unlocks. The Deep North boss isn't listed yet: its key isn't known. |
+| Portals | Built | With their names; a host has every portal in the world. |
+| Biome tools | Built | The biome under the cursor, and the way to the nearest of each. They respect fog of war. |
+| Host's locations for friends | Built | A host's locations are sent to players who join. Not tested with a second player yet. |
+| Teleport with ores | Built | Off by default: teleports refuse what portals would. |
+| Wind on the mini-map | Built | An arrow where the wind blows, which replaces the game's mini-map. |
+| Game's mini-map hidden | Built | While the app's mini-map is on; back when it's off or the app disconnects. |
+| Ships and carts from anywhere | Deferred | Left out for lag: they're only known where the player has been, and finding them all means reading every object in the world, millions on an old world, on the main thread. Portals don't need it because the game lists them apart. |
+| Resources before you get there | Deferred | Left out: the game places them as an area generates. Predicting them from the seed would mean copying its placement rules, which would be slow and break with game updates. |
+| Connected portals | Idea | Show which portals are linked, not only their names. |
+| Rested and weather alerts | Idea | A notice when a storm or event is coming. |
 
 ## Sons of the Forest
 
@@ -88,6 +113,7 @@ yet), **Deferred** (wanted, waiting on something).
 | Kelvin on the mini-map | Idea | His position, and a warning when he's hurt or starving. |
 | Low-stat alerts | Idea | A notice when Kelvin's food or water gets low. |
 | Seasonal hints | Idea | Which food and plants are around in the current season. |
+| In-game pins and pings | Idea | Put pins on the GPS for players without Game Maps, if the game lets a client add locators. Needs research into how GPS locators are placed and shared. |
 
 ## Sunkenland
 
@@ -103,3 +129,24 @@ yet), **Deferred** (wanted, waiting on something).
 | Loot respawn timers | Idea | Start a pin timer when you empty a spot, if loot respawns. |
 | Trader finder | Idea | What each trader buys and sells, on their pin. |
 | Fuel range ring | Idea | How far your boat can go on its current fuel. Needs research into reading the fuel level. |
+| In-game pins and pings | Idea | Put pins on the game's map as map marks, which are already read, so players without Game Maps see them. Needs research into whether marks are shared. |
+
+## Other games
+
+Ranked by players, how much of Game Maps already applies, and whether the owner has
+played them. Player numbers are 30-day averages on Steam from November 2026. Anything with
+anti-cheat stays out: injecting into it and teleporting could get players banned.
+
+| Game | Average players | Engine | Status | Notes |
+|---|---|---|---|---|
+| Schedule I | 10k | Unity IL2CPP | Idea | One handmade map on a runtime that's already supported. Quick to add. |
+| Palworld | 37k | Unreal | Idea | 1.0 launched July 2026. Needs an Unreal agent; Wand already has live location and teleport here. |
+| Satisfactory | 16k | Unreal | Idea | Comes much cheaper with the Unreal agent. |
+| 7 Days to Die | 21k | Unity | Idea | Wand has a map with no live features. It ships with Easy Anti-Cheat, which has to be off for this to work: check that first. |
+| Core Keeper | 8k | Unity Mono | Idea | Generated worlds, so it can use the same runtime map as Valheim. |
+| Subnautica 2 | 2k, 467k at launch | Unreal | Idea | Worth it when an update brings players back. |
+| Grounded 2 | 4k | Unreal | Idea | With the Unreal agent. |
+| The Forest | 5k | Unity | Idea | Same audience as Sons of the Forest, and caves make a map useful. |
+| Raft | 7k | Unity | Idea | |
+| Project Zomboid | 46k | Java | Deferred | Needs a third agent type, and its servers may reject teleports. A strong candidate later. |
+| Enshrouded | 41k | Custom | Deferred | Nothing to look up by name, so live features would break with every patch. A static map is possible. |

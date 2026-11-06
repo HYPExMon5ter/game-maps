@@ -89,6 +89,19 @@ export function mergeFriendFog(saved: SavedFog) {
   }
 }
 
+/**
+ * Adds what the game itself counts as explored: `bits` is laid out like the fog's, one
+ * bit per cell, or it's left out.
+ */
+export function mergeGameExplored(bits: Uint8Array) {
+  const { fog } = useFogStore.getState()
+  if (!fog || fog.bits.length !== bits.length) return
+  if (mergeFog(fog, { ...fog, bits })) {
+    dirty = true
+    changed(true)
+  }
+}
+
 /** Forgets the current world's explored areas. */
 export async function resetFog() {
   const { key, fog } = useFogStore.getState()

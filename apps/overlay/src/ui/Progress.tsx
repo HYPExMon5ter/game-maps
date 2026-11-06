@@ -56,7 +56,7 @@ export function Progress({ onOpen }: { onOpen: (pin: Pin) => void }) {
         </div>
       </div>
 
-      {game.checklist && <Checklist entries={game.checklist} pins={gamePins} found={found} onOpen={onOpen} />}
+      {game.checklist && <Checklist title={game.checklistName ?? 'Key items'} entries={game.checklist} pins={gamePins} found={found} onOpen={onOpen} />}
 
       <ul className="mt-2">
         {progress.categories.map((c) => (
@@ -69,14 +69,15 @@ export function Progress({ onOpen }: { onOpen: (pin: Pin) => void }) {
 }
 
 /** The game's key items: what's done, and the way to what isn't. */
-function Checklist({ entries, pins, found, onOpen }: { entries: ChecklistEntry[]; pins: Pin[]; found: string[]; onOpen: (pin: Pin) => void }) {
-  const rows = useMemo(() => checklistRows(entries, pins, found), [entries, pins, found])
+function Checklist({ title, entries, pins, found, onOpen }: { title: string; entries: ChecklistEntry[]; pins: Pin[]; found: string[]; onOpen: (pin: Pin) => void }) {
+  const progress = useStore((s) => s.snapshot?.progress)
+  const rows = useMemo(() => checklistRows(entries, pins, found, progress), [entries, pins, found, progress])
   const [open, setOpen] = useState(false)
   const done = rows.filter((r) => r.done).length
   return (
     <div className="mt-2 rounded-xl bg-panel-raised px-2 py-1.5">
       <button className="flex w-full items-center justify-between gap-2 px-1 py-0.5 text-[13px]" aria-expanded={open} onClick={() => setOpen(!open)}>
-        Key items
+        {title}
         <span className="flex items-center gap-1.5 text-[11px] tabular-nums text-ink-faint">
           {done}/{rows.length}
           <ChevronDown className={`size-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />
@@ -93,7 +94,10 @@ function Checklist({ entries, pins, found, onOpen }: { entries: ChecklistEntry[]
                 onClick={() => onOpen(row.pins.find((p) => !found.includes(p.id)) ?? row.pins[0])}
               >
                 {row.done ? <CheckCircle2 className="size-3.5 shrink-0 text-live" /> : <Circle className="size-3.5 shrink-0 text-ink-faint" />}
-                <span className={`min-w-0 flex-1 truncate ${row.done ? 'text-ink-faint' : ''}`}>{row.name}</span>
+                <span className={`min-w-0 flex-1 truncate ${row.done ? 'text-ink-faint' : ''}`} title={row.note}>
+                  {row.name}
+                  {row.note && <span className="block truncate text-[11px] text-ink-faint">{row.note}</span>}
+                </span>
               </button>
             </li>
           ))}

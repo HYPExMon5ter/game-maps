@@ -79,6 +79,7 @@ export interface SettingDef {
 
 const pct = (v: number) => `${Math.round(v * 100)}%`
 const live = (ctx: SettingsContext) => !!ctx.game?.liveFeatures
+const valheim = (ctx: SettingsContext) => ctx.game?.id === 'valheim'
 
 // Controls -------------------------------------------------------------------------
 
@@ -735,6 +736,9 @@ export const SETTINGS: SettingDef[] = [
   { id: 'minimap-opacity', category: 'minimap', scope: 'all', label: 'Opacity', keywords: 'minimap transparency see through', Control: MinimapOpacity },
 
   // Map content
+  { id: 'show-silver', category: 'content', scope: 'game', label: 'Show silver without the wishbone', hint: 'Silver you pass shows on the map even if you never found it with a wishbone', keywords: 'wishbone ore vein buried valheim spoiler', applies: valheim, Control: gameToggle('showSilver') },
+  { id: 'teleport-restricted', category: 'content', scope: 'game', label: 'Teleport with ores and metals', hint: 'Teleports take what portals refuse to carry', keywords: 'ore metal portal restricted items valheim cheat', applies: valheim, Control: gameToggle('teleportRestricted') },
+  { id: 'resource-timers', category: 'content', scope: 'game', label: 'Regrowth timers', hint: "Starts a timer on berries and plants you've picked, so you know when they're back", keywords: 'berries respawn pick timer valheim', applies: valheim, Control: gameToggle('resourceTimers') },
   { id: 'death-marker', category: 'content', scope: 'game', label: 'Mark where you die', hint: 'Keeps a pin where you last died, so you can get your gear back', keywords: 'death gear corpse grave', applies: live, Control: gameToggle('deathMarker') },
   { id: 'auto-found', category: 'content', scope: 'game', label: 'Mark collectibles found', hint: 'Items, weapons and notes are marked found when you walk up to them', keywords: 'auto collected pickup', applies: live, Control: gameToggle('autoFound') },
   { id: 'creatures', category: 'content', scope: 'game', label: 'Nearby creatures', hint: 'Enemies, companions and animals around you, as far as the game keeps them', keywords: 'enemies cannibals mutants npc radar', applies: live, Control: gameToggle('showCreatures') },
@@ -753,6 +757,8 @@ export const SETTINGS: SettingDef[] = [
   { id: 'connection-check', category: 'multiplayer', scope: 'game', label: 'Connection check', hint: "Tests your connection to friends, and what's in the way if you can't reach them", keywords: 'network firewall nat vpn troubleshoot friends cant connect', applies: (ctx) => live(ctx) && ctx.window === 'map', Control: ({ label, hint, ctx }) => <ConnectionCheck label={label} hint={hint} gameId={ctx.game?.id} /> },
   { id: 'share-progress', category: 'multiplayer', scope: 'game', label: 'Share progress', hint: 'Found items and explored areas are shared with friends who also turned this on', keywords: 'found fog explored merge friends', applies: live, Control: gameToggle('shareProgress', 'playTogether') },
   { id: 'friend-markers', category: 'multiplayer', scope: 'game', label: 'Friends over the game', hint: 'Shows where other players are, with their name and distance', keywords: 'players teammates marker hud', applies: live, Control: gameToggle('friendMarkers') },
+  { id: 'share-locations', category: 'multiplayer', scope: 'game', label: 'Share this world with friends', hint: "When you host, friends who join get the world's locations, which the game doesn't give them", keywords: 'host pins locations join', applies: valheim, Control: gameToggle('shareLocations') },
+  { id: 'game-map', category: 'multiplayer', scope: 'game', label: "Use the game's own map too", hint: 'Your pins go on the map in the game, and your pings reach players without Game Maps', keywords: 'pin ping marker in-game shared cartography table', applies: (ctx) => !!ctx.game?.gameMap, Control: gameToggle('gameMap') },
   { id: 'pings-in-game', category: 'multiplayer', scope: 'game', label: 'Pings in the game', hint: 'Map pings from you and your friends show over the game for 30 seconds', keywords: 'ping marker friends hud', applies: live, Control: gameToggle('pingsInGame') },
 
   // Advanced

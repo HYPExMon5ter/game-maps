@@ -1,3 +1,4 @@
+import { BiomeTools } from './BiomeTools'
 import { Eye, EyeOff, MapPinPlus, Search, X } from 'lucide-react'
 import { useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { customPinAtPlayer, flyToPin } from '../lib/actions'
@@ -210,6 +211,7 @@ export function Sidebar({ onEditPin, onPinMenu }: { onEditPin: (pin: Pin) => voi
                 )
               })}
             </ul>
+            <BiomeTools />
             {user.customPins.length > 0 && (
               <>
                 <div className="px-2 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wider text-ink-faint">My pins</div>

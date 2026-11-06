@@ -6,7 +6,9 @@ import { useStore } from '../state/store'
 import { Compass } from './Compass'
 import { SyncNotices } from './SyncRequests'
 import { Waypoint } from './Waypoint'
-import { formatEnvironment } from '../lib/environment'
+import { ArrowUp } from 'lucide-react'
+import { formatEnvironment, windRotation } from '../lib/environment'
+import { bearingOf } from '../lib/projection'
 import { DangerAlert, FriendMarkers, PingMarkers } from './OverGame'
 import { useObscured, useOverGame } from '../lib/overGame'
 import { useGameHud, useSettings } from '../settings/store'
@@ -55,6 +57,27 @@ export function Hud() {
   )
 }
 
+/** Which way the wind blows, turned with the map. Sailing is planned around this. */
+function WindArrow() {
+  const rotate = useSettings((s) => s.ui.hud.rotateWithPlayer)
+  const map = useStore((s) => s.map)
+  // Rounded: the player turning would otherwise redraw this with every snapshot.
+  const rotation = useStore((s) => {
+    const wind = s.snapshot?.environment?.wind
+    if (!wind) return null
+    const forward = s.snapshot?.local?.forward
+    const heading = rotate && map && forward ? (bearingOf(map.projection, forward) ?? 0) : 0
+    return Math.round(windRotation(wind.degrees, heading) / 3) * 3
+  })
+  const strength = useStore((s) => s.snapshot?.environment?.wind?.strength ?? 0)
+  if (rotation === null) return null
+  return (
+    <div className="absolute left-1.5 top-1.5 grid size-7 place-items-center rounded-full bg-black/55" title={`Wind ${strength}%`}>
+      <ArrowUp className="size-4 text-white" style={{ transform: `rotate(${rotation}deg)`, opacity: 0.45 + strength / 180 }} strokeWidth={2.5} />
+    </div>
+  )
+}
+
 function HudPanel({ tracking }: { tracking: boolean }) {
   const hud = useSettings((s) => s.ui.hud)
   const hasLocation = useStore((s) => !!s.snapshot?.local)
@@ -69,6 +92,7 @@ function HudPanel({ tracking }: { tracking: boolean }) {
           {!hasLocation && (
             <div className="absolute inset-0 grid place-items-center bg-black/45 text-[12px] text-ink-dim">Waiting for location…</div>
           )}
+          <WindArrow />
           {hud.clock && environment && (
             <div className="absolute inset-x-0 bottom-0 truncate bg-black/55 px-2 py-0.5 text-center text-[11px] font-medium tabular-nums text-white">{environment}</div>
           )}

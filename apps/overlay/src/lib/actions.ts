@@ -9,7 +9,7 @@ import { nearestUnfound } from './nearest'
 import { mapZoom, toLngLat, type LngLat, toWorld } from './projection'
 import type { LocalPlayer, Vec3, WorldLayer } from './protocol'
 
-const DEATH_PIN = 'custom-death'
+export const DEATH_PIN = 'custom-death'
 
 function projection() {
   const map = useStore.getState().map
@@ -133,7 +133,7 @@ export function markBag(at: Vec3, layer: WorldLayer = 'surface') {
   useStore.getState().upsertCustomPin({
     id: DEATH_PIN,
     category: 'custom',
-    name: 'Your bag',
+    name: useStore.getState().game?.bagName ?? 'Your bag',
     position: { ...at },
     layer: layer === 'caves' ? 'caves' : 'surface',
     color: '#eb5757',

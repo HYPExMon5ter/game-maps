@@ -10,6 +10,7 @@ other players, and teleport. Press a key and it's there.**
 [![Latest release](https://img.shields.io/github/v/release/HYPExMon5ter/game-maps?label=download&color=ffd166)](https://github.com/HYPExMon5ter/game-maps/releases/latest)
 [![CI](https://github.com/HYPExMon5ter/game-maps/actions/workflows/ci.yml/badge.svg)](https://github.com/HYPExMon5ter/game-maps/actions/workflows/ci.yml)
 ![Windows 10/11](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078d4)
+[![License: GPL-3.0](https://img.shields.io/github/license/HYPExMon5ter/game-maps)](LICENSE)
 
 <a href="https://youtu.be/pidK20TMtgQ"><img src="docs/images/showcase.png" alt="Watch the showcase on YouTube: the Game Maps overlay in Sons of the Forest" width="900"></a>
 
@@ -95,6 +96,14 @@ other players, and teleport. Press a key and it's there.**
 |---|:---:|:---:|:---:|:---:|:---:|:---:|
 | Sons of the Forest | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Sunkenland | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Valheim | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+Every Valheim world is different, so its map is drawn from the game the first time you
+load it, with no download. If you host, it has every location in the world. If you join
+someone else's world, the game only shares bosses, traders and the like, unless the host runs
+Game Maps too. Ore, plants, ships and carts are remembered as you pass them, and you can
+filter each resource. Valheim also has boss progress, biome tools, a wind arrow on the
+mini-map, and options for silver without the wishbone and teleporting with ores.
 
 More games can be added; see [Adding a game](docs/development.md#adding-a-game).
 
@@ -253,7 +262,9 @@ server.
 Right-click to ping a spot, share custom pins (they appear under **Friends' pins**), and
 ask each other to track something. **Friends over the game** shows other players' names
 and distances, and **Share progress** merges found items and explored areas with friends
-who also turned it on. If you can't reach a friend, **Connection check** under
+who also turned it on. In Valheim your pins also go on the game's own map, where a
+cartography table can share them, and your pings use the game's ping, so players without
+Game Maps see them too. If you can't reach a friend, **Connection check** under
 Settings → Multiplayer tests your connection and says what's in the way.
 
 <br clear="right">
@@ -382,9 +393,10 @@ Location lookup is off and IP addresses aren't kept. The code is in
 
 ## License
 
-Game Maps is free to use, change and share for any noncommercial purpose under the
-[PolyForm Noncommercial License 1.0.0](LICENSE.md). Selling it or using it commercially
-isn't allowed. This covers the app's code, not the games' names and assets.
+Copyright HYPExMon5ter. Game Maps is open source under the
+[GNU General Public License v3.0](LICENSE). You can use, change and share it, as long as
+anything you distribute based on it is also under the GPL with its source available.
+This covers the app's code, not the games' names and assets.
 
 ## Disclaimer
 

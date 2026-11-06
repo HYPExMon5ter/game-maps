@@ -94,6 +94,10 @@ interface AppState {
   world: WorldInfo
   /** The game's known worlds. */
   worldIndex: WorldIndex
+  /** The shown generated world has a map (see `GameDefinition.worldMaps`). */
+  worldMapReady: boolean
+  /** Bumped when a generated world's map files change. */
+  worldMapVersion: number
   /** How many teleports "teleport back" can undo. */
   backSteps: number
   /** Walking route to the tracked target, refreshed while tracking. */
@@ -119,9 +123,12 @@ interface AppState {
   setStatus(s: LinkStatus): void
   setMode(m: OverlayMode): void
   setSnapshot(s: WorldSnapshot | null): void
-  setGame(game: GameDefinition, pins: Pin[], user: GameUserData, world: WorldInfo, index: WorldIndex, session: MapSession): void
+  setGame(game: GameDefinition, pins: Pin[], user: GameUserData, world: WorldInfo, index: WorldIndex, session: MapSession, worldMapReady?: boolean): void
   /** Shows another world of the current game. */
-  setWorld(world: WorldInfo, index: WorldIndex, user: GameUserData, session: MapSession): void
+  /** `worldPins`: for generated worlds, the world's pins (null if it has no map yet). */
+  setWorld(world: WorldInfo, index: WorldIndex, user: GameUserData, session: MapSession, worldPins?: Pin[] | null): void
+  /** A generated world's map files changed; `tiles` if not only its pins did. */
+  setWorldMap(pins: Pin[], tiles: boolean): void
   setWorldIndex(index: WorldIndex): void
   setBackSteps(steps: number): void
   setRoute(route: PathInfo | null): void
@@ -163,6 +170,8 @@ export const useStore = create<AppState>((set) => ({
   user: EMPTY_USER_DATA,
   world: DEFAULT_WORLD_INFO,
   worldIndex: EMPTY_INDEX,
+  worldMapReady: false,
+  worldMapVersion: 0,
   backSteps: 0,
   route: null,
   selectedPinId: null,
@@ -188,9 +197,18 @@ export const useStore = create<AppState>((set) => ({
       const changed = layer !== undefined && s.snapshot?.local?.layer !== undefined && layer !== s.snapshot.local.layer
       return { snapshot, viewLayerOverride: changed ? null : s.viewLayerOverride }
     }),
-  setGame: (game, gamePins, user, world, worldIndex, session) =>
-    set({ game, map: game.maps[0] ?? null, gamePins, user, world, worldIndex, route: null, ...session }),
-  setWorld: (world, worldIndex, user, session) => set({ world, worldIndex, user, route: null, ...session }),
+  setGame: (game, gamePins, user, world, worldIndex, session, worldMapReady = false) =>
+    set({ game, map: game.maps[0] ?? null, gamePins, worldMapReady, user, world, worldIndex, route: null, ...session }),
+  setWorld: (world, worldIndex, user, session, worldPins) =>
+    set({
+      world,
+      worldIndex,
+      user,
+      route: null,
+      ...session,
+      ...(worldPins === undefined ? {} : { gamePins: worldPins ?? [], worldMapReady: worldPins !== null }),
+    }),
+  setWorldMap: (gamePins, tiles) => set((s) => ({ gamePins, worldMapReady: true, worldMapVersion: s.worldMapVersion + (tiles ? 1 : 0) })),
   setWorldIndex: (worldIndex) => set({ worldIndex }),
   setBackSteps: (backSteps) => set({ backSteps }),
   setRoute: (route) => set({ route }),

@@ -12,6 +12,15 @@ const CLOUD_CELLS = 70
 const WISP_CELLS = 14
 /** Largest side of the cloud texture: on huge maps it's stretched instead of redone. */
 const MAX_CLOUD_SIDE = 1024
+/** Largest side of the mask: blurring and breaking up its edge is most of a redraw. */
+const MAX_MASK_SIDE = 1024
+/** Largest side of the finished image, which is redrawn and uploaded while exploring. */
+const MAX_IMAGE_SIDE = 2048
+
+/** Image pixels per cell for a fog: fewer on huge maps, where cells are large anyway. */
+export function imageScale(fog: Pick<Fog, 'width' | 'height'>): number {
+  return Math.min(SCALE, MAX_IMAGE_SIDE / Math.max(fog.width, fog.height))
+}
 
 function canvasOf(width: number, height: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
   const canvas = document.createElement('canvas')
@@ -37,31 +46,40 @@ function cloudCanvas(fog: Fog): HTMLCanvasElement {
   return canvas
 }
 
-/** Where fog stays, with ragged edges, one pixel per cell. */
+/** Mask pixels per cell: fewer than one on huge maps, where a cell's edge can't be seen. */
+export function maskScale(fog: Pick<Fog, 'width' | 'height'>): number {
+  return Math.min(1, MAX_MASK_SIDE / Math.max(fog.width, fog.height))
+}
+
+/** Where fog stays, with ragged edges. */
 function fogMask(fog: Fog): HTMLCanvasElement {
-  const { width, height } = fog
-  const pad = EDGE_BLUR * 3
+  const scale = maskScale(fog)
+  const width = Math.round(fog.width * scale)
+  const height = Math.round(fog.height * scale)
+  const blur = EDGE_BLUR * scale
+  const pad = Math.ceil(blur * 3)
   // Past the map's edge counts as fog, so blurring doesn't thin it out along the rim.
   const [padded, paddedCtx] = canvasOf(width + pad * 2, height + pad * 2)
   paddedCtx.fillRect(0, 0, padded.width, padded.height)
   paddedCtx.clearRect(pad, pad, width, height)
-  const [cells, cellsCtx] = canvasOf(width, height)
-  cellsCtx.putImageData(new ImageData(fogPixels(fog, [0, 0, 0]), width, height), 0, 0)
-  paddedCtx.drawImage(cells, pad, pad)
+  const [cells, cellsCtx] = canvasOf(fog.width, fog.height)
+  cellsCtx.putImageData(new ImageData(fogPixels(fog, [0, 0, 0]), fog.width, fog.height), 0, 0)
+  paddedCtx.drawImage(cells, pad, pad, width, height)
 
   const [mask, maskCtx] = canvasOf(width, height)
-  maskCtx.filter = `blur(${EDGE_BLUR}px)`
+  maskCtx.filter = `blur(${blur}px)`
   maskCtx.drawImage(padded, -pad, -pad)
   maskCtx.filter = 'none'
   const pixels = maskCtx.getImageData(0, 0, width, height)
-  wispyEdge(pixels.data, width, height, WISP_CELLS)
+  wispyEdge(pixels.data, width, height, WISP_CELLS * scale)
   maskCtx.putImageData(pixels, 0, 0)
   return mask
 }
 
 /** The fog over the whole map, north up. */
 export function drawFog(fog: Fog): HTMLCanvasElement {
-  const [canvas, ctx] = canvasOf(fog.width * SCALE, fog.height * SCALE)
+  const scale = imageScale(fog)
+  const [canvas, ctx] = canvasOf(Math.round(fog.width * scale), Math.round(fog.height * scale))
   ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(cloudCanvas(fog), 0, 0, canvas.width, canvas.height)
   ctx.globalCompositeOperation = 'destination-in'

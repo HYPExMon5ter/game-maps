@@ -24,6 +24,12 @@ pub struct GameEntry {
     /// Has an agent provider (live location, teleport); otherwise a static map.
     #[serde(default)]
     pub live_features: bool,
+    /// Worlds are generated, so the map comes from the running game, not a map pack.
+    #[serde(default)]
+    pub world_maps: bool,
+    /// Pins and pings can go on the game's own map.
+    #[serde(default)]
+    pub game_map: bool,
 }
 
 impl GameEntry {
@@ -66,10 +72,12 @@ pub struct AssetRoots<'a> {
     pub games: &'a Path,
     /// Installed map packs (`<packs>/<game id>/...`).
     pub packs: &'a Path,
+    /// Maps made from the running game (`<worlds>/<game id>/<world id>/...`).
+    pub worlds: &'a Path,
     pub user: &'a Path,
 }
 
-/// Resolves a protocol path (`games/...` or `user/...`) to the files that may serve it,
+/// Resolves a protocol path (`games/...`, `worlds/...` or `user/...`) to the files that may serve it,
 /// in priority order. Rejects traversal and absolute components.
 pub fn resolve_asset(path: &str, roots: &AssetRoots) -> Vec<PathBuf> {
     let path = path.trim_start_matches('/');
@@ -81,6 +89,7 @@ pub fn resolve_asset(path: &str, roots: &AssetRoots) -> Vec<PathBuf> {
     match root {
         // A downloaded map pack wins over bundled/development data.
         "games" => vec![roots.packs.join(rel), roots.games.join(rel)],
+        "worlds" => vec![roots.worlds.join(rel)],
         "user" => vec![roots.user.join(rel)],
         _ => Vec::new(),
     }
@@ -103,13 +112,14 @@ mod tests {
 
     #[test]
     fn resolves_only_inside_roots() {
-        let (g, p, u) = (Path::new("C:/g"), Path::new("C:/p"), Path::new("C:/u"));
-        let roots = AssetRoots { games: g, packs: p, user: u };
+        let (g, p, w, u) = (Path::new("C:/g"), Path::new("C:/p"), Path::new("C:/w"), Path::new("C:/u"));
+        let roots = AssetRoots { games: g, packs: p, worlds: w, user: u };
         assert_eq!(
             resolve_asset("/games/sotf/tiles/0/0/0.webp", &roots),
             vec![p.join("sotf/tiles/0/0/0.webp"), g.join("sotf/tiles/0/0/0.webp")]
         );
         assert_eq!(resolve_asset("user/icons/a.png", &roots), vec![u.join("icons/a.png")]);
+        assert_eq!(resolve_asset("worlds/valheim/world-1/pins.json", &roots), vec![w.join("valheim/world-1/pins.json")]);
         assert!(resolve_asset("games/../secret", &roots).is_empty());
         assert!(resolve_asset("other/x", &roots).is_empty());
         assert!(resolve_asset("games/C:/x", &roots).is_empty());
@@ -123,6 +133,16 @@ mod tests {
         assert_eq!(sotf.process, "SonsOfTheForest.exe");
         assert_eq!(sotf.steam_app_id, Some(1326470));
         assert_eq!(sotf.hotkeys()[0].vk, 0x4D);
+    }
+
+    #[test]
+    fn parses_valheim_game_json() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../games");
+        let games = load_registry(&path);
+        let game = games.iter().find(|g| g.id == "valheim").expect("valheim registered");
+        assert_eq!(game.process, "valheim.exe");
+        assert_eq!(game.steam_app_id, Some(892970));
+        assert!(game.live_features && game.world_maps);
     }
 
     #[test]

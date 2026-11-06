@@ -61,6 +61,17 @@ in the folder is generated and published as a map pack.
   and a `projection` that maps world coordinates onto the tile grid.
 - `categories[]`: id, name, icon, color, default visibility.
 
+A game whose worlds are generated sets `worldMaps`: no map pack can have them, so each
+world's map comes from the running game. The first time a world loads the agent draws it
+(`Provider::read_world_map`, on a thread of its own after one read on the main thread) into
+`<data>/worlds/<game>/<world>/`, where `src-tauri/src/worldmaps.rs` cuts it into tiles
+and saves its pins. They're served under `worlds/...`, so the world's map stays available
+with the game closed. Pins and explored areas are read again as the map opens.
+
+A game that sets `gameMap` and whose provider reports `Capabilities::game_map` also gets the
+player's pins and pings on its own map (`Provider::set_game_pins`, `Provider::game_ping`),
+so players without Game Maps see them, and those players' pings come back as markers.
+
 A game with only `game.json`, tiles and pins works as a static map. A provider in
 `crates/agent/src/provider/` adds live location, teleport, other players and the
 in-game hotkey. The agent reports which of these it supports when it connects.

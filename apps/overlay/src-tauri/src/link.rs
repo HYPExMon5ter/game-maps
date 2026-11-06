@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use game_maps_protocol::{
     decode_line, encode_line, pipe_name, AgentMessage, AppMessage, Capabilities, CompanionOrderOption, Hotkey, HotkeyAction, LogLevel, TeleportTarget,
-    GroundPoint, PathInfo, RouteCheck, Vec3, WorldExport, WorldLayer, WorldSnapshot, PROTOCOL_VERSION,
+    GamePin, GroundPoint, PathInfo, RouteCheck, Vec3, WorldExport, WorldLayer, WorldMap, WorldSnapshot, PROTOCOL_VERSION,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -27,6 +27,7 @@ use crate::injector::{self, InjectError};
 use crate::map_window;
 use crate::overlay;
 use crate::settings::{self, HookMode};
+use crate::worldmaps;
 
 pub const SNAPSHOT_HZ: u32 = 30;
 /// Sampling while nothing is on screen: the agent samples on the game's main thread.
@@ -38,6 +39,8 @@ const GAME_SCAN_INTERVAL: Duration = Duration::from_secs(3);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const TELEPORT_TIMEOUT: Duration = Duration::from_secs(5);
 const PATH_TIMEOUT: Duration = Duration::from_secs(3);
+/// Drawing a world's terrain takes a moment, on top of the save.
+const WORLD_MAP_TIMEOUT: Duration = Duration::from_secs(30);
 /// Under the UI's 1.5 s between routes: a window asking again still gets a fresh one.
 const ROUTE_SHARED_FOR: Duration = Duration::from_millis(1200);
 /// Route checks and ground probes take a frame or two in the game.
@@ -183,6 +186,7 @@ pub struct AgentLink {
     wake: Notify,
     teleports: Pending<()>,
     exports: Pending<WorldExport>,
+    world_maps: Pending<WorldMap>,
     paths: Pending<PathInfo>,
     route_checks: Pending<RouteCheck>,
     ground_probes: Pending<Vec<GroundPoint>>,
@@ -241,6 +245,7 @@ impl AgentLink {
             wake: Notify::new(),
             teleports: Pending::default(),
             exports: Pending::default(),
+            world_maps: Pending::default(),
             paths: Pending::default(),
             route_checks: Pending::default(),
             ground_probes: Pending::default(),
@@ -384,6 +389,37 @@ impl AgentLink {
     /// Asks the agent to scan the loaded world for items and points of interest.
     pub async fn export_world(&self) -> Result<WorldExport, String> {
         self.request(&self.exports, EXPORT_TIMEOUT, |request_id| AppMessage::ExportWorld { request_id }).await
+    }
+
+    /// The world the game last reported.
+    pub fn world_id(&self) -> Option<String> {
+        self.inner.lock().unwrap().world_id.clone()
+    }
+
+    /// Asks the agent to read the loaded world's map into `dir` (see `worldmaps`).
+    pub async fn read_world_map(&self, dir: String, terrain: bool) -> Result<WorldMap, String> {
+        self.request(&self.world_maps, WORLD_MAP_TIMEOUT, |request_id| AppMessage::ReadWorldMap { request_id, dir, terrain }).await
+    }
+
+    /// Puts the player's pins on the game's own map.
+    pub fn set_game_pins(&self, pins: Vec<GamePin>) -> Result<(), String> {
+        self.send(AppMessage::SetGamePins { pins })
+    }
+
+    /// The player's options for this game that the agent acts on.
+    pub fn set_game_options(&self, options: std::collections::BTreeMap<String, bool>) -> Result<(), String> {
+        self.send(AppMessage::SetGameOptions { options })
+    }
+
+    /// Pings a spot the way the game does, for everyone in the world.
+    pub fn game_ping(&self, position: Vec3) -> Result<(), String> {
+        self.send(AppMessage::GamePing { position })
+    }
+
+    fn send(&self, message: AppMessage) -> Result<(), String> {
+        let inner = self.inner.lock().unwrap();
+        let sender = inner.sender.as_ref().ok_or("not connected to the game")?;
+        sender.send(message).map_err(|_| "connection closed".to_owned())
     }
 
     /// A walking route from the player to `to` on the game's navigation mesh.
@@ -710,6 +746,7 @@ impl AgentLink {
         }
         self.teleports.fail_all("connection closed");
         self.exports.fail_all("connection closed");
+        self.world_maps.fail_all("connection closed");
         self.paths.fail_all("connection closed");
         self.route_checks.fail_all("connection closed");
         self.ground_probes.fail_all("connection closed");
@@ -762,6 +799,9 @@ impl AgentLink {
                     // "Teleport back" has nowhere to go in another world.
                     inner.world_id = Some(world.id.clone());
                     inner.teleported_from.clear();
+                    if game.world_maps {
+                        worldmaps::refresh_soon(app, &game.id, &world.id);
+                    }
                 }
                 inner.snapshot = Some((*snap).clone());
                 if ui_wants_update(app, &mut inner) {
@@ -814,6 +854,12 @@ impl AgentLink {
             AgentMessage::CompanionOrdersResult { request_id, orders, error } => self.companion_orders.resolve(request_id, orders, error, "no orders"),
             AgentMessage::CompanionOrderResult { request_id, ok, error } => self.companion_results.resolve(request_id, ok.then_some(()), error, "order failed"),
             AgentMessage::ExportResult { request_id, export, error } => self.exports.resolve(request_id, export, error, "export failed"),
+            AgentMessage::ZonePins(zone) => {
+                if let Some(world) = self.world_id() {
+                    worldmaps::remember(app, &game.id, &world, zone);
+                }
+            }
+            AgentMessage::WorldMapResult { request_id, map, error } => self.world_maps.resolve(request_id, map, error, "could not read the map"),
             AgentMessage::Log { level, message } => {
                 match level {
                     LogLevel::Debug => log::debug!("[agent] {message}"),

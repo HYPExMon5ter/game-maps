@@ -324,6 +324,7 @@ fn apply_with(app: &AppHandle, next: OverlayMode, return_focus: bool) {
         if let Some(link) = app.try_state::<Arc<AgentLink>>() {
             link.map_opened();
         }
+        crate::worldmaps::map_opened(app);
     }
     let _ = app.emit("overlay-mode", next);
     update_stream_rate(app);

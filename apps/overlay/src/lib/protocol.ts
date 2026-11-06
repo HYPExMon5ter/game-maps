@@ -14,6 +14,8 @@ export interface Capabilities {
   teleport: boolean
   other_players: boolean
   hotkeys: boolean
+  /** Pins and pings can go on the game's own map. */
+  game_map?: boolean
 }
 
 export interface LocalPlayer {
@@ -97,6 +99,10 @@ export interface WorldSnapshot {
   dropped_bag?: Vec3
   /** The player is dying or dead right now. */
   dying?: boolean
+  /** Inside a dungeon, in games where that isn't its own map layer. */
+  indoors?: boolean
+  /** Milestones reached in this world, as the game's checklist names them. */
+  progress?: string[]
 }
 
 /** What changed since the last snapshot; `markers` and `creatures` only when they did. */
@@ -110,6 +116,8 @@ export interface SnapshotUpdate {
   environment?: Environment
   dropped_bag?: Vec3
   dying?: boolean
+  indoors?: boolean
+  progress?: string[]
 }
 
 export interface CompanionStat {
@@ -144,6 +152,8 @@ export interface Environment {
   minute: number
   season: string | null
   weather: string | null
+  /** For games with wind that matters. */
+  wind?: { degrees: number; strength: number }
 }
 
 export type WorldKind = 'single_player' | 'hosted' | 'joined'

@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 /// Bumped on any incompatible change. Both sides refuse to talk across versions.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// Name of the pipe an agent serves for a given game process id.
 pub fn pipe_name(pid: u32) -> String {
@@ -62,6 +62,9 @@ pub struct Capabilities {
     pub teleport: bool,
     pub other_players: bool,
     pub hotkeys: bool,
+    /// Pins and pings can go on the game's own map, so players without the app see them.
+    #[serde(default)]
+    pub game_map: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -153,6 +156,12 @@ pub struct WorldSnapshot {
     /// The player is dying or dead right now.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dying: bool,
+    /// The player is inside a dungeon, in games where that's not its own map layer.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub indoors: bool,
+    /// Milestones reached in this world, as `game.json`'s checklist names them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub progress: Vec<String>,
 }
 
 /// What changed since the last [`WorldSnapshot`]. Sent in its place: looking around would
@@ -175,6 +184,10 @@ pub struct SnapshotUpdate {
     pub dropped_bag: Option<Vec3>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dying: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub indoors: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub progress: Vec<String>,
 }
 
 impl SnapshotUpdate {
@@ -187,6 +200,8 @@ impl SnapshotUpdate {
         snapshot.environment = self.environment;
         snapshot.dropped_bag = self.dropped_bag;
         snapshot.dying = self.dying;
+        snapshot.indoors = self.indoors;
+        snapshot.progress = self.progress;
         if let Some(markers) = self.markers {
             snapshot.markers = markers;
         }
@@ -237,6 +252,18 @@ pub struct Environment {
     pub minute: u8,
     pub season: Option<String>,
     pub weather: Option<String>,
+    /// For games with wind that matters, like sailing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wind: Option<Wind>,
+}
+
+/// Which way the wind blows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Wind {
+    /// Where it blows to, clockwise from north.
+    pub degrees: u16,
+    /// How strong it is, 0 to 100.
+    pub strength: u8,
 }
 
 /// A world or save, so the app can keep found items, pins and explored areas apart
@@ -427,6 +454,54 @@ pub enum AgentMessage {
     GroundProbeResult { request_id: u32, points: Option<Vec<GroundPoint>>, error: Option<String> },
     CompanionOrdersResult { request_id: u32, orders: Option<Vec<CompanionOrderOption>>, error: Option<String> },
     CompanionOrderResult { request_id: u32, ok: bool, error: Option<String> },
+    WorldMapResult { request_id: u32, map: Option<WorldMap>, error: Option<String> },
+    /// What's in an area of the world now, replacing what it had.
+    ZonePins(ZonePins),
+}
+
+/// Everything remembered in one area (see `Provider::next_zone_pins`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ZonePins {
+    pub x: i32,
+    pub y: i32,
+    pub pins: Vec<WorldPin>,
+}
+
+/// What the agent read from a world whose map only exists at runtime (see
+/// `AppMessage::ReadWorldMap`). The pictures are too big for the pipe: they're in the
+/// folder the app gave, as `terrain.rgb` and `explored.bin`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorldMap {
+    /// Pixels per side of `terrain.rgb` (8-bit RGB, row 0 is the map's north edge).
+    pub size: u32,
+    pub pins: Vec<WorldPin>,
+}
+
+/// A pin the player placed in the app, to show on the game's own map.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GamePin {
+    pub name: String,
+    pub position: Vec3,
+}
+
+/// A place in a world, in the same form as a map pack's pins.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorldPin {
+    /// Stable for this place in this world.
+    pub id: String,
+    /// Category id from the game's `game.json`.
+    pub category: String,
+    pub name: String,
+    pub position: Vec3,
+    /// Only shown once the player chooses to, or finds it the way the game intends.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+    /// Seconds until it can be gathered again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub respawn_seconds: Option<u32>,
+    /// When it can be gathered again (ms since the epoch), set by the app on arrival.
+    #[serde(default, rename = "respawnAt", skip_serializing_if = "Option::is_none")]
+    pub respawn_at: Option<u64>,
 }
 
 /// Which legs of a route can't be walked right now (see `AppMessage::CheckRoute`).
@@ -479,6 +554,15 @@ pub enum AppMessage {
     CompanionOrders { request_id: u32, companion: String },
     /// Tells `companion` to do `order` (an id from `CompanionOrders`).
     CompanionOrder { request_id: u32, companion: String, order: String },
+    /// Reads the loaded world's map into `dir`: where it's explored, always, and the
+    /// terrain if `terrain` is set (it's the same every time, so it's read once).
+    ReadWorldMap { request_id: u32, dir: String, terrain: bool },
+    /// The player's pins in this world, all of them: the game's map is brought in line.
+    SetGamePins { pins: Vec<GamePin> },
+    /// Pings `position` the way the game does, for everyone in the world.
+    GamePing { position: Vec3 },
+    /// The player's options for this game that the agent acts on, by name.
+    SetGameOptions { options: BTreeMap<String, bool> },
     /// Unhook and unload the agent from the game process.
     Detach,
 }
@@ -506,7 +590,7 @@ mod tests {
                 protocol_version: PROTOCOL_VERSION,
                 agent_version: "0.1.0".into(),
                 game: Some("sons-of-the-forest".into()),
-                capabilities: Capabilities { live_location: true, teleport: true, other_players: true, hotkeys: true },
+                capabilities: Capabilities { live_location: true, teleport: true, other_players: true, hotkeys: true, game_map: false },
                 module: Some("game_maps_agent-0123.dll".into()),
             },
             AgentMessage::Snapshot(Box::new(WorldSnapshot {
@@ -543,9 +627,11 @@ mod tests {
                     activity: Some("Logs".into()),
                     stats: vec![CompanionStat { name: "Health".into(), value: 90.0, max: 100.0 }],
                 }],
-                environment: Some(Environment { day: Some(3), hour: 14, minute: 5, season: Some("Summer".into()), weather: None }),
+                environment: Some(Environment { day: Some(3), hour: 14, minute: 5, season: Some("Summer".into()), weather: None, wind: None }),
                 dropped_bag: Some(Vec3::new(7.0, 8.0, 9.0)),
                 dying: true,
+                indoors: false,
+                progress: vec![],
             })),
             AgentMessage::HotkeyPressed { action: HotkeyAction::ToggleMap },
             AgentMessage::HotkeyPressed { action: HotkeyAction::QuickMark },

@@ -458,6 +458,15 @@ impl Field {
         std::ptr::read_unaligned((obj as *const u8).add(self.offset) as *const T)
     }
 
+    /// Reads this field of a struct stored inline, e.g. an array element.
+    ///
+    /// # Safety
+    /// `value` must point at a struct containing this field, and `T` be its storage type.
+    pub unsafe fn get_inline<T: Copy>(&self, value: *const u8) -> T {
+        debug_assert!(!self.is_static);
+        std::ptr::read_unaligned(value.add(self.offset - layout::OBJECT_HEADER) as *const T)
+    }
+
     /// Writes an instance field. Not for references: those need the GC's write barrier.
     ///
     /// # Safety
@@ -478,6 +487,17 @@ pub struct ManagedArray {
 }
 
 impl ManagedArray {
+    /// The first `len` elements of an existing array, at most its length.
+    ///
+    /// # Safety
+    /// `array` must be a live managed array.
+    pub unsafe fn of(rt: &Runtime, array: *mut ManagedObject, len: usize) -> Self {
+        let class = rt.backend.object_class(array as Ptr);
+        let stride = rt.backend.array_element_size(class).max(0) as usize;
+        let total = *((array as *const u8).add(layout::ARRAY_LENGTH) as *const usize);
+        Self { object: array, stride, len: len.min(total) }
+    }
+
     /// Pointer to element `i`'s data (value types are stored inline).
     ///
     /// # Safety
@@ -550,8 +570,11 @@ pub unsafe fn read_value_array<T: Copy>(array: *mut ManagedObject, max_len: usiz
     }
     let base = array as *const u8;
     let len = (*(base.add(layout::ARRAY_LENGTH) as *const usize)).min(max_len);
-    let data = base.add(layout::ARRAY_DATA) as *const T;
-    (0..len).map(|i| std::ptr::read_unaligned(data.add(i))).collect()
+    let mut out = Vec::<T>::with_capacity(len);
+    // One copy: these can be megabytes, and this runs on the game's main thread.
+    std::ptr::copy_nonoverlapping(base.add(layout::ARRAY_DATA), out.as_mut_ptr() as *mut u8, len * std::mem::size_of::<T>());
+    out.set_len(len);
+    out
 }
 
 /// Elements of a managed reference-type array (`T[]` where `T` is a class).

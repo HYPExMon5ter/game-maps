@@ -3,9 +3,12 @@
 // doesn't already cover.
 
 import type { Pin } from './game'
-import type { Marker } from './protocol'
+import type { Marker, Vec3 } from './protocol'
 
 /** A live marker this close to a static pin with the same icon is that pin. */
+/** Icon of pings that come from the game (see the Valheim provider). */
+export const GAME_PING_ICON = 'builtin:radio'
+
 const SAME_PLACE_METERS = 6
 
 export class LiveMarkerFilter {
@@ -32,6 +35,23 @@ export class LiveMarkerFilter {
       return !same.some((p) => Math.hypot(p.position.x - m.position.x, p.position.y - m.position.y, p.position.z - m.position.z) < limit)
     })
   }
+}
+
+/** How close a game's ping is to an app ping for them to be the same one. */
+const SAME_PING_METERS = 15
+
+/**
+ * `markers` without game pings the app already shows: its pings go through the game too,
+ * and come back as markers.
+ */
+export function withoutAppPings(markers: Marker[], pings: { position: Vec3 }[], unitsPerMeter: number): Marker[] {
+  const limit = SAME_PING_METERS * unitsPerMeter
+  return markers.filter((m) => m.icon !== GAME_PING_ICON || !pings.some((p) => Math.hypot(p.position.x - m.position.x, p.position.z - m.position.z) < limit))
+}
+
+/** Icon reference for a marker: a game's icon, unless it names another kind (`builtin:bed`). */
+export function markerIcon(m: Marker): string {
+  return m.icon?.includes(':') ? m.icon : `game:${m.icon}`
 }
 
 /** Display name for a GPS icon, e.g. `GolfCartIcon` -> `Golf Cart`. */

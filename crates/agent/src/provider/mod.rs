@@ -3,14 +3,16 @@
 
 mod sotf;
 mod sunkenland;
+mod valheim;
 
-use game_maps_protocol::{Capabilities, CompanionOrderOption, PathInfo, TeleportTarget, Vec3, WorldExport, WorldSnapshot};
+use game_maps_protocol::{Capabilities, CompanionOrderOption, GamePin, PathInfo, ZonePins, TeleportTarget, Vec3, WorldExport, WorldSnapshot};
 
 /// How far (world units) route ends may be from Unity's NavMesh.
 const NAVMESH_SNAP: f32 = 25.0;
 use unity_runtime::{Physics, Runtime, Unity, Vector3};
 
 use crate::hook::HookTarget;
+use crate::worldmap::WorldMapCapture;
 
 /// Per-call context for main-thread work.
 pub struct Cx<'a> {
@@ -102,6 +104,49 @@ pub trait Provider: Send {
         Err("this game has no companion orders".into())
     }
 
+    /// Reads the map of the loaded world, for games whose worlds are generated, so no
+    /// map pack can have them. With `terrain` it includes the picture of the land. An
+    /// error may only mean the game hasn't finished building the map: the app asks again.
+    ///
+    /// # Safety
+    /// Must run on the game's main thread.
+    unsafe fn read_world_map(&mut self, _cx: &Cx, _terrain: bool) -> Result<WorldMapCapture, String> {
+        Err("this game has no world maps".into())
+    }
+
+    /// Brings the game's own map in line with the player's pins (see
+    /// `Capabilities::game_map`). It may have to wait for the map to be ready.
+    ///
+    /// # Safety
+    /// Must run on the game's main thread.
+    unsafe fn set_game_pins(&mut self, _cx: &Cx, _pins: Vec<GamePin>) {}
+
+    /// Pings `position` the way the game does, for everyone in the world.
+    ///
+    /// # Safety
+    /// Must run on the game's main thread.
+    unsafe fn game_ping(&mut self, _cx: &Cx, _position: Vec3) -> Result<(), String> {
+        Err("this game has no pings".into())
+    }
+
+    /// The app went away: undo what only makes sense while it's there.
+    ///
+    /// # Safety
+    /// Must run on the game's main thread.
+    unsafe fn app_left(&mut self, _cx: &Cx) {}
+
+    /// The player's options for this game (see `AppMessage::SetGameOptions`).
+    fn set_options(&mut self, _options: &std::collections::BTreeMap<String, bool>) {}
+
+    /// Called with each snapshot, for games that remember what's around the player: what
+    /// changed in the next area, if anything. Must stay cheap however much is around.
+    ///
+    /// # Safety
+    /// Must run on the game's main thread.
+    unsafe fn next_zone_pins(&mut self, _cx: &Cx) -> Option<ZonePins> {
+        None
+    }
+
     /// Whether the game is capturing text input (chat), so hotkeys must not fire.
     ///
     /// # Safety
@@ -117,6 +162,7 @@ pub fn detect(rt: &Runtime) -> Option<Box<dyn Provider>> {
     sotf::SonsOfTheForest::detect(rt)
         .map(|p| Box::new(p) as Box<dyn Provider>)
         .or_else(|| sunkenland::Sunkenland::detect(rt).map(|p| Box::new(p) as Box<dyn Provider>))
+        .or_else(|| valheim::Valheim::detect(rt).map(|p| Box::new(p) as Box<dyn Provider>))
 }
 
 /// Layers games commonly use for things that aren't the world's solid geometry.

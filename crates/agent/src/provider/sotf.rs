@@ -544,6 +544,7 @@ impl Provider for SonsOfTheForest {
             teleport: self.local.teleport.is_some(),
             other_players: self.remote.is_some(),
             hotkeys: true,
+            game_map: false,
         }
     }
 
@@ -640,6 +641,7 @@ impl Provider for SonsOfTheForest {
             environment: self.world_status.clone(),
             dropped_bag: self.dropped_bag,
             dying: self.is_dying(cx),
+            ..Default::default()
         }
     }
 

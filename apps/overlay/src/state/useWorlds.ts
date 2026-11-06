@@ -3,20 +3,32 @@
 
 import { emit, listen } from '@tauri-apps/api/event'
 import { useEffect } from 'react'
+import { loadWorldPins, type GameDefinition, type Pin } from '../lib/game'
 import type { GameWorld } from '../lib/protocol'
 import { adoptUnsaved, discardUnsavedWorlds, discardWorld, enterWorld, loadPrefs, loadSession, loadWorldData, loadWorldIndex, rememberLastWorld, userData } from './persist'
+import { gameSettings } from '../settings/model'
+import { useSettings } from '../settings/store'
 import { flushFog } from './fog'
 import { useStore, type GameUserData, type MapSession } from './store'
 import { DEFAULT_WORLD, DEFAULT_WORLD_INFO, isUnsaved, type WorldIndex, type WorldInfo } from './worlds'
 
 /** Everything the map needs to show one world of a game. */
-export async function loadWorldView(gameId: string, worldId?: string): Promise<{ user: GameUserData; world: WorldInfo; index: WorldIndex; session: MapSession }> {
+export async function loadWorldView(
+  game: GameDefinition,
+  worldId?: string,
+): Promise<{ user: GameUserData; world: WorldInfo; index: WorldIndex; session: MapSession; pins?: Pin[] | null }> {
+  const gameId = game.id
   const index = await loadWorldIndex(gameId)
   const id = worldId ?? index.last ?? DEFAULT_WORLD
   const unsaved = isUnsaved(id) ? { id, name: null, kind: null, lastPlayed: 0 } : null
   const world = unsaved ?? index.worlds.find((w) => w.id === id) ?? DEFAULT_WORLD_INFO
-  const [prefs, data, session] = await Promise.all([loadPrefs(gameId), loadWorldData(gameId, world.id), loadSession(gameId, world.id)])
-  return { user: userData(prefs, data), world, index, session }
+  const [prefs, data, session, pins] = await Promise.all([
+    loadPrefs(gameId),
+    loadWorldData(gameId, world.id),
+    loadSession(gameId, world.id),
+    game.worldMaps ? loadWorldPins(gameId, world.id, gameSettings(useSettings.getState().ui, gameId).showSilver) : undefined,
+  ])
+  return { user: userData(prefs, data), world, index, session, pins }
 }
 
 /** Latest switch wins when several overlap. */
@@ -32,10 +44,10 @@ export async function showWorld(worldId: string, remember = true): Promise<void>
   loading = worldId
   const seq = ++switching
   try {
-    const view = await loadWorldView(game.id, worldId)
+    const view = await loadWorldView(game, worldId)
     const index = remember ? await rememberLastWorld(game.id, view.index, view.world.id) : view.index
     if (seq === switching && useStore.getState().game?.id === game.id) {
-      useStore.getState().setWorld(view.world, index, view.user, view.session)
+      useStore.getState().setWorld(view.world, index, view.user, view.session, view.pins)
     }
   } finally {
     if (loading === worldId) loading = null
@@ -62,9 +74,9 @@ async function followGameWorld(world: GameWorld) {
     }
     const index = await enterWorld(game.id, world, worldIndex)
     if (!isUnsaved(world.id)) await discardUnsavedWorlds(game.id)
-    const view = await loadWorldView(game.id, world.id)
+    const view = await loadWorldView(game, world.id)
     if (seq === switching && useStore.getState().game?.id === game.id) {
-      useStore.getState().setWorld(view.world, index, view.user, view.session)
+      useStore.getState().setWorld(view.world, index, view.user, view.session, view.pins)
     }
     void emit(ENTERED, { gameId: game.id, worldId: world.id } satisfies Entered)
   } finally {

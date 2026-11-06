@@ -95,6 +95,10 @@ async fn session(shared: &'static Shared, server: NamedPipeServer, outbox: &mut 
                     Ok(AppMessage::ProbeGround { request_id, points }) => shared.push_command(Command::ProbeGround { request_id, points }),
                     Ok(AppMessage::CompanionOrders { request_id, companion }) => shared.push_command(Command::CompanionOrders { request_id, companion }),
                     Ok(AppMessage::CompanionOrder { request_id, companion, order }) => shared.push_command(Command::CompanionOrder { request_id, companion, order }),
+                    Ok(AppMessage::ReadWorldMap { request_id, dir, terrain }) => shared.push_command(Command::ReadWorldMap { request_id, dir, terrain }),
+                    Ok(AppMessage::SetGamePins { pins }) => shared.push_command(Command::SetGamePins(pins)),
+                    Ok(AppMessage::GamePing { position }) => shared.push_command(Command::GamePing(position)),
+                    Ok(AppMessage::SetGameOptions { options }) => shared.push_command(Command::SetGameOptions(options)),
                     Ok(AppMessage::Detach) => return true,
                     Err(e) => shared.log(LogLevel::Warn, format!("bad message from app: {e}")),
                 }

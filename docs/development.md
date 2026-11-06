@@ -98,7 +98,8 @@ Add `--preview-only` for a quick 2048 px `preview.png`.
    `process` (the executable name), `steamAppId` (for the Play button),
    `defaultHotkeys`, map projection and categories. Set `liveFeatures` to `false`
    until the game has a provider (step 4).
-2. Generate tiles, icons and `pins.json` into `games/<id>/`.
+2. Generate tiles, icons and `pins.json` into `games/<id>/`. For a game with generated
+   worlds, set `worldMaps` in `game.json` and implement `Provider::read_world_map` instead.
 3. Add the `game.json` to `bundle.resources` in `apps/overlay/src-tauri/tauri.conf.json`.
 4. For live location and teleport, add a provider in `crates/agent/src/provider/` and
    register it in `provider::detect`. IL2CPP and Mono games use the same runtime API.

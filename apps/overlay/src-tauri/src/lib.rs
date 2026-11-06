@@ -15,11 +15,12 @@ mod recovery;
 mod report;
 mod settings;
 mod updates;
+mod worldmaps;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use game_maps_protocol::{CompanionOrderOption, GroundPoint, Hotkey, HotkeyAction, PathInfo, RouteCheck, TeleportTarget, Vec3, WorldSnapshot};
+use game_maps_protocol::{CompanionOrderOption, GamePin, GroundPoint, Hotkey, HotkeyAction, PathInfo, RouteCheck, TeleportTarget, Vec3, WorldSnapshot};
 use tauri::http::{header, Response, StatusCode};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -47,6 +48,8 @@ struct Paths {
     /// Bundled game definitions (in development: the repository's `games/`).
     games: PathBuf,
     user: PathBuf,
+    /// Maps made from the running game (see `worldmaps`).
+    worlds: PathBuf,
 }
 
 struct Registry(Vec<GameEntry>);
@@ -204,6 +207,27 @@ fn open_posthog_page(app: AppHandle) -> Result<(), String> {
 
 /// Dev tooling: scans the loaded world and saves it as JSON under `exports/`.
 /// Returns the file path. `tools/pins` turns exports into a game's pin data.
+#[tauri::command]
+fn set_game_pins(link: State<'_, Arc<AgentLink>>, pins: Vec<GamePin>) -> Result<(), String> {
+    link.set_game_pins(pins)
+}
+
+#[tauri::command]
+fn set_game_options(link: State<'_, Arc<AgentLink>>, options: std::collections::BTreeMap<String, bool>) -> Result<(), String> {
+    link.set_game_options(options)
+}
+
+#[tauri::command]
+fn save_host_pins(app: AppHandle, link: State<'_, Arc<AgentLink>>, pins: Vec<game_maps_protocol::WorldPin>) -> Result<(), String> {
+    let (game, world) = link.status().game_id.zip(link.world_id()).ok_or("not in a world")?;
+    worldmaps::save_host_pins(&app, &game, &world, &pins)
+}
+
+#[tauri::command]
+fn game_ping(link: State<'_, Arc<AgentLink>>, position: Vec3) -> Result<(), String> {
+    link.game_ping(position)
+}
+
 #[tauri::command]
 async fn export_world(link: State<'_, Arc<AgentLink>>, paths: State<'_, Paths>) -> Result<String, String> {
     let export = link.inner().clone().export_world().await?;
@@ -463,13 +487,13 @@ fn resolve_paths(app: &AppHandle) -> (Paths, PathBuf) {
         let res = app.path().resource_dir().expect("resource dir");
         (res.join("games"), res.join("agent").join("game_maps_agent.dll"))
     };
-    (Paths { games, user }, agent)
+    (Paths { games, user, worlds: data.join("worlds") }, agent)
 }
 
 fn serve_asset(app: &AppHandle, uri_path: &str) -> Response<Vec<u8>> {
     let paths = app.state::<Paths>();
     let packs = app.state::<MapPacks>();
-    let roots = AssetRoots { games: &paths.games, packs: packs.dir(), user: &paths.user };
+    let roots = AssetRoots { games: &paths.games, packs: packs.dir(), worlds: &paths.worlds, user: &paths.user };
     let decoded = percent_decode(uri_path);
     let found = games::resolve_asset(&decoded, &roots).into_iter().find_map(|f| std::fs::read(&f).ok().map(|b| (f, b)));
     // Map packs can be replaced while the app runs, so nothing is cached by the webview
@@ -568,7 +592,8 @@ pub fn run() {
             log::info!("Game Maps {} - games: {}, agent: {}", env!("CARGO_PKG_VERSION"), paths.games.display(), agent_dll.display());
             let registry = games::load_registry(&paths.games);
             let data_dir = paths.user.parent().unwrap().to_owned();
-            let ids: Vec<String> = registry.iter().map(|g| g.id.clone()).collect();
+            // Games whose maps come from the running game have no pack to get.
+            let ids: Vec<String> = registry.iter().filter(|g| !g.world_maps).map(|g| g.id.clone()).collect();
             app.manage(MapPacks::new(data_dir.join("maps"), &paths.games, &ids));
             app.manage(SettingsState::load(&handle));
             app.manage(Analytics::new());
@@ -610,6 +635,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_status,
             get_last_snapshot,
+            set_game_pins,
+            set_game_options,
+            save_host_pins,
+            game_ping,
             teleport,
             teleport_back,
             log_ui_error,

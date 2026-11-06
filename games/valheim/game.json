@@ -1,0 +1,362 @@
+{
+  "id": "valheim",
+  "name": "Valheim",
+  "process": "valheim.exe",
+  "steamAppId": 892970,
+  "liveFeatures": true,
+  "worldMaps": true,
+  "gameMap": true,
+  "bagName": "Your grave",
+  "engine": "unity-mono",
+  "unitsPerMeter": 1,
+  "defaultHotkeys": [
+    {
+      "action": "toggle_map",
+      "vk": 77
+    }
+  ],
+  "maps": [
+    {
+      "id": "world",
+      "name": "World",
+      "layers": [
+        "surface"
+      ],
+      "background": "#08172a",
+      "tiles": {
+        "url": "tiles/{z}/{x}/{y}.jpg",
+        "tileSize": 256,
+        "minNativeZoom": 3,
+        "maxNativeZoom": 7,
+        "maxZoom": 11
+      },
+      "projection": {
+        "east": "x",
+        "north": "z",
+        "up": "y",
+        "minEast": -12288,
+        "maxEast": 12288,
+        "minNorth": -12288,
+        "maxNorth": 12288,
+        "tileZoom": 3,
+        "tileX": 3,
+        "tileY": 3
+      }
+    }
+  ],
+  "categories": [
+    {
+      "id": "boss",
+      "name": "Bosses",
+      "color": "#e53935",
+      "icon": "builtin:skull",
+      "shape": "shield",
+      "visible": true
+    },
+    {
+      "id": "trader",
+      "name": "Traders",
+      "color": "#2e9e4f",
+      "icon": "builtin:trade",
+      "shape": "hexagon",
+      "visible": true
+    },
+    {
+      "id": "dungeon",
+      "name": "Dungeons",
+      "color": "#8e24aa",
+      "icon": "builtin:cave",
+      "shape": "square",
+      "visible": true,
+      "visitInside": true
+    },
+    {
+      "id": "runestone",
+      "name": "Runestones",
+      "color": "#1e88e5",
+      "icon": "builtin:book",
+      "shape": "diamond",
+      "visible": true,
+      "autoFound": true
+    },
+    {
+      "id": "camp",
+      "name": "Enemy camps",
+      "color": "#fb8c00",
+      "icon": "builtin:hazard",
+      "shape": "hexagon",
+      "visible": true
+    },
+    {
+      "id": "tar",
+      "name": "Tar Pits",
+      "color": "#6d4c41",
+      "icon": "builtin:hazard",
+      "shape": "diamond",
+      "visible": true
+    },
+    {
+      "id": "dragon-egg",
+      "name": "Dragon Eggs",
+      "color": "#ec407a",
+      "icon": "builtin:gem",
+      "shape": "diamond",
+      "visible": true
+    },
+    {
+      "id": "giant",
+      "name": "Giant Remains",
+      "color": "#90a4ae",
+      "icon": "builtin:skull",
+      "shape": "diamond",
+      "visible": true
+    },
+    {
+      "id": "excavation",
+      "name": "Dvergr Excavations",
+      "color": "#00acc1",
+      "icon": "builtin:pickaxe",
+      "shape": "diamond",
+      "visible": true
+    },
+    {
+      "id": "ashlands-site",
+      "name": "Ashlands Sites",
+      "color": "#ff7043",
+      "icon": "builtin:hazard",
+      "shape": "diamond",
+      "visible": true
+    },
+    {
+      "id": "copper",
+      "name": "Copper",
+      "color": "#d9804a",
+      "icon": "builtin:pickaxe",
+      "shape": "circle",
+      "visible": true,
+      "remembered": true
+    },
+    {
+      "id": "tin",
+      "name": "Tin",
+      "color": "#b0bec5",
+      "icon": "builtin:pickaxe",
+      "shape": "circle",
+      "visible": true,
+      "remembered": true
+    },
+    {
+      "id": "silver",
+      "name": "Silver",
+      "color": "#e0e0e0",
+      "icon": "builtin:gem",
+      "shape": "circle",
+      "visible": true,
+      "remembered": true
+    },
+    {
+      "id": "obsidian",
+      "name": "Obsidian",
+      "color": "#5e35b1",
+      "icon": "builtin:gem",
+      "shape": "circle",
+      "visible": true,
+      "remembered": true
+    },
+    {
+      "id": "flametal",
+      "name": "Flametal",
+      "color": "#ff5722",
+      "icon": "builtin:gem",
+      "shape": "circle",
+      "visible": true,
+      "remembered": true
+    },
+    {
+      "id": "scrap",
+      "name": "Muddy Scrap Piles",
+      "color": "#8d6e63",
+      "icon": "builtin:box",
+      "shape": "circle",
+      "visible": true,
+      "remembered": true
+    },
+    {
+      "id": "cores",
+      "name": "Cores",
+      "color": "#ffca28",
+      "icon": "builtin:gem",
+      "shape": "circle",
+      "visible": true,
+      "remembered": true
+    },
+    {
+      "id": "berries",
+      "name": "Berries",
+      "color": "#d81b60",
+      "icon": "builtin:food",
+      "shape": "circle",
+      "visible": true,
+      "remembered": true
+    },
+    {
+      "id": "mushrooms",
+      "name": "Mushrooms",
+      "color": "#ffb300",
+      "icon": "builtin:food",
+      "shape": "circle",
+      "visible": true,
+      "remembered": true
+    },
+    {
+      "id": "herbs",
+      "name": "Herbs and Sulfur",
+      "color": "#7cb342",
+      "icon": "builtin:leaf",
+      "shape": "circle",
+      "visible": true,
+      "remembered": true
+    },
+    {
+      "id": "crops",
+      "name": "Wild Flax and Barley",
+      "color": "#c0a062",
+      "icon": "builtin:leaf",
+      "shape": "circle",
+      "visible": true,
+      "remembered": true
+    },
+    {
+      "id": "portal",
+      "name": "Portals",
+      "color": "#7e57c2",
+      "icon": "builtin:layers",
+      "shape": "hexagon",
+      "visible": true,
+      "remembered": true
+    },
+    {
+      "id": "ship",
+      "name": "Ships",
+      "color": "#1e88e5",
+      "icon": "builtin:map",
+      "shape": "hexagon",
+      "visible": true,
+      "remembered": true
+    },
+    {
+      "id": "cart",
+      "name": "Carts",
+      "color": "#a1887f",
+      "icon": "builtin:car",
+      "shape": "hexagon",
+      "visible": true,
+      "remembered": true
+    },
+    {
+      "id": "landmark",
+      "name": "Landmarks and ruins",
+      "color": "#78909c",
+      "icon": "builtin:map",
+      "shape": "square",
+      "visible": false
+    }
+  ],
+  "checklistName": "Bosses",
+  "checklist": [
+    {
+      "name": "Eikthyr",
+      "pins": [
+        "Eikthyr"
+      ],
+      "key": "defeated_eikthyr",
+      "note": "Antler pickaxe: copper and tin"
+    },
+    {
+      "name": "The Elder",
+      "pins": [
+        "The Elder"
+      ],
+      "key": "defeated_gdking",
+      "note": "Swamp key: sunken crypts and iron"
+    },
+    {
+      "name": "Bonemass",
+      "pins": [
+        "Bonemass"
+      ],
+      "key": "defeated_bonemass",
+      "note": "Wishbone: finds silver"
+    },
+    {
+      "name": "Moder",
+      "pins": [
+        "Moder"
+      ],
+      "key": "defeated_dragon",
+      "note": "Dragon tears: the artisan table"
+    },
+    {
+      "name": "Yagluth",
+      "pins": [
+        "Yagluth"
+      ],
+      "key": "defeated_goblinking",
+      "note": "Torn spirit: the wisp light for the Mistlands"
+    },
+    {
+      "name": "The Queen",
+      "pins": [
+        "The Queen"
+      ],
+      "key": "defeated_queen",
+      "note": "Queen drop: the Ashlands gear"
+    },
+    {
+      "name": "Fader",
+      "pins": [
+        "Fader"
+      ],
+      "key": "defeated_fader",
+      "note": "Fader's drop"
+    }
+  ],
+  "biomes": [
+    {
+      "id": 1,
+      "name": "Meadows"
+    },
+    {
+      "id": 2,
+      "name": "Black Forest"
+    },
+    {
+      "id": 3,
+      "name": "Swamp"
+    },
+    {
+      "id": 4,
+      "name": "Mountain"
+    },
+    {
+      "id": 5,
+      "name": "Plains"
+    },
+    {
+      "id": 6,
+      "name": "Mistlands"
+    },
+    {
+      "id": 7,
+      "name": "Ashlands"
+    },
+    {
+      "id": 8,
+      "name": "Deep North"
+    },
+    {
+      "id": 0,
+      "name": "Ocean"
+    }
+  ]
+}

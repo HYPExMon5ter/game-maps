@@ -13,6 +13,7 @@ mod hotkeys;
 mod pipe;
 mod provider;
 mod walk;
+mod worldmap;
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -45,6 +46,8 @@ pub(crate) fn module_file_name() -> Option<String> {
 }
 
 /// How long to wait for the game's scripting runtime when injected very early.
+/// Long enough for a frame, even at a low frame rate.
+const LAST_TICK: Duration = Duration::from_millis(250);
 const RUNTIME_WAIT: Duration = Duration::from_secs(300);
 
 #[no_mangle]
@@ -145,6 +148,9 @@ fn run() {
         Err(e) => filelog::write(&format!("tokio runtime failed: {e}")),
     }
     filelog::write("detaching");
+    worldmap::wait_for_saves();
+    // A tick to undo what was only for the app, before the hooks go.
+    std::thread::sleep(LAST_TICK);
     shared.stopping.store(true, std::sync::atomic::Ordering::SeqCst);
     hook::remove();
 }

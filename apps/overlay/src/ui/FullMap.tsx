@@ -41,6 +41,7 @@ function ContextMenu({
   const notify = useStore((s) => s.notify)
   const layer = useStore(selectViewLayer)
   const together = useSyncStore((s) => readyPeers(s).length > 0)
+  const gamePings = useStore((s) => !!s.status?.capabilities?.game_map)
   const world = map ? toWorld(map.projection, at.lngLat) : null
   const item = 'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] hover:bg-panel-raised disabled:opacity-40'
   const pin = at.pinId ? findPin(at.pinId) : undefined
@@ -72,7 +73,7 @@ function ContextMenu({
           <Zap className="size-4" /> Teleport here
         </button>
       )}
-      {together && world && (
+      {(together || gamePings) && world && (
         <button className={item} onClick={() => (sendPing(world, layer), onClose())}>
           <Radio className="size-4" /> Ping here
         </button>

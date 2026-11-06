@@ -52,6 +52,7 @@
     "resources": {
       "../../../games/sons-of-the-forest/game.json": "games/sons-of-the-forest/game.json",
       "../../../games/sunkenland/game.json": "games/sunkenland/game.json",
+      "../../../games/valheim/game.json": "games/valheim/game.json",
       "../../../target/release/game_maps_agent.dll": "agent/game_maps_agent.dll"
     },
     "windows": {
