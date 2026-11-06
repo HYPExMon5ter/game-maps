@@ -59,6 +59,9 @@ If a game update renames something, the agent logs which members failed to resol
 - Teleport with ground snapping, and teleport back to an exact position.
 - HUD mini-map over gameplay.
 
+Verified again on 2026-11-05: the agent loads with every system found, and teleporting into
+Cave GA reported the player indoors and marked the cave found.
+
 ## Pins and points of interest
 
 - Pickups aren't in the scene files. Once a world is loaded, though, every pickup on
@@ -77,6 +80,10 @@ If a game update renames something, the agent logs which members failed to resol
 
 ## Caves and bunkers
 
+- Caves and bunkers are marked found once the player has been inside (`visitInside` in
+  `game.json`), from the caves layer the agent reports as `indoors`.
+- The game has no map marks a player can place, only GPS locators it places itself, so
+  in-game pins aren't possible here.
 - Cave layouts: the world export also scans every `CaveSystem` (`cave_scan.rs`). It
   force-enters the cave (its colliders only exist while "inside"), waits 30 frames, then
   casts rays down from just below the terrain on a 1 m grid with terrain, water and

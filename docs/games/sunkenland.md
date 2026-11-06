@@ -97,6 +97,26 @@ The agent's Mono backend (`crates/unity-runtime/src/mono.rs`) uses the embedding
 - The game's own map key is also M; while Game Maps is connected the game doesn't see
   the map hotkey, so only the overlay opens.
 
+## Companions, marks and islands
+
+| What | Where |
+|---|---|
+| Orders | `Assistant.ExecuteCommand(AssistantBehaviior, Vector3)`, `ExecuteGoSomeWhereAt(Vector3)`: the game's own entry points, which send its network calls |
+| Order names | `AssistantBehaviior`, read by name. `Charge` is an attack: it clears hold-fire, needs a weapon, and ends by itself |
+| Map marks | `GlobalData.RPC_RequestAddNewMapMark(long, MapMarkNetworkStruct)`, `RPC_RequestRemoveMapMark(long)`. Shared with the world; `UIMap.MaxMapMarksAmount` is the limit, and names are `NetworkString<_8>`. There's no ping |
+| App's marks | Keys start at `0x7A00_0000_0000_0000`, so they're left out of the marks read back, and removing a pin removes only its own |
+| Discovered places | `WorldScene.locationsList`, `Location.IsDiscovered`, every 10 s |
+| Wind | `WorldScene.Wind`, a transform: its forward is the direction. No speed exists |
+| Island details | `Location.InitLootInfo`, `ScavengedPercentageString`, `SpecialLoots`, `ScarceLootItemIDs`, `VegetationLootItemIDs`, `MineLootItemIDs`, names from `RM.TryGetItemByID`. Read when a pin opens |
+
+`MapMarkNetworkStruct` is a struct, so it's made with `Runtime::new_value`. Key finds list
+everything those spots can hold, not what's in them: the game fills chests when they open.
+
+Verified in game on 2026-11-05 (build 26376704, single player): every order, send here, add
+and remove marks, wind direction, 26 of 49 places found, island details for all 49
+locations (47 ms at worst). The agent's work averaged about 56 µs a frame. Not verified:
+marks and orders with a second player, and items crossed off once taken.
+
 ## Verified in game (2026-11-02, build 26376704, single player, Fullscreen Window 3440x1440)
 
 - Injection, hot-swapping the agent while the game runs, all members and frame hooks,

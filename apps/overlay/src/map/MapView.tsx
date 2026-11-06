@@ -1,11 +1,11 @@
-import { Map as MlMap, type GeoJSONSource, type ImageSource } from 'maplibre-gl'
+import { Map as MlMap, type GeoJSONSource, type ImageSource, type RasterTileSource } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import './setup'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { events } from '../lib/backend'
 import { logUiError } from '../lib/errors'
-import { GAME_MARKERS_CATEGORY, type BadgeShape, type Pin } from '../lib/game'
-import { LiveMarkerFilter, markerName } from '../lib/markers'
+import { GAME_MARKERS_CATEGORY, tileUrl, type BadgeShape, type Pin } from '../lib/game'
+import { LiveMarkerFilter, markerIcon, markerName, withoutAppPings } from '../lib/markers'
 import { findMover } from '../lib/movers'
 import { resolveTracked } from '../lib/tracking'
 import { bearingOf, mapBounds, mapCenter, toLngLat, zoomToFit, type LngLat, type Projection } from '../lib/projection'
@@ -19,6 +19,7 @@ import { trailLines } from '../lib/trail'
 import { steppedZoom } from '../lib/zoom'
 import { useTrailStore } from '../state/trail'
 import { IS_MAP_WINDOW } from '../lib/view'
+import { isPinVisible } from '../lib/filters'
 import { EMPTY_USER_DATA, isCategoryVisible, selectAllPins, selectViewLayer, useStore } from '../state/store'
 import { badgeKey, ensureBadge } from './badges'
 import { mapHandle } from './handle'
@@ -126,7 +127,7 @@ function GameMapView({ variant, onContextMenu, fitPadding = NO_PADDING }: Props)
     const center = mapCenter(p)
     const m = new MlMap({
       container,
-      style: buildStyle(game, gameMap, window.location.origin),
+      style: buildStyle(game, gameMap, window.location.origin, useStore.getState().world.id),
       center: [center.lng, center.lat],
       // Full map: fitted below; mini-map: the user's zoom.
       zoom: miniBaseZoom(p) + (full ? 0 : useSettings.getState().ui.hud.zoom),
@@ -147,7 +148,12 @@ function GameMapView({ variant, onContextMenu, fitPadding = NO_PADDING }: Props)
 
     m.on('load', () => setMap(m))
     // A missing tile or image: the map carries on, but the log should say so.
-    m.on('error', (e) => logUiError(`map (${variant}): ${e.error?.message ?? 'unknown error'}`))
+    m.on('error', (e) => {
+      const { game, worldMapReady } = useStore.getState()
+      // Nothing to log: a generated world has no tiles until its map is made.
+      if (game?.worldMaps && !worldMapReady) return
+      logUiError(`map (${variant}): ${e.error?.message ?? 'unknown error'}`)
+    })
     if (full) {
       fitIsland(m, p, fitPaddingRef.current)
       mapHandle.current = m
@@ -192,6 +198,14 @@ function GameMapView({ variant, onContextMenu, fitPadding = NO_PADDING }: Props)
       m.remove()
     }
   }, [game, gameMap, variant, hasSize])
+
+  // Generated worlds each have their own tiles, and may only just have got them.
+  const worldId = useStore((s) => s.world.id)
+  const worldMapVersion = useStore((s) => s.worldMapVersion)
+  useEffect(() => {
+    if (!map || !game?.worldMaps || !gameMap) return
+    map.getSource<RasterTileSource>('base')?.setTiles([`${tileUrl(game, gameMap, gameMap.tiles, worldId)}?v=${worldMapVersion}`])
+  }, [map, game, gameMap, worldId, worldMapVersion])
 
   useRefitOnResize(map, variant, containerRef, fitPadding)
   const live = active ? map : null
@@ -276,7 +290,7 @@ function usePinsLayer(map: MlMap | null) {
     const visible: { pin: Pin; key: string; color: string; icon: string; shape?: BadgeShape }[] = []
     for (const pin of pins) {
       const cat = categories.get(pin.category)
-      if (!isCategoryVisible(cat, user) && pin.id !== selected) continue
+      if (!isPinVisible(cat, pin, user) && pin.id !== selected) continue
       if (!showFound && found.has(pin.id) && pin.id !== selected) continue
       if (hiddenByFog?.(pin)) continue
       const color = pin.color ?? cat?.color ?? '#ffffff'
@@ -346,11 +360,11 @@ function useLiveMarkers(map: MlMap | null) {
     let last: string | null = null
     let cancelled = false
     const apply = (markers: Marker[]) => {
-      const visible = shown ? filter.visible(markers) : []
+      const visible = shown ? withoutAppPings(filter.visible(markers), useSyncStore.getState().pings, game.unitsPerMeter) : []
       const key = visible.map((m) => `${m.id}:${m.icon}:${m.position.x.toFixed(0)},${m.position.z.toFixed(0)}`).join('|')
       if (key === last) return
       last = key
-      const icons = new Set(visible.map((m) => `game:${m.icon}`))
+      const icons = new Set(visible.map(markerIcon))
       void Promise.all([...icons].map((icon) => ensureBadge(map, badgeKey(LIVE_MARKER_COLOR, icon), game.id, LIVE_MARKER_COLOR, icon))).then(() => {
         if (cancelled) return
         map.getSource<GeoJSONSource>('markers')?.setData({
@@ -360,7 +374,7 @@ function useLiveMarkers(map: MlMap | null) {
             return {
               type: 'Feature',
               geometry: { type: 'Point', coordinates: [ll.lng, ll.lat] },
-              properties: { id: m.id, name: markerName(m), icon: badgeKey(LIVE_MARKER_COLOR, `game:${m.icon}`) },
+              properties: { id: m.id, name: markerName(m), icon: badgeKey(LIVE_MARKER_COLOR, markerIcon(m)) },
             }
           }),
         })

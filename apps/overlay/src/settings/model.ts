@@ -49,6 +49,16 @@ export interface GameSettings {
   dangerMeters: number
   /** Draw map pings over the game, like the waypoint. */
   pingsInGame: boolean
+  /** Put the player's pins and pings on the game's own map too. */
+  gameMap: boolean
+  /** Valheim: show silver the player hasn't found with a wishbone. */
+  showSilver: boolean
+  /** Valheim: teleport with what portals don't let through. */
+  teleportRestricted: boolean
+  /** Valheim: a timer on picked berries and plants until they're back. */
+  resourceTimers: boolean
+  /** Valheim: send a hosted world's locations to friends who join. */
+  shareLocations: boolean
   /** Share found items and explored areas with others in the same world. */
   shareProgress: boolean
   /** Show where other players are over the game. */
@@ -111,6 +121,11 @@ export const DEFAULT_GAME_SETTINGS: GameSettings = {
   dangerAlert: true,
   dangerMeters: 30,
   pingsInGame: true,
+  gameMap: true,
+  showSilver: false,
+  teleportRestricted: false,
+  resourceTimers: false,
+  shareLocations: true,
   shareProgress: false,
   friendMarkers: true,
   deathMarker: true,

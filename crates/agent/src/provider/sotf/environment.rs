@@ -59,7 +59,7 @@ impl EnvironmentMembers {
             .and_then(|b| rt.unbox_integer(b))
             .map(|d| d.max(0) as u32);
         let season = self.season.as_ref().and_then(|m| rt.enum_name(rt.invoke(m, std::ptr::null_mut(), &mut []).ok()?));
-        Some(Environment { day, hour: (of_day / 60) as u8, minute: (of_day % 60) as u8, season, weather: self.weather(rt, unity) })
+        Some(Environment { day, hour: (of_day / 60) as u8, minute: (of_day % 60) as u8, season, weather: self.weather(rt, unity), wind: None })
     }
 
     unsafe fn weather(&self, rt: &Runtime, unity: &Unity) -> Option<String> {

@@ -50,7 +50,7 @@ cd apps/overlay && bun run lint && bun run build && bun run test
 | `games/<id>` | Per-game definition (`game.json`), pins, and generated tiles and icons |
 | `tools/mapgen` | Builds map tiles and icons from game files |
 | `tools/pins` | Builds `pins.json` from in-game world exports |
-| `tools/mappack` | Publishes a game's map data |
+| `tools/mappack` | Publishes a game's map data, and lists the maps a game update left behind |
 | `tools/release.py`, `tools/version.py` | App releases (see [Releasing](releasing.md)) |
 
 The [architecture notes](architecture.md) explain the main design decisions, and
@@ -96,9 +96,11 @@ Add `--preview-only` for a quick 2048 px `preview.png`.
 
 1. Create `games/<id>/game.json`. Copy the Sons of the Forest one and adjust:
    `process` (the executable name), `steamAppId` (for the Play button),
-   `defaultHotkeys`, map projection and categories. Set `liveFeatures` to `false`
-   until the game has a provider (step 4).
-2. Generate tiles, icons and `pins.json` into `games/<id>/`.
+   `defaultHotkeys`, map projection, categories and `groups`. Every category goes in a
+   group; set `split` on one to list it by pin name. Set `liveFeatures` to `false` until the
+   game has a provider (step 4).
+2. Generate tiles, icons and `pins.json` into `games/<id>/`. For a game with generated
+   worlds, set `worldMaps` in `game.json` and implement `Provider::read_world_map` instead.
 3. Add the `game.json` to `bundle.resources` in `apps/overlay/src-tauri/tauri.conf.json`.
 4. For live location and teleport, add a provider in `crates/agent/src/provider/` and
    register it in `provider::detect`. IL2CPP and Mono games use the same runtime API.

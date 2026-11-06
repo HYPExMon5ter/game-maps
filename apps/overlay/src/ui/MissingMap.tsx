@@ -6,8 +6,38 @@ import { packView } from '../launcher/view'
 import { useStore } from '../state/store'
 import { Button } from './controls'
 
-/** Over a map that isn't downloaded yet, which would otherwise just be empty. */
+/** Over a generated world with no map yet: it's made from the game the first time. */
+function MissingWorldMap() {
+  const ready = useStore((s) => s.worldMapReady)
+  const name = useStore((s) => s.game?.name)
+  const loaded = useStore((s) => !!s.snapshot?.world && s.snapshot.world.id === s.world.id)
+  if (ready) return null
+  return (
+    <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center">
+      <div className="glass pointer-events-auto w-[320px] rounded-2xl p-4 text-center">
+        {loaded ? (
+          <>
+            <p className="font-display text-[15px] font-semibold">Drawing this world's map</p>
+            <Loader2 className="mx-auto mt-2 size-4 animate-spin text-ink-faint" />
+          </>
+        ) : (
+          <>
+            <p className="font-display text-[15px] font-semibold">No map of this world yet</p>
+            <p className="mt-1 text-[12.5px] text-ink-dim">Every {name} world is different. Load this one with Game Maps connected, and its map is drawn from the game.</p>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** Over a map that isn't there yet, which would otherwise just be empty. */
 export function MissingMap() {
+  const worldMaps = useStore((s) => !!s.game?.worldMaps)
+  return worldMaps ? <MissingWorldMap /> : <MissingPack />
+}
+
+function MissingPack() {
   const game = useStore((s) => s.game)
   const [packs, setPacks] = useState<PackStatus[]>([])
   useEffect(() => {

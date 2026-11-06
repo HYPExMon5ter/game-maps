@@ -64,6 +64,7 @@ api! {
     mono_class_is_assignable_from: fn(Ptr, Ptr) -> i32;
     mono_class_vtable: fn(Ptr, Ptr) -> Ptr;
     mono_field_get_offset: fn(Ptr) -> u32;
+    mono_field_get_type: fn(Ptr) -> Ptr;
     mono_field_get_flags: fn(Ptr) -> u32;
     mono_field_get_parent: fn(Ptr) -> Ptr;
     mono_field_static_get_value: fn(Ptr, Ptr, *mut c_void);
@@ -229,6 +230,13 @@ impl Backend for Mono {
         (self.api.mono_class_get_field_from_name)(class, name.as_ptr())
     }
 
+    unsafe fn field_type_name(&self, field: Ptr) -> String {
+        let raw = (self.api.mono_type_get_name)((self.api.mono_field_get_type)(field));
+        let name = cstr(raw);
+        (self.api.mono_free)(raw as *mut c_void);
+        name
+    }
+
     unsafe fn field_offset(&self, field: Ptr) -> usize {
         (self.api.mono_field_get_offset)(field) as usize
     }
@@ -278,6 +286,10 @@ impl Backend for Mono {
             (self.api.mono_runtime_object_init)(obj);
         }
         obj
+    }
+
+    unsafe fn new_value(&self, class: Ptr) -> Ptr {
+        (self.api.mono_object_new)(self.domain, class)
     }
 
     unsafe fn new_array(&self, element: Ptr, len: usize) -> Ptr {

@@ -17,7 +17,8 @@ import { useGameSetting, useSettings } from '../../settings/store'
 import { currentFog, mergeFriendFog } from '../../state/fog'
 import { selectAllPins, useStore } from '../../state/store'
 import { classifyFailure, probeNetwork, probeRelays, type ConnectionReport, type PeerFailure, type PeerProbe } from './connectionCheck'
-import { friendPin, MAX_PINS, SYNC_VERSION, toSharedPin, type SharedPin, type SharedTarget, type SyncMessage } from './messages'
+import { hostPins, sharedLocations } from '../worldExtras'
+import { friendPin, MAX_PINS, SYNC_VERSION, toSharedPin, type Location, type SharedPin, type SharedTarget, type SyncMessage } from './messages'
 import { rejoinDelay, shouldRejoin } from './rejoin'
 import { joinSyncRoom, type SyncHandlers, type SyncRoom } from './room'
 
@@ -26,6 +27,8 @@ export interface Peer {
   name: string | null
   /** Said hello on our message version; nothing else from it counts until then. */
   ready: boolean
+  /** Says it hosts this world. */
+  host?: boolean
 }
 
 export interface TrackRequest {
@@ -165,8 +168,10 @@ export const handlers: SyncHandlers = {
       peers: { ...s.peers, [peerId]: s.peers[peerId] ?? { id: peerId, name: null, ready: false } },
       failures: s.failures.filter((f) => f.peerId !== peerId),
     }))
-    room?.send({ type: 'hello', version: SYNC_VERSION, name: myName() }, peerId)
+    room?.send({ type: 'hello', version: SYNC_VERSION, name: myName(), host: useStore.getState().snapshot?.world?.kind === 'hosted' }, peerId)
     room?.send({ type: 'pins', pins: mySharedPins() }, peerId)
+    const locations = locationsToShare()
+    if (locations) room?.send({ type: 'locations', pins: locations }, peerId)
   },
   onPeerLeave(peerId) {
     logUiInfo(`play together: peer ${peerId} left`)
@@ -186,7 +191,7 @@ export const handlers: SyncHandlers = {
     if (message.type === 'hello') {
       const ready = message.version === SYNC_VERSION
       logUiInfo(`play together: peer ${peerId} is ${message.name ?? 'unnamed'} on message version ${message.version} (ours ${SYNC_VERSION})`)
-      useSyncStore.setState((s) => ({ peers: { ...s.peers, [peerId]: { id: peerId, name: message.name, ready } } }))
+      useSyncStore.setState((s) => ({ peers: { ...s.peers, [peerId]: { id: peerId, name: message.name, ready, host: message.host } } }))
       updateFriendPins()
       // Only the first: a repeated hello doesn't need another round of everything.
       if (ready && !peer?.ready) {
@@ -226,6 +231,9 @@ export const handlers: SyncHandlers = {
       }
       case 'fog':
         if (sharingProgress()) mergeFriendFog(message.fog)
+        break
+      case 'locations':
+        keepHostLocations(peerId, message.pins)
         break
     }
   },
@@ -283,11 +291,34 @@ export async function runConnectionCheck() {
   useSyncStore.setState({ checking: false, report })
 }
 
+/** A hosted world's locations for someone joining, if this player shares them. */
+function locationsToShare(): Location[] | null {
+  const { game, gamePins, snapshot } = useStore.getState()
+  if (!game?.worldMaps || snapshot?.world?.kind !== 'hosted' || !gameSettings(useSettings.getState().ui, game.id).shareLocations) return null
+  return sharedLocations(gamePins, game.categories)
+}
+
+/** Who sent this session's locations: one host, once, or anyone in the room could send some. */
+let locationsFrom: string | null = null
+
+/** Keeps what the world's host sent. Only a joining player needs it. */
+function keepHostLocations(peerId: string, locations: Location[]) {
+  const { game, map, snapshot } = useStore.getState()
+  if (!game?.worldMaps || !map || snapshot?.world?.kind !== 'joined' || !useSyncStore.getState().peers[peerId]?.host) return
+  if (locationsFrom && locationsFrom !== peerId) return
+  locationsFrom = peerId
+  backend.saveHostPins(hostPins(locations, game.categories, map.projection)).catch((e: unknown) => logUiError(`could not keep the host's locations: ${String(e)}`))
+}
+
 /** Pings a spot on everyone's map (yours included). */
 export function sendPing(position: Vec3, layer: WorldLayer) {
   if (forwarded({ kind: 'ping', position, layer })) return
   addPing({ id: ++seq, from: null, position, layer, at: Date.now() })
   send({ type: 'ping', position, layer })
+  const { status, game } = useStore.getState()
+  if (status?.capabilities?.game_pings && gameSettings(useSettings.getState().ui, game?.id).gameMap) {
+    void backend.gamePing(position).catch((e: unknown) => logUiError(`could not ping in the game: ${String(e)}`))
+  }
 }
 
 /** Tracks what a request asked for: the map pin when this map has it, else the spot. */

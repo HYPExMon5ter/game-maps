@@ -32,7 +32,7 @@ export interface SharedPin {
 }
 
 export type SyncMessage =
-  | { type: 'hello'; version: number; name: string | null }
+  | { type: 'hello'; version: number; name: string | null; host?: boolean }
   /** "Track this with me." */
   | { type: 'track'; target: SharedTarget }
   /** A spot to look at, shown briefly. */
@@ -43,6 +43,14 @@ export type SyncMessage =
   | { type: 'found'; ids: string[] }
   /** What the sender has explored (merged with what's known). */
   | { type: 'fog'; fog: SavedFog }
+  /** The host's locations, which a joining player's game doesn't have. */
+  | { type: 'locations'; pins: Location[] }
+
+/** A location as sent: id, category, name, then the position. */
+export type Location = [string, string, string, number, number, number]
+
+/** A world has about 10,000 locations. */
+export const MAX_LOCATIONS = 20000
 
 const MAX_TEXT = 2000
 export const MAX_PINS = 500
@@ -57,7 +65,7 @@ export function parseMessage(data: unknown): SyncMessage | null {
   switch (data.type) {
     case 'hello':
       return typeof data.version === 'number' && (data.name === null || isText(data.name))
-        ? { type: 'hello', version: data.version, name: data.name as string | null }
+        ? { type: 'hello', version: data.version, name: data.name as string | null, host: data.host === true }
         : null
     case 'track': {
       const target = parseTarget(data.target)
@@ -74,6 +82,8 @@ export function parseMessage(data: unknown): SyncMessage | null {
       return Array.isArray(data.ids) && data.ids.length <= MAX_FOUND && data.ids.every(isText) ? { type: 'found', ids: data.ids as string[] } : null
     case 'fog':
       return isFog(data.fog) ? { type: 'fog', fog: data.fog } : null
+    case 'locations':
+      return Array.isArray(data.pins) ? { type: 'locations', pins: data.pins.slice(0, MAX_LOCATIONS).filter(isLocation) } : null
     default:
       return null
   }
@@ -83,6 +93,10 @@ function parseTarget(t: unknown): SharedTarget | null {
   if (!isObject(t) || !isText(t.name) || !isVec3(t.position) || !isLayer(t.layer)) return null
   if (t.pinId !== undefined && !isText(t.pinId)) return null
   return { name: t.name, position: t.position, layer: t.layer, ...(t.pinId !== undefined && { pinId: t.pinId as string }) }
+}
+
+function isLocation(l: unknown): l is Location {
+  return Array.isArray(l) && l.length === 6 && isText(l[0]) && isText(l[1]) && isText(l[2]) && l.slice(3).every((n) => typeof n === 'number' && Number.isFinite(n))
 }
 
 function isFog(f: unknown): f is SavedFog {

@@ -51,6 +51,7 @@ api! {
     il2cpp_class_is_assignable_from: fn(Ptr, Ptr) -> bool;
     il2cpp_type_get_object: fn(Ptr) -> Ptr;
     il2cpp_field_get_offset: fn(Ptr) -> usize;
+    il2cpp_field_get_type: fn(Ptr) -> Ptr;
     il2cpp_field_get_flags: fn(Ptr) -> i32;
     il2cpp_field_static_get_value: fn(Ptr, *mut c_void);
     il2cpp_runtime_invoke: fn(Ptr, Ptr, *mut Ptr, *mut Ptr) -> Ptr;
@@ -196,6 +197,13 @@ impl Backend for Il2Cpp {
         (self.api.il2cpp_class_get_field_from_name)(class, name.as_ptr())
     }
 
+    unsafe fn field_type_name(&self, field: Ptr) -> String {
+        let raw = (self.api.il2cpp_type_get_name)((self.api.il2cpp_field_get_type)(field));
+        let name = cstr(raw);
+        (self.api.il2cpp_free)(raw as *mut c_void);
+        name
+    }
+
     unsafe fn field_offset(&self, field: Ptr) -> usize {
         (self.api.il2cpp_field_get_offset)(field)
     }
@@ -241,6 +249,10 @@ impl Backend for Il2Cpp {
             (self.api.il2cpp_runtime_object_init)(obj);
         }
         obj
+    }
+
+    unsafe fn new_value(&self, class: Ptr) -> Ptr {
+        (self.api.il2cpp_object_new)(class)
     }
 
     unsafe fn new_array(&self, element: Ptr, len: usize) -> Ptr {

@@ -2,7 +2,8 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import type { AgentLog, CompanionOrderOption, GroundPoint, Hotkey, HotkeyAction, LinkStatus, OverlayMode, PathInfo, PinConfig, RouteCheck, SnapshotUpdate, TeleportTarget, Vec3, WorldSnapshot } from './protocol'
+import type { Pin } from './game'
+import type { AgentLog, CompanionOrderOption, GroundPoint, Hotkey, HotkeyAction, LinkStatus, OverlayMode, PathInfo, PinConfig, PlaceInfo, RouteCheck, SnapshotUpdate, TeleportTarget, Vec3, WorldSnapshot } from './protocol'
 
 /** A supported game as bundled with the app (subset of `game.json`). */
 export interface GameEntry {
@@ -13,6 +14,8 @@ export interface GameEntry {
   defaultHotkeys: Hotkey[]
   /** Has live location and teleport; otherwise a static map. */
   liveFeatures: boolean
+  /** Pins and pings can go on the game's own map. */
+  gameMap?: boolean
 }
 
 export type HookMode = 'auto' | 'manual'
@@ -79,6 +82,7 @@ export type UpdateState =
 export interface SetupChecks {
   needs_admin: boolean
   exclusive_fullscreen: boolean
+  map_outdated: boolean
 }
 
 export const backend = {
@@ -87,12 +91,22 @@ export const backend = {
   teleport: (target: TeleportTarget) => invoke<void>('teleport', { target }),
   /** Back to where the player was before their last teleport (one step per call). */
   teleportBack: () => invoke<void>('teleport_back'),
+  /** Brings the game's own map in line with the player's pins. */
+  setGamePins: (pins: GamePin[]) => invoke<void>('set_game_pins', { pins }),
+  /** The player's options for this game that the agent acts on. */
+  setGameOptions: (options: Record<string, boolean>) => invoke<void>('set_game_options', { options }),
+  /** Keeps the locations this world's host shared. */
+  saveHostPins: (pins: Pin[]) => invoke<void>('save_host_pins', { pins }),
+  /** Pings a spot the way the game does, for everyone in the world. */
+  gamePing: (position: Vec3) => invoke<void>('game_ping', { position }),
   /** A walking route from the player to `to`, on the game's navigation mesh. */
   findPath: (to: Vec3) => invoke<PathInfo>('find_path', { to }),
   /** Which legs of a route (floor points about a meter apart) can't be walked right now. */
   checkRoute: (points: Vec3[]) => invoke<RouteCheck>('check_route', { points }),
   /** The floor under points near the player, and whether the game camera sees them. */
   probeGround: (points: Vec3[]) => invoke<GroundPoint[]>('probe_ground', { points }),
+  /** What the game says about the place at `position`. */
+  placeInfo: (position: Vec3) => invoke<PlaceInfo>('place_info', { position }),
   /** What a companion can be told to do right now. */
   companionOrders: (companion: string) => invoke<CompanionOrderOption[]>('companion_orders', { companion }),
   companionOrder: (companion: string, order: string) => invoke<void>('companion_order', { companion, order }),
@@ -151,6 +165,21 @@ export const backend = {
   openLogsFolder: () => invoke<void>('open_logs_folder'),
 }
 
+/** A pin for the game's own map. */
+export interface GamePin {
+  name: string
+  position: Vec3
+}
+
+export interface WorldMapReady {
+  game_id: string
+  world_id: string
+  /** The tiles are new, not only the pins. */
+  tiles: boolean
+  /** There's a new `explored.bin`. */
+  explored: boolean
+}
+
 export const events = {
   status: (cb: (s: LinkStatus) => void): Promise<UnlistenFn> => listen<LinkStatus>('agent-status', (e) => cb(e.payload)),
   snapshot: (cb: (s: WorldSnapshot) => void): Promise<UnlistenFn> =>
@@ -165,6 +194,8 @@ export const events = {
     listen<string>('map-pack-installed', (e) => cb(e.payload)),
   appSettings: (cb: (s: AppSettings) => void): Promise<UnlistenFn> => listen<AppSettings>('app-settings', (e) => cb(e.payload)),
   updateState: (cb: (s: UpdateState) => void): Promise<UnlistenFn> => listen<UpdateState>('update-state', (e) => cb(e.payload)),
+  /** A world's map files changed (see `state/worldMaps`). */
+  worldMapReady: (cb: (r: WorldMapReady) => void): Promise<UnlistenFn> => listen<WorldMapReady>('world-map-ready', (e) => cb(e.payload)),
   /** The launcher asked for this game's map. */
   showGame: (cb: (gameId: string) => void): Promise<UnlistenFn> => listen<string>('show-game', (e) => cb(e.payload)),
   /** The teleport back key was used in the game; the payload is the error, if any. */

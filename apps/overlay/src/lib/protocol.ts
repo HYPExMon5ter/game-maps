@@ -14,6 +14,10 @@ export interface Capabilities {
   teleport: boolean
   other_players: boolean
   hotkeys: boolean
+  /** Pins can go on the game's own map. */
+  game_map?: boolean
+  /** The game has a ping of its own. */
+  game_pings?: boolean
 }
 
 export interface LocalPlayer {
@@ -97,6 +101,12 @@ export interface WorldSnapshot {
   dropped_bag?: Vec3
   /** The player is dying or dead right now. */
   dying?: boolean
+  /** Inside a dungeon, in games where that isn't its own map layer. */
+  indoors?: boolean
+  /** Milestones reached in this world, as the game's checklist names them. */
+  progress?: string[]
+  /** Places the game counts as discovered. */
+  visited?: Vec3[]
 }
 
 /** What changed since the last snapshot; `markers` and `creatures` only when they did. */
@@ -110,6 +120,9 @@ export interface SnapshotUpdate {
   environment?: Environment
   dropped_bag?: Vec3
   dying?: boolean
+  indoors?: boolean
+  progress?: string[]
+  visited?: Vec3[]
 }
 
 export interface CompanionStat {
@@ -130,6 +143,26 @@ export interface CompanionStatus {
 }
 
 /** Something a companion can be told to do. */
+export interface PlaceItem {
+  name: string
+  /** Only known for one-off finds. */
+  taken: boolean
+}
+
+export interface PlaceLoot {
+  title: string
+  items: PlaceItem[]
+}
+
+/** What the game's own map says about a place. */
+export interface PlaceInfo {
+  name: string
+  level: number
+  /** Percent scavenged; null if there's nothing to scavenge. */
+  scavenged: number | null
+  loot: PlaceLoot[]
+}
+
 export interface CompanionOrderOption {
   id: string
   /** Heading it's listed under. */
@@ -144,6 +177,8 @@ export interface Environment {
   minute: number
   season: string | null
   weather: string | null
+  /** For games with wind that matters. */
+  wind?: { degrees: number; strength: number }
 }
 
 export type WorldKind = 'single_player' | 'hosted' | 'joined'

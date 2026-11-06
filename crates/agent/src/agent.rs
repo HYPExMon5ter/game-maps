@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use game_maps_protocol::{AgentMessage, CameraView, Vec3, Capabilities, Hotkey, HotkeyAction, LogLevel, SnapshotUpdate, TeleportTarget, WorldLayer, WorldSnapshot, PROTOCOL_VERSION};
+use game_maps_protocol::{AgentMessage, CameraView, GamePin, Vec3, Capabilities, Hotkey, HotkeyAction, LogLevel, SnapshotUpdate, TeleportTarget, WorldLayer, WorldSnapshot, PROTOCOL_VERSION};
 use unity_runtime::{Runtime, Unity};
 use tokio::sync::mpsc;
 use windows::Win32::System::Threading::GetCurrentProcessId;
@@ -40,7 +40,12 @@ pub enum Command {
     CheckRoute { request_id: u32, points: Vec<Vec3> },
     ProbeGround { request_id: u32, points: Vec<Vec3> },
     CompanionOrders { request_id: u32, companion: String },
+    PlaceInfo { request_id: u32, position: Vec3 },
     CompanionOrder { request_id: u32, companion: String, order: String },
+    ReadWorldMap { request_id: u32, dir: String, terrain: bool },
+    SetGamePins(Vec<GamePin>),
+    GamePing(Vec3),
+    SetGameOptions(std::collections::BTreeMap<String, bool>),
 }
 
 struct MainState {
@@ -56,6 +61,8 @@ struct MainState {
     export: Option<(u32, Instant)>,
     /// Solid layers for walk checks, on the surface and underground (resolved on first use).
     solid_masks: Option<[i32; 2]>,
+    /// An app was connected on the last tick.
+    app_here: bool,
 }
 
 pub struct Shared {
@@ -102,6 +109,7 @@ impl Shared {
                 last_sent: None,
                 export: None,
                 solid_masks: None,
+                app_here: false,
             }),
             inbox: Mutex::new(Vec::new()),
             outbox,
@@ -271,6 +279,14 @@ impl Shared {
                     let (points, error) = split(result);
                     self.send(AgentMessage::GroundProbeResult { request_id, points, error });
                 }
+                Command::PlaceInfo { request_id, position } => {
+                    let result = match st.provider.as_mut() {
+                        Some(p) => unsafe { p.place_info(&cx, position) },
+                        None => Err("this game has nothing to say about places".into()),
+                    };
+                    let (place, error) = split(result);
+                    self.send(AgentMessage::PlaceInfoResult { request_id, place, error });
+                }
                 Command::CompanionOrders { request_id, companion } => {
                     let result = match st.provider.as_mut() {
                         Some(p) => unsafe { p.companion_orders(&cx, &companion) },
@@ -289,6 +305,38 @@ impl Shared {
                         Err(e) => self.log(LogLevel::Warn, format!("{companion}: order {order} failed: {e}")),
                     }
                     self.send(AgentMessage::CompanionOrderResult { request_id, ok: result.is_ok(), error: result.err() });
+                }
+                Command::SetGamePins(pins) => {
+                    if let Some(p) = st.provider.as_mut() {
+                        unsafe { p.set_game_pins(&cx, pins) };
+                    }
+                }
+                Command::GamePing(position) => {
+                    let result = st.provider.as_mut().map_or(Err("this game has no pings".to_owned()), |p| unsafe { p.game_ping(&cx, position) });
+                    if let Err(e) = result {
+                        self.log(LogLevel::Warn, format!("game ping failed: {e}"));
+                    }
+                }
+                Command::SetGameOptions(options) => {
+                    if let Some(p) = st.provider.as_mut() {
+                        p.set_options(&options);
+                    }
+                }
+                Command::ReadWorldMap { request_id, dir, terrain } => {
+                    let capture = match st.provider.as_mut() {
+                        Some(p) => unsafe { p.read_world_map(&cx, terrain) },
+                        None => Err("this game has no world maps".into()),
+                    };
+                    match capture {
+                        Ok(capture) => {
+                            let outbox = self.outbox.clone();
+                            crate::worldmap::save(capture, dir, move |result| {
+                                let (map, error) = split(result);
+                                let _ = outbox.blocking_send(AgentMessage::WorldMapResult { request_id, map, error });
+                            });
+                        }
+                        Err(e) => self.send(AgentMessage::WorldMapResult { request_id, map: None, error: Some(e) }),
+                    }
                 }
                 Command::ExportWorld { request_id } => {
                     if st.export.is_some() {
@@ -330,8 +378,14 @@ impl Shared {
         }
 
         if !self.connected.load(Ordering::Relaxed) {
+            if std::mem::take(&mut st.app_here) {
+                if let Some(p) = st.provider.as_mut() {
+                    unsafe { p.app_left(&cx) };
+                }
+            }
             return;
         }
+        st.app_here = true;
 
         // Hotkeys: only while the game window has focus and isn't capturing text.
         let blocked = !game_has_focus() || st.provider.as_mut().is_some_and(|p| unsafe { p.input_blocked(&cx) });
@@ -370,6 +424,9 @@ impl Shared {
             provider.reconnected();
         }
         let mut snap = unsafe { provider.snapshot(&cx, st.frame) };
+        if let Some(zone) = unsafe { provider.next_zone_pins(&cx) } {
+            self.send(AgentMessage::ZonePins(zone));
+        }
         if let Some(local) = snap.local.as_mut() {
             local.camera = unsafe { self.unity.main_camera(&self.rt) }.map(|c| CameraView {
                 position: to_proto(c.position),
@@ -399,6 +456,9 @@ impl Shared {
                         environment: snap.environment,
                         dropped_bag: snap.dropped_bag,
                         dying: snap.dying,
+                        indoors: snap.indoors,
+                        progress: snap.progress,
+                        visited: snap.visited,
                     };
                     if self.outbox.try_send(AgentMessage::SnapshotUpdate(Box::new(update.clone()))).is_ok() {
                         st.last_sent_at = Some(now);

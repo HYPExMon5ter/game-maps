@@ -88,6 +88,21 @@ pub fn module_loaded(pid: u32, file_name: &str) -> Option<bool> {
 }
 
 /// Whether a process is still running.
+/// The game's executable.
+pub fn exe_path(pid: u32) -> Option<PathBuf> {
+    use windows::core::PWSTR;
+    use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION};
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buffer = [0u16; 1024];
+        let mut len = buffer.len() as u32;
+        let found = QueryFullProcessImageNameW(process, PROCESS_NAME_FORMAT(0), PWSTR(buffer.as_mut_ptr()), &mut len);
+        let _ = windows::Win32::Foundation::CloseHandle(process);
+        found.ok()?;
+        Some(PathBuf::from(String::from_utf16_lossy(&buffer[..len as usize])))
+    }
+}
+
 pub fn is_alive(pid: u32) -> bool {
     const STILL_ACTIVE: u32 = 259;
     unsafe {

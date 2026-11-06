@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { companionState, companionStatus, orderMenu } from './companions'
+import { companionAlerts, companionState, companionStatus, orderMenu } from './companions'
 import type { CompanionStatus, WorldSnapshot } from './protocol'
 
 const order = (group: string, label: string, id: string) => ({ id, group, label })
@@ -41,5 +41,27 @@ describe('companionState', () => {
     expect(companionState({ ...kelvin, activity: 'Logs' })).toBe('Logs')
     expect(companionState({ ...kelvin, activity: 'Logs', injured: true })).toBe('Injured, needs helping up')
     expect(companionState({ ...kelvin, alive: false, injured: true })).toBe('Dead')
+  })
+})
+
+describe('companionAlerts', () => {
+  const kelvin = (fullness: number, extra: Partial<CompanionStatus> = {}): CompanionStatus => ({ id: 'kelvin', name: 'Kelvin', position: null, activity: null, alive: true, injured: false, stats: [{ name: 'Fullness', value: fullness, max: 100 }], ...extra })
+
+  it('warns once, and again only after recovering', () => {
+    const warned = new Set<string>()
+    expect(companionAlerts([kelvin(20)], warned)).toEqual(["Kelvin's fullness is low"])
+    expect(companionAlerts([kelvin(10)], warned)).toEqual([])
+    expect(companionAlerts([kelvin(30)], warned)).toEqual([])
+    expect(companionAlerts([kelvin(20)], warned)).toEqual([])
+    expect(companionAlerts([kelvin(50)], warned)).toEqual([])
+    expect(companionAlerts([kelvin(20)], warned)).toEqual(["Kelvin's fullness is low"])
+  })
+
+  it('says when they die, and leaves their stats alone then', () => {
+    expect(companionAlerts([kelvin(0, { alive: false })], new Set())).toEqual(['Kelvin died'])
+  })
+
+  it('ignores stats that are fine to run out', () => {
+    expect(companionAlerts([kelvin(90, { stats: [{ name: 'Morale', value: 0, max: 100 }] })], new Set())).toEqual([])
   })
 })

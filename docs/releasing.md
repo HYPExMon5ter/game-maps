@@ -24,6 +24,16 @@ points `maps.json` there at the new pack. Packs are built reproducibly, so a gam
 whose data hasn't changed is skipped and nobody downloads it again. The previous pack
 is kept for apps that were mid-download, and older ones are deleted.
 
+Each pack records the Steam build it was made from, read from the installed game, and its
+pin counts. A category that lost more than 30% of its pins stops the publish, since that
+usually means an update broke a generator; check it, or use `--force` if the drop is real.
+
+To see which maps a game update has left behind:
+
+```sh
+python -I tools/mappack/outdated.py
+```
+
 `maps` is a pre-release on purpose. It must never become the "latest" release,
 because that's where the app looks for its own updates.
 

@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { FilterSet } from '../lib/filterSets'
-import type { Category, GameDefinition, GameMap, Pin } from '../lib/game'
+import { isCategoryVisible, isItemVisible, onlyFilters, withCategories, withItem, type FilterItem, type Filters, type OnlyFilter } from '../lib/filters'
+import type { GameDefinition, GameMap, Pin } from '../lib/game'
 import type { LinkStatus, OverlayMode, PathInfo, Vec3, WorldLayer, WorldSnapshot } from '../lib/protocol'
 import type { PinTimers } from '../lib/timers'
 import { DEFAULT_WORLD_INFO, EMPTY_INDEX, type WorldIndex, type WorldInfo } from './worlds'
@@ -12,6 +13,10 @@ export interface GameUserData {
   shownCategories: string[]
   /** Saved category filters, the same in every world. */
   filterSets: FilterSet[]
+  /** Set while the map shows one thing only. */
+  only: OnlyFilter | null
+  /** Sidebar groups left open. */
+  openGroups: string[]
   /** The player's notes, by pin id (any pin, not just their own). */
   notes: Record<string, string>
   /** When each pin's countdown ends (ms since the epoch), by pin id. */
@@ -77,7 +82,7 @@ export function selectSession(s: MapSession): MapSession {
   }
 }
 
-export const EMPTY_USER_DATA: GameUserData = { customPins: [], found: [], hiddenCategories: [], shownCategories: [], filterSets: [], notes: {}, timers: {} }
+export const EMPTY_USER_DATA: GameUserData = { customPins: [], found: [], hiddenCategories: [], shownCategories: [], filterSets: [], only: null, openGroups: [], notes: {}, timers: {} }
 
 interface AppState {
   status: LinkStatus | null
@@ -94,6 +99,10 @@ interface AppState {
   world: WorldInfo
   /** The game's known worlds. */
   worldIndex: WorldIndex
+  /** The shown generated world has a map (see `GameDefinition.worldMaps`). */
+  worldMapReady: boolean
+  /** Bumped when a generated world's map files change. */
+  worldMapVersion: number
   /** How many teleports "teleport back" can undo. */
   backSteps: number
   /** Walking route to the tracked target, refreshed while tracking. */
@@ -119,9 +128,12 @@ interface AppState {
   setStatus(s: LinkStatus): void
   setMode(m: OverlayMode): void
   setSnapshot(s: WorldSnapshot | null): void
-  setGame(game: GameDefinition, pins: Pin[], user: GameUserData, world: WorldInfo, index: WorldIndex, session: MapSession): void
+  setGame(game: GameDefinition, pins: Pin[], user: GameUserData, world: WorldInfo, index: WorldIndex, session: MapSession, worldMapReady?: boolean): void
   /** Shows another world of the current game. */
-  setWorld(world: WorldInfo, index: WorldIndex, user: GameUserData, session: MapSession): void
+  /** `worldPins`: for generated worlds, the world's pins (null if it has no map yet). */
+  setWorld(world: WorldInfo, index: WorldIndex, user: GameUserData, session: MapSession, worldPins?: Pin[] | null): void
+  /** A generated world's map files changed; `tiles` if not only its pins did. */
+  setWorldMap(pins: Pin[], tiles: boolean): void
   setWorldIndex(index: WorldIndex): void
   setBackSteps(steps: number): void
   setRoute(route: PathInfo | null): void
@@ -135,7 +147,11 @@ interface AppState {
   setViewLayer(layer: WorldLayer | null): void
   setFriendPins(pins: Pin[]): void
   setMapView(view: SavedMapView): void
-  toggleCategory(id: string): void
+  toggleItem(item: FilterItem): void
+  setCategoriesVisible(ids: string[], visible: boolean): void
+  showOnly(item: Pick<FilterItem, 'key' | 'label'>): void
+  showAllAgain(): void
+  toggleGroupOpen(id: string): void
   setAllCategories(visible: boolean): void
   toggleFound(id: string): void
   markFound(ids: string[]): void
@@ -163,6 +179,8 @@ export const useStore = create<AppState>((set) => ({
   user: EMPTY_USER_DATA,
   world: DEFAULT_WORLD_INFO,
   worldIndex: EMPTY_INDEX,
+  worldMapReady: false,
+  worldMapVersion: 0,
   backSteps: 0,
   route: null,
   selectedPinId: null,
@@ -188,9 +206,18 @@ export const useStore = create<AppState>((set) => ({
       const changed = layer !== undefined && s.snapshot?.local?.layer !== undefined && layer !== s.snapshot.local.layer
       return { snapshot, viewLayerOverride: changed ? null : s.viewLayerOverride }
     }),
-  setGame: (game, gamePins, user, world, worldIndex, session) =>
-    set({ game, map: game.maps[0] ?? null, gamePins, user, world, worldIndex, route: null, ...session }),
-  setWorld: (world, worldIndex, user, session) => set({ world, worldIndex, user, route: null, ...session }),
+  setGame: (game, gamePins, user, world, worldIndex, session, worldMapReady = false) =>
+    set({ game, map: game.maps[0] ?? null, gamePins, worldMapReady, user, world, worldIndex, route: null, ...session }),
+  setWorld: (world, worldIndex, user, session, worldPins) =>
+    set({
+      world,
+      worldIndex,
+      user,
+      route: null,
+      ...session,
+      ...(worldPins === undefined ? {} : { gamePins: worldPins ?? [], worldMapReady: worldPins !== null }),
+    }),
+  setWorldMap: (gamePins, tiles) => set((s) => ({ gamePins, worldMapReady: true, worldMapVersion: s.worldMapVersion + (tiles ? 1 : 0) })),
   setWorldIndex: (worldIndex) => set({ worldIndex }),
   setBackSteps: (backSteps) => set({ backSteps }),
   setRoute: (route) => set({ route }),
@@ -205,25 +232,30 @@ export const useStore = create<AppState>((set) => ({
   setViewLayer: (viewLayerOverride) => set({ viewLayerOverride }),
   setMapView: (mapView) => set({ mapView }),
   setFriendPins: (friendPins) => set({ friendPins }),
-  toggleCategory: (id) =>
+  toggleItem: (item) =>
     set((s) => {
-      const visible = isCategoryVisible(s.game?.categories.find((c) => c.id === id), s.user)
-      const hidden = new Set(s.user.hiddenCategories)
-      const shown = new Set(s.user.shownCategories)
-      if (visible) {
-        hidden.add(id)
-        shown.delete(id)
-      } else {
-        hidden.delete(id)
-        shown.add(id)
-      }
-      return { user: { ...s.user, hiddenCategories: [...hidden], shownCategories: [...shown] } }
+      // Changing anything while showing one thing goes back to what was there first.
+      const filters = s.user.only?.before ?? s.user
+      return { user: { ...s.user, ...withItem(filters, item.key, !isItemVisible(item, filters)), only: null } }
+    }),
+  setCategoriesVisible: (ids, visible) => set((s) => ({ user: { ...s.user, ...withCategories(s.user.only?.before ?? s.user, ids, visible), only: null } })),
+  showOnly: ({ key, label }) =>
+    set((s) => {
+      if (!s.game) return {}
+      const before: Filters = s.user.only?.before ?? { hiddenCategories: s.user.hiddenCategories, shownCategories: s.user.shownCategories }
+      return { user: { ...s.user, ...onlyFilters(s.game.categories, key), only: { key, label, before } } }
+    }),
+  showAllAgain: () => set((s) => (s.user.only ? { user: { ...s.user, ...s.user.only.before, only: null } } : {})),
+  toggleGroupOpen: (id) =>
+    set((s) => {
+      const open = s.user.openGroups.includes(id)
+      return { user: { ...s.user, openGroups: open ? s.user.openGroups.filter((g) => g !== id) : [...s.user.openGroups, id] } }
     }),
   setAllCategories: (visible) =>
     set((s) => {
       const ids = s.game?.categories.map((c) => c.id) ?? []
       return {
-        user: { ...s.user, hiddenCategories: visible ? [] : ids, shownCategories: visible ? ids : [] },
+        user: { ...s.user, hiddenCategories: visible ? [] : ids, shownCategories: visible ? ids : [], only: null },
       }
     }),
   markFound: (ids) =>
@@ -266,12 +298,7 @@ export const useStore = create<AppState>((set) => ({
   dismissToast: (id) => set((s) => (s.toast?.id === id ? { toast: null } : {})),
 }))
 
-export function isCategoryVisible(category: Category | undefined, user: Pick<GameUserData, 'hiddenCategories' | 'shownCategories'>): boolean {
-  if (!category) return true
-  if (user.hiddenCategories.includes(category.id)) return false
-  if (user.shownCategories.includes(category.id)) return true
-  return category.visible
-}
+export { isCategoryVisible }
 
 export function selectViewLayer(s: Pick<AppState, 'viewLayerOverride' | 'snapshot'>): WorldLayer {
   return s.viewLayerOverride ?? (s.snapshot?.local?.layer === 'caves' ? 'caves' : 'surface')

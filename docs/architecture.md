@@ -59,7 +59,68 @@ in the folder is generated and published as a map pack.
   launcher's **Live** / **Map only** filter uses it before the game is running.
 - `maps[]`: each map has its `tiles` (and optional per-layer `layerTiles`, e.g. caves)
   and a `projection` that maps world coordinates onto the tile grid.
-- `categories[]`: id, name, icon, color, default visibility.
+- `categories[]`: id, name, icon, color, default visibility. `split` lists a category by kind, going by pin names, with `mergeNames` for names that count as another kind.
+- `groups[]`: id, name and the categories the sidebar lists under it. Anything left out goes under My Pins.
+
+A game whose worlds are generated sets `worldMaps`: no map pack can have them, so each
+world's map comes from the running game. The first time a world loads the agent draws it
+(`Provider::read_world_map`, on a thread of its own after one read on the main thread) into
+`<data>/worlds/<game>/<world>/`, where `src-tauri/src/worldmaps.rs` cuts it into tiles
+and saves its pins. They're served under `worlds/...`, so the world's map stays available
+with the game closed. Pins and explored areas are read again as the map opens.
+
+### Map packs or maps from the game
+
+The rule for a new game: **a generated world reads its map at runtime, a fixed world ships a
+map pack.** Reading a fixed world at runtime was looked at and doesn't pay: Sunkenland's
+buildings are unloaded Addressables, and Sons of the Forest's pickups have to be read
+before anything is taken, so a player's map would depend on what they've already done. A
+pack is also complete before the player has seen anything, and costs the game nothing.
+
+What a pack can't do is notice a game update, so each one records the Steam build it was
+made from (`gameBuild`), and the launcher warns when the installed game has moved on.
+`tools/mappack/outdated.py` lists the games that need regenerating, and `publish.py` refuses
+a pack that lost a big share of a category's pins, which is what a generator broken by an
+update looks like.
+
+### Surviving game updates
+
+Everything is looked up by name, and a provider treats most of it as optional: a game
+update should cost a feature, not the game. Only what everything hangs on is required (the
+player and the world in Valheim).
+
+- `Runtime::field_of` checks a field's type before it's read straight from memory, so a
+  field that changed type is lost instead of misread.
+- `Runtime::new_object` refuses a class with no parameterless constructor, because the
+  runtime would abort the game. Structs have none: `Runtime::new_value` makes those.
+- Method signatures that matter are checked (`Minimap.AddPin` by its parameters), and
+  anything that can only fail while the game is loading says so (`WORLD_MAP_NOT_READY`), so
+  only that gets retried.
+
+### Sidebar filters
+
+`lib/filters.ts` holds what's shown. A filter is a category id, or `<category>/<kind>` for
+one kind in a category with `split`, where kinds come from pin names, so they work for
+pins that only exist at runtime. A kind follows its category until it's set by itself.
+"Only" replaces the filters and keeps the old ones in `user.only`; changing anything goes
+back to them first.
+
+### Reading things on demand
+
+Anything only a player looking at it needs is read when they ask, not every frame.
+Sunkenland's island details (`Provider::place_info`) go through a place's loot, which takes
+up to 50 ms, so they're read when the pin opens. Valheim's portal links need no read at
+all: the game pairs portals by tag, and the pins already have their tags.
+
+### Anti-cheat
+
+`games::anti_cheat_in` looks for Easy Anti-Cheat and BattlEye next to the game's executable
+every time it starts, since a game can gain one in an update, and `link.rs` doesn't inject
+if it finds one.
+
+A game that sets `gameMap` and whose provider reports `Capabilities::game_map` also gets the
+player's pins and pings on its own map (`Provider::set_game_pins`, `Provider::game_ping`),
+so players without Game Maps see them, and those players' pings come back as markers.
 
 A game with only `game.json`, tiles and pins works as a static map. A provider in
 `crates/agent/src/provider/` adds live location, teleport, other players and the

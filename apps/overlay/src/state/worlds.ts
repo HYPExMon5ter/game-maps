@@ -13,6 +13,7 @@
 //   session:<game>[:<world>] map state, `fog:<game>:<world>` explored areas
 
 import type { FilterSet } from '../lib/filterSets'
+import type { OnlyFilter } from '../lib/filters'
 import type { Pin } from '../lib/game'
 import type { GameWorld, WorldKind } from '../lib/protocol'
 
@@ -59,10 +60,12 @@ export interface GamePrefs {
   hiddenCategories: string[]
   shownCategories: string[]
   filterSets: FilterSet[]
+  only: OnlyFilter | null
+  openGroups: string[]
 }
 
 export const EMPTY_WORLD_DATA: WorldData = { customPins: [], found: [], notes: {}, timers: {} }
-export const EMPTY_PREFS: GamePrefs = { hiddenCategories: [], shownCategories: [], filterSets: [] }
+export const EMPTY_PREFS: GamePrefs = { hiddenCategories: [], shownCategories: [], filterSets: [], only: null, openGroups: [] }
 
 export const keys = {
   prefs: (game: string) => `prefs:${game}`,

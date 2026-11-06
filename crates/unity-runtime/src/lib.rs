@@ -185,6 +185,22 @@ impl Runtime {
         Method { ptr: m, name, is_static: flags & METHOD_ATTRIBUTE_STATIC != 0 }
     }
 
+    /// A field read straight from memory: `field`, but only if its type name contains
+    /// `kind`. A game update that changes the type then loses a feature, not the game.
+    pub fn field_of(&self, class: Class, name: &str, kind: &str) -> Result<Field> {
+        let field = self.field(class, name)?;
+        if unsafe { self.backend.field_type_name(field.ptr) }.contains(kind) {
+            Ok(field)
+        } else {
+            Err(Error::MemberNotFound(format!("{}::{name} as {kind}", self.class_name(class))))
+        }
+    }
+
+    /// Full type names of a method's parameters.
+    pub fn method_params(&self, method: &Method) -> Vec<String> {
+        unsafe { self.backend.method_param_types(method.ptr) }
+    }
+
     /// Looks up a field by name (walks base classes).
     pub fn field(&self, class: Class, name: &str) -> Result<Field> {
         let c = CString::new(name).map_err(|_| Error::MemberNotFound(name.into()))?;
@@ -280,6 +296,14 @@ impl Runtime {
         self.invoke(method, this, args)
     }
 
+    /// Pointer to the value in a boxed struct, to pass it by value to a managed call.
+    ///
+    /// # Safety
+    /// `boxed` must be a live boxed value.
+    pub unsafe fn unboxed(&self, boxed: *mut ManagedObject) -> *mut c_void {
+        self.backend.unbox(boxed as Ptr)
+    }
+
     /// Unboxes a value-type result from [`Runtime::invoke`].
     ///
     /// # Safety
@@ -363,10 +387,30 @@ impl Runtime {
     /// A new instance of `class` built by its parameterless constructor. Only kept alive
     /// by references the GC can see, so don't keep it across frames.
     ///
+    /// A class without that constructor is an error here: the runtime would abort the game.
+    /// Structs don't have one, see [`Runtime::new_value`].
+    ///
     /// # Safety
     /// Must run on an attached thread (the main thread for Unity types).
     pub unsafe fn new_object(&self, class: Class) -> Result<*mut ManagedObject> {
+        // On the class itself: `Self::method` would find `System.Object`'s.
+        if self.backend.method_from_name(class.0, c".ctor", 0).is_null() {
+            return Err(Error::MemberNotFound(format!("{}::.ctor()", self.class_name(class))));
+        }
         let obj = self.backend.new_object(class.0);
+        if obj.is_null() {
+            return Err(Error::Null);
+        }
+        Ok(obj as *mut ManagedObject)
+    }
+
+    /// A new boxed struct of type `class`, all zeroes, under the same rules as
+    /// [`Runtime::new_object`] for how long it lives.
+    ///
+    /// # Safety
+    /// Must run on an attached thread.
+    pub unsafe fn new_value(&self, class: Class) -> Result<*mut ManagedObject> {
+        let obj = self.backend.new_value(class.0);
         if obj.is_null() {
             return Err(Error::Null);
         }
@@ -458,6 +502,15 @@ impl Field {
         std::ptr::read_unaligned((obj as *const u8).add(self.offset) as *const T)
     }
 
+    /// Reads this field of a struct stored inline, e.g. an array element.
+    ///
+    /// # Safety
+    /// `value` must point at a struct containing this field, and `T` be its storage type.
+    pub unsafe fn get_inline<T: Copy>(&self, value: *const u8) -> T {
+        debug_assert!(!self.is_static);
+        std::ptr::read_unaligned(value.add(self.offset - layout::OBJECT_HEADER) as *const T)
+    }
+
     /// Writes an instance field. Not for references: those need the GC's write barrier.
     ///
     /// # Safety
@@ -478,6 +531,17 @@ pub struct ManagedArray {
 }
 
 impl ManagedArray {
+    /// The first `len` elements of an existing array, at most its length.
+    ///
+    /// # Safety
+    /// `array` must be a live managed array.
+    pub unsafe fn of(rt: &Runtime, array: *mut ManagedObject, len: usize) -> Self {
+        let class = rt.backend.object_class(array as Ptr);
+        let stride = rt.backend.array_element_size(class).max(0) as usize;
+        let total = *((array as *const u8).add(layout::ARRAY_LENGTH) as *const usize);
+        Self { object: array, stride, len: len.min(total) }
+    }
+
     /// Pointer to element `i`'s data (value types are stored inline).
     ///
     /// # Safety
@@ -550,8 +614,11 @@ pub unsafe fn read_value_array<T: Copy>(array: *mut ManagedObject, max_len: usiz
     }
     let base = array as *const u8;
     let len = (*(base.add(layout::ARRAY_LENGTH) as *const usize)).min(max_len);
-    let data = base.add(layout::ARRAY_DATA) as *const T;
-    (0..len).map(|i| std::ptr::read_unaligned(data.add(i))).collect()
+    let mut out = Vec::<T>::with_capacity(len);
+    // One copy: these can be megabytes, and this runs on the game's main thread.
+    std::ptr::copy_nonoverlapping(base.add(layout::ARRAY_DATA), out.as_mut_ptr() as *mut u8, len * std::mem::size_of::<T>());
+    out.set_len(len);
+    out
 }
 
 /// Elements of a managed reference-type array (`T[]` where `T` is a class).

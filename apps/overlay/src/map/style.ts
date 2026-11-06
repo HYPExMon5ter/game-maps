@@ -61,7 +61,7 @@ export function applyPinDisplay(ml: MlMap, map: GameMap, display: PinDisplay) {
 }
 
 /** `assetOrigin` serves the label fonts (`public/fonts`). */
-export function buildStyle(game: GameDefinition, map: GameMap, assetOrigin: string): StyleSpecification {
+export function buildStyle(game: GameDefinition, map: GameMap, assetOrigin: string, worldId?: string): StyleSpecification {
   const z = (relative: number) => mapZoom(map.projection, relative)
   const caves = map.layerTiles?.caves
   return {
@@ -70,7 +70,7 @@ export function buildStyle(game: GameDefinition, map: GameMap, assetOrigin: stri
     sources: {
       base: {
         type: 'raster',
-        tiles: [tileUrl(game, map)],
+        tiles: [tileUrl(game, map, map.tiles, worldId)],
         tileSize: map.tiles.tileSize,
         minzoom: map.tiles.minNativeZoom,
         maxzoom: map.tiles.maxNativeZoom,

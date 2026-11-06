@@ -6,8 +6,10 @@ import { LAYER_LABELS, type Pin } from '../lib/game'
 import { readyPeers, shareTrack, targetOfPin, useSyncStore } from '../lib/sync/sync'
 import { formatRemaining } from '../lib/timers'
 import { useCanTeleport, useTeleportOffered } from '../lib/teleport'
+import { linkedPortals } from '../lib/worldExtras'
 import { useStore } from '../state/store'
 import { Button, ButtonGrid } from './controls'
+import { PlaceDetails } from './PlaceDetails'
 import { CategoryIcon } from './Sidebar'
 import { useSettings } from '../settings/store'
 
@@ -62,6 +64,22 @@ function PinExtras({ pinId }: { pinId: string }) {
   )
 }
 
+/** Where a portal leads, as far as the portals seen so far can tell. */
+function PortalLink({ pin, others }: { pin: Pin; others: Pin[] }) {
+  const { selectPin } = useStore.getState()
+  const units = useSettings((s) => s.ui.units)
+  const game = useStore((s) => s.game)
+  const map = useStore((s) => s.map)
+  if (others.length === 0) return <p className="mt-3 text-[12.5px] text-ink-dim">No other portal named this has been seen yet.</p>
+  if (others.length > 1) return <p className="mt-3 text-[12.5px] text-ink-dim">{others.length} other portals share this name, so it could link to any of them.</p>
+  const distance = game && map ? Math.hypot(pin.position[map.projection.east] - others[0].position[map.projection.east], pin.position[map.projection.north] - others[0].position[map.projection.north]) / game.unitsPerMeter : null
+  return (
+    <button className="mt-3 text-left text-[12.5px] text-accent hover:underline" onClick={() => selectPin(others[0].id)}>
+      Linked to the portal {distance !== null ? `${formatDistance(distance, units)} away` : 'with this name'}
+    </button>
+  )
+}
+
 export function PinDetails({ onEdit }: { onEdit: (pin: Pin) => void }) {
   const id = useStore((s) => s.selectedPinId)
   const game = useStore((s) => s.game)
@@ -72,6 +90,8 @@ export function PinDetails({ onEdit }: { onEdit: (pin: Pin) => void }) {
   const tracked = useStore((s) => s.tracked)
   const units = useSettings((s) => s.ui.units)
   const local = useStore((s) => s.snapshot?.local ?? null)
+  const live = local !== null
+  const gamePins = useStore((s) => s.gamePins)
   const teleportOffered = useTeleportOffered()
   const canTeleport = useCanTeleport()
   const together = useSyncStore((s) => readyPeers(s).length > 0)
@@ -100,6 +120,8 @@ export function PinDetails({ onEdit }: { onEdit: (pin: Pin) => void }) {
         </button>
       </div>
       {pin.description && <p className="mt-3 whitespace-pre-wrap text-[13px] leading-relaxed text-ink-dim">{pin.description}</p>}
+      {category?.linksByName && <PortalLink pin={pin} others={linkedPortals(pin, gamePins)} />}
+      {category?.placeInfo && live && <PlaceDetails key={`place:${pin.id}`} position={pin.position} />}
       <PinExtras key={pin.id} pinId={pin.id} />
       <ButtonGrid className="mt-4">
         <Button tone={isTracked ? 'primary' : 'default'} onClick={() => setTracked(isTracked ? null : { kind: 'pin', id: pin.id })}>

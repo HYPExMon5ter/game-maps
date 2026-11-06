@@ -13,6 +13,10 @@ Usage (needs the GitHub CLI, logged in):
 
 Packs are built reproducibly, so a game whose map data hasn't changed is skipped
 (users don't re-download identical maps). Use --force to publish anyway.
+
+Each pack records the Steam build it was made from, so the app can tell players when the
+game has moved on, and its pin counts: a generator that silently lost a category after a
+game update stops the publish instead of reaching players.
 """
 from __future__ import annotations
 
@@ -70,6 +74,41 @@ def build_pack(game_dir: str, out_path: str) -> dict:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             digest.update(chunk)
     return {"sha256": digest.hexdigest(), "size": os.path.getsize(out_path), "files": len(files)}
+
+
+# A category that loses more than this share of its pins stops the publish.
+MAX_PIN_DROP = 0.3
+STEAM_LIBRARIES = (r"D:\SteamLibrary\steamapps", r"C:\Program Files (x86)\Steam\steamapps")
+
+
+def game_build(game_dir: str) -> str | None:
+    """The installed Steam build of a game, from its appmanifest."""
+    with open(os.path.join(game_dir, "game.json"), encoding="utf-8") as f:
+        app_id = json.load(f).get("steamAppId")
+    for library in os.environ.get("STEAM_LIBRARIES", os.pathsep.join(STEAM_LIBRARIES)).split(os.pathsep):
+        path = os.path.join(library, f"appmanifest_{app_id}.acf")
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    parts = [p for p in line.split('"') if p.strip()]
+                    if len(parts) >= 2 and parts[0] == "buildid":
+                        return parts[1]
+    return None
+
+
+def pin_counts(game_dir: str) -> dict[str, int]:
+    """Pins per category."""
+    with open(os.path.join(game_dir, "pins.json"), encoding="utf-8") as f:
+        pins = json.load(f).get("pins", [])
+    counts: dict[str, int] = {}
+    for pin in pins:
+        counts[pin["category"]] = counts.get(pin["category"], 0) + 1
+    return counts
+
+
+def lost_pins(before: dict[str, int], after: dict[str, int]) -> list[str]:
+    """Categories that shrank too much to be a real change to the game."""
+    return [f"{c}: {n} -> {after.get(c, 0)}" for c, n in sorted(before.items()) if after.get(c, 0) < n * (1 - MAX_PIN_DROP)]
 
 
 def gh(*args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -144,6 +183,11 @@ def main() -> None:
             print(f"  built {zip_path}")
             continue
         current = manifest.setdefault("packs", {}).get(game)
+        counts = pin_counts(os.path.join(GAMES_DIR, game))
+        lost = lost_pins((current or {}).get("pinCounts", {}), counts)
+        if lost and not args.force:
+            os.remove(zip_path)
+            raise SystemExit(f"{game}: pins went missing, check the generators (--force to publish anyway):\n  " + "\n  ".join(lost))
         if current and current.get("sha256") == info["sha256"] and not args.force:
             print("  unchanged since the last publish, skipped")
             os.remove(zip_path)
@@ -155,6 +199,8 @@ def main() -> None:
             "url": f"https://github.com/{args.repo}/releases/download/{RELEASE_TAG}/{zip_name}",
             "sha256": info["sha256"],
             "size": info["size"],
+            "gameBuild": game_build(os.path.join(GAMES_DIR, game)),
+            "pinCounts": counts,
         }
         upload_manifest(args.repo, manifest)
         keep = {zip_name} | ({current["url"].rsplit("/", 1)[-1]} if current else set())

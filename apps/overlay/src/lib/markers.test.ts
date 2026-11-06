@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Pin } from './game'
-import { LiveMarkerFilter, markerName } from './markers'
+import { GAME_PING_ICON, LiveMarkerFilter, markerName, withoutAppPings } from './markers'
 import type { Marker } from './protocol'
 
 const cart: Pin = { id: 'c', category: 'vehicle', name: 'Golf Cart', icon: 'game:GolfCartIcon', position: { x: 100, y: 10, z: 100 } }
@@ -24,6 +24,18 @@ describe('LiveMarkerFilter', () => {
   })
   it('leaves companions to the player markers', () => {
     expect(filter.visible([marker('k', 'RobbyLogo', 0, 'companion')])).toEqual([])
+  })
+})
+
+describe('withoutAppPings', () => {
+  const ping = (x: number, icon = GAME_PING_ICON): Marker => ({ id: `p${x}`, kind: 'locator', label: 'Ping', icon, position: { x, y: 0, z: 0 } })
+
+  it('drops the copy of a ping the app shows', () => {
+    expect(withoutAppPings([ping(0), ping(100)], [{ position: { x: 5, y: 40, z: 0 } }], 1).map((m) => m.id)).toEqual(['p100'])
+  })
+
+  it('leaves other markers there alone', () => {
+    expect(withoutAppPings([ping(0, 'builtin:bed')], [{ position: { x: 0, y: 0, z: 0 } }], 1)).toHaveLength(1)
   })
 })
 

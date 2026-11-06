@@ -2,6 +2,7 @@
 
 import { mapHandle } from '../map/handle'
 import { isCategoryVisible, selectAllPins, useStore } from '../state/store'
+import { isPinVisible } from './filters'
 import { backend } from './backend'
 import type { Pin } from './game'
 import { LABEL_ZOOM } from '../map/style'
@@ -9,7 +10,7 @@ import { nearestUnfound } from './nearest'
 import { mapZoom, toLngLat, type LngLat, toWorld } from './projection'
 import type { LocalPlayer, Vec3, WorldLayer } from './protocol'
 
-const DEATH_PIN = 'custom-death'
+export const DEATH_PIN = 'custom-death'
 
 function projection() {
   const map = useStore.getState().map
@@ -133,7 +134,7 @@ export function markBag(at: Vec3, layer: WorldLayer = 'surface') {
   useStore.getState().upsertCustomPin({
     id: DEATH_PIN,
     category: 'custom',
-    name: 'Your bag',
+    name: useStore.getState().game?.bagName ?? 'Your bag',
     position: { ...at },
     layer: layer === 'caves' ? 'caves' : 'surface',
     color: '#eb5757',
@@ -154,7 +155,9 @@ export function trackNearestUnfound(hidden?: (pin: Pin) => boolean): Pin | null 
   if (!local || !s.game || !s.map) return null
   const shown = s.game.categories.filter((c) => isCategoryVisible(c, s.user))
   const collectible = shown.filter((c) => c.autoFound)
-  const pin = nearestUnfound(s.gamePins, collectible.length ? collectible : shown, s.user.found, local, s.map.projection, hidden)
+  const categories = new Map(s.game.categories.map((c) => [c.id, c]))
+  const pins = s.gamePins.filter((p) => isPinVisible(categories.get(p.category), p, s.user))
+  const pin = nearestUnfound(pins, collectible.length ? collectible : shown, s.user.found, local, s.map.projection, hidden)
   if (pin) s.setTracked({ kind: 'pin', id: pin.id })
   return pin
 }

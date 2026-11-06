@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { companionAlerts } from './lib/companions'
 import { pinsReached } from './lib/autoFound'
 import { resolveTracked } from './lib/tracking'
 import { bagMoved, clearDeathPin, findPin, markBag, markDeath, quickMark, refreshBackSteps, trackNearestUnfound } from './lib/actions'
@@ -17,6 +18,7 @@ import { acceptLatestRequest, announce, useSync, useSyncMirror } from './lib/syn
 import { startPersisting } from './state/persist'
 import { useTrail } from './state/trail'
 import { loadWorldView, useWorldTracking } from './state/useWorlds'
+import { useGamePins, useWorldExtras, useWorldMaps } from './state/worldMaps'
 import { useFog } from './state/fog'
 import { selectAllPins, useStore } from './state/store'
 import type { Hotkey } from './lib/protocol'
@@ -50,7 +52,7 @@ function useBackendSync(windowed: boolean) {
       events.snapshotUpdate((u) => {
         const { snapshot } = useStore.getState()
         // Lists stay the same arrays: whatever draws them can tell nothing changed.
-        if (snapshot) setSnapshot(u.local || u.others.length ? { ...snapshot, companions: undefined, environment: undefined, dropped_bag: undefined, dying: false, ...u } : null)
+        if (snapshot) setSnapshot(u.local || u.others.length ? { ...snapshot, companions: undefined, environment: undefined, dropped_bag: undefined, dying: false, indoors: false, progress: undefined, visited: undefined, ...u } : null)
         else if (u.local) void backend.lastSnapshot().then(setSnapshot)
       }),
       events.overlayMode(async (mode) => {
@@ -184,6 +186,19 @@ function useAutoFound() {
   )
 }
 
+/** Says when a companion needs looking after. Nothing is said, or used up, with nothing on screen. */
+function useCompanionAlerts() {
+  useEffect(() => {
+    const warned = new Set<string>()
+    return useStore.subscribe((s, prev) => {
+      const companions = s.snapshot?.companions
+      if (!companions || companions === prev.snapshot?.companions || s.mode === 'hidden') return
+      const alerts = companionAlerts(companions, warned)
+      if (alerts.length > 0) s.notify(alerts.join(', '))
+    })
+  }, [])
+}
+
 /** Keys for what the map does itself while the game has focus. */
 function useActionKeys() {
   useEffect(() => {
@@ -275,9 +290,10 @@ function useGameLoader() {
       try {
         id ??= (await backend.listGames())[0]?.id
         if (!id || id === current) return
-        const [{ game, pins }, view] = await Promise.all([loadGame(id), loadWorldView(id)])
+        const { game, pins } = await loadGame(id)
+        const view = await loadWorldView(game)
         if (cancelled) return
-        useStore.getState().setGame(game, pins, view.user, view.world, view.index, view.session)
+        useStore.getState().setGame(game, view.pins ?? pins, view.user, view.world, view.index, view.session, !!view.pins)
         setRequested(null)
       } catch (e) {
         logUiError(`could not load map ${id}: ${String(e)}`)
@@ -377,6 +393,7 @@ function MapWindowApp() {
   useGameLoader()
   useWorldTracking(false)
   useFog(false)
+  useWorldMaps(false)
   useSyncMirror()
   useTrail()
   const hasGame = useStore((s) => s.game !== null)
@@ -393,6 +410,7 @@ function MapWindowApp() {
 function OverlayApp() {
   useBackendSync(false)
   useAutoFound()
+  useCompanionAlerts()
   useRoute()
   useSync()
   useActionKeys()
@@ -402,6 +420,9 @@ function OverlayApp() {
   useGameLoader()
   useWorldTracking(true)
   useFog(true)
+  useWorldMaps(true)
+  useGamePins()
+  useWorldExtras()
   useHudSync()
   useTrackedCount()
   useOverlayKeys()
