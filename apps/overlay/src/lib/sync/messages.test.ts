@@ -6,7 +6,7 @@ const at = { x: 1, y: 2, z: 3 }
 
 describe('parseMessage', () => {
   it('accepts well-formed messages', () => {
-    expect(parseMessage({ type: 'hello', version: 1, name: 'Ana' })).toEqual({ type: 'hello', version: 1, name: 'Ana' })
+    expect(parseMessage({ type: 'hello', version: 1, name: 'Ana', host: true })).toEqual({ type: 'hello', version: 1, name: 'Ana', host: true })
     expect(parseMessage({ type: 'ping', position: at, layer: 'caves' })).toEqual({ type: 'ping', position: at, layer: 'caves' })
     expect(parseMessage({ type: 'track', target: { name: 'Shovel', position: at, layer: 'surface', pinId: 'p1' } })).toEqual({
       type: 'track',

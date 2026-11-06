@@ -93,6 +93,7 @@ async fn session(shared: &'static Shared, server: NamedPipeServer, outbox: &mut 
                     Ok(AppMessage::FindPath { request_id, to }) => shared.push_command(Command::FindPath { request_id, to }),
                     Ok(AppMessage::CheckRoute { request_id, points }) => shared.push_command(Command::CheckRoute { request_id, points }),
                     Ok(AppMessage::ProbeGround { request_id, points }) => shared.push_command(Command::ProbeGround { request_id, points }),
+                    Ok(AppMessage::PlaceInfo { request_id, position }) => shared.push_command(Command::PlaceInfo { request_id, position }),
                     Ok(AppMessage::CompanionOrders { request_id, companion }) => shared.push_command(Command::CompanionOrders { request_id, companion }),
                     Ok(AppMessage::CompanionOrder { request_id, companion, order }) => shared.push_command(Command::CompanionOrder { request_id, companion, order }),
                     Ok(AppMessage::ReadWorldMap { request_id, dir, terrain }) => shared.push_command(Command::ReadWorldMap { request_id, dir, terrain }),

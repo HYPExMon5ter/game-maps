@@ -89,9 +89,19 @@
     "game:BunkerResidentialIcon": "builtin:bed",
     "game:BunkerVIPIcon": "builtin:crown"
   },
+  "groups": [
+    { "id": "places", "name": "Places", "categories": ["cave", "bunker", "gps"] },
+    { "id": "story", "name": "Story", "categories": ["key", "blueprint", "collectible"] },
+    { "id": "gear", "name": "Weapons & Gear", "categories": ["weapon", "upgrade", "outfit", "tool"] },
+    { "id": "ammo", "name": "Ammo", "categories": ["ammo"] },
+    { "id": "materials", "name": "Crafting Materials", "categories": ["material"] },
+    { "id": "food", "name": "Food & Medicine", "categories": ["food"] },
+    { "id": "travel", "name": "Travel", "categories": ["vehicle"] }
+  ],
   "categories": [
     {
       "id": "cave",
+      "visitInside": true,
       "name": "Caves",
       "color": "#9c4dcc",
       "icon": "builtin:cave",
@@ -101,6 +111,7 @@
     },
     {
       "id": "bunker",
+      "visitInside": true,
       "name": "Bunkers",
       "color": "#00acc1",
       "icon": "builtin:bunker",
@@ -173,6 +184,7 @@
     },
     {
       "id": "ammo",
+      "split": true,
       "name": "Ammo & Explosives",
       "color": "#827717",
       "icon": "builtin:ammo",
@@ -181,6 +193,7 @@
     },
     {
       "id": "vehicle",
+      "split": true,
       "name": "Golf Carts & Gliders",
       "color": "#00897b",
       "icon": "builtin:car",
@@ -197,6 +210,7 @@
     },
     {
       "id": "food",
+      "split": true,
       "name": "Food & Medicine",
       "color": "#43a047",
       "icon": "builtin:food",
@@ -205,6 +219,7 @@
     },
     {
       "id": "material",
+      "split": true,
       "name": "Crafting Materials",
       "color": "#90a4ae",
       "icon": "builtin:layers",

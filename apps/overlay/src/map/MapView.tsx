@@ -19,6 +19,7 @@ import { trailLines } from '../lib/trail'
 import { steppedZoom } from '../lib/zoom'
 import { useTrailStore } from '../state/trail'
 import { IS_MAP_WINDOW } from '../lib/view'
+import { isPinVisible } from '../lib/filters'
 import { EMPTY_USER_DATA, isCategoryVisible, selectAllPins, selectViewLayer, useStore } from '../state/store'
 import { badgeKey, ensureBadge } from './badges'
 import { mapHandle } from './handle'
@@ -289,7 +290,7 @@ function usePinsLayer(map: MlMap | null) {
     const visible: { pin: Pin; key: string; color: string; icon: string; shape?: BadgeShape }[] = []
     for (const pin of pins) {
       const cat = categories.get(pin.category)
-      if (!isCategoryVisible(cat, user) && pin.id !== selected) continue
+      if (!isPinVisible(cat, pin, user) && pin.id !== selected) continue
       if (!showFound && found.has(pin.id) && pin.id !== selected) continue
       if (hiddenByFog?.(pin)) continue
       const color = pin.color ?? cat?.color ?? '#ffffff'

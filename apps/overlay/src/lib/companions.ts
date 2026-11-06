@@ -48,6 +48,39 @@ export function companionState(c: CompanionStatus): string {
   return c.activity ?? 'Idle'
 }
 
+/** Stats that hurt a companion when they run out. */
+const NEEDS = ['Health', 'Fullness', 'Hydration']
+/** Share of a stat that warns, and that it has to recover to for the next warning. */
+const LOW_SHARE = 0.25
+const RECOVERED_SHARE = 0.4
+
+/**
+ * What's newly wrong with companions, as messages. `warned` remembers what's been said, so
+ * a stat hovering around the limit doesn't warn over and over.
+ */
+export function companionAlerts(companions: CompanionStatus[], warned: Set<string>): string[] {
+  const alerts: string[] = []
+  const check = (key: string, bad: boolean, good: boolean, message: string) => {
+    if (bad && !warned.has(key)) {
+      warned.add(key)
+      alerts.push(message)
+    } else if (good) {
+      warned.delete(key)
+    }
+  }
+  for (const c of companions) {
+    check(`${c.id}:dead`, !c.alive, c.alive, `${c.name} died`)
+    if (!c.alive) continue
+    check(`${c.id}:injured`, c.injured, !c.injured, `${c.name} needs helping up`)
+    for (const stat of c.stats) {
+      if (!NEEDS.includes(stat.name) || stat.max <= 0) continue
+      const share = stat.value / stat.max
+      check(`${c.id}:${stat.name}`, share < LOW_SHARE, share >= RECOVERED_SHARE, `${c.name}'s ${stat.name.toLowerCase()} is low`)
+    }
+  }
+  return alerts
+}
+
 /** Whether a stat is high when things are bad (shown in a warning color when high). */
 export function isBadStat(name: string): boolean {
   return name === 'Fear' || name === 'Anger'

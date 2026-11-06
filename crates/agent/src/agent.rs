@@ -40,6 +40,7 @@ pub enum Command {
     CheckRoute { request_id: u32, points: Vec<Vec3> },
     ProbeGround { request_id: u32, points: Vec<Vec3> },
     CompanionOrders { request_id: u32, companion: String },
+    PlaceInfo { request_id: u32, position: Vec3 },
     CompanionOrder { request_id: u32, companion: String, order: String },
     ReadWorldMap { request_id: u32, dir: String, terrain: bool },
     SetGamePins(Vec<GamePin>),
@@ -278,6 +279,14 @@ impl Shared {
                     let (points, error) = split(result);
                     self.send(AgentMessage::GroundProbeResult { request_id, points, error });
                 }
+                Command::PlaceInfo { request_id, position } => {
+                    let result = match st.provider.as_mut() {
+                        Some(p) => unsafe { p.place_info(&cx, position) },
+                        None => Err("this game has nothing to say about places".into()),
+                    };
+                    let (place, error) = split(result);
+                    self.send(AgentMessage::PlaceInfoResult { request_id, place, error });
+                }
                 Command::CompanionOrders { request_id, companion } => {
                     let result = match st.provider.as_mut() {
                         Some(p) => unsafe { p.companion_orders(&cx, &companion) },
@@ -449,6 +458,7 @@ impl Shared {
                         dying: snap.dying,
                         indoors: snap.indoors,
                         progress: snap.progress,
+                        visited: snap.visited,
                     };
                     if self.outbox.try_send(AgentMessage::SnapshotUpdate(Box::new(update.clone()))).is_ok() {
                         st.last_sent_at = Some(now);

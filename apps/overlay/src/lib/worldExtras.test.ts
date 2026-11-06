@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import type { Category, Pin } from './game'
-import { enteredDungeon, hostPins, regrowthTimers, sharedLocations } from './worldExtras'
+import type { Projection } from './projection'
+import { discoveredPins, enteredDungeon, hostPins, linkedPortals, regrowthTimers, sharedLocations } from './worldExtras'
 
 const pin = (id: string, x: number, z: number, extra: Partial<Pin> = {}): Pin => ({ id, category: 'dungeon', name: id, position: { x, y: 40, z }, ...extra })
 const categories = [
   { id: 'dungeon', name: 'Dungeons', color: '#000', icon: 'builtin:cave', visible: true },
   { id: 'copper', name: 'Copper', color: '#000', icon: 'builtin:gem', visible: true, remembered: true },
 ] satisfies Category[]
+
+const map = { east: 'x', north: 'z', up: 'y', minEast: -100, maxEast: 100, minNorth: -100, maxNorth: 100 } as Projection
 
 describe('enteredDungeon', () => {
   const dungeons = [pin('near', 0, 0), pin('other', 100, 0)]
@@ -22,6 +25,21 @@ describe('enteredDungeon', () => {
 
   it('finds nothing with no dungeon around', () => {
     expect(enteredDungeon(dungeons, null, { x: 900, y: 5040, z: 0 })).toBeNull()
+  })
+})
+
+describe('discoveredPins', () => {
+  it('finds the pin of each discovered place', () => {
+    const pins = [pin('harbor', 0, 0), pin('far', 5000, 0)]
+    expect(discoveredPins(pins, [{ x: 30, y: 0, z: 0 }, { x: 900, y: 0, z: 0 }]).map((p) => p.id)).toEqual(['harbor'])
+  })
+})
+
+describe('linkedPortals', () => {
+  it('finds other portals with the same tag', () => {
+    const home = pin('a', 0, 0, { name: 'home', category: 'portal' })
+    const pins = [home, pin('b', 1, 0, { name: 'home', category: 'portal' }), pin('c', 2, 0, { name: 'mine', category: 'portal' }), pin('d', 3, 0, { name: 'home' })]
+    expect(linkedPortals(home, pins).map((p) => p.id)).toEqual(['b'])
   })
 })
 
@@ -43,7 +61,12 @@ describe('sharing locations', () => {
   })
 
   it('only takes categories this game has', () => {
-    const pins = hostPins([['a', 'dungeon', 'A', 1, 2, 3], ['b', 'evil', 'B', 1, 2, 3], ['c', 'copper', 'C', 1, 2, 3]], categories)
+    const pins = hostPins([['a', 'dungeon', 'A', 1, 2, 3], ['b', 'evil', 'B', 1, 2, 3], ['c', 'copper', 'C', 1, 2, 3]], categories, map)
     expect(pins).toEqual([{ id: 'a', category: 'dungeon', name: 'A', position: { x: 1, y: 2, z: 3 } }])
+  })
+
+  it('leaves out what is off the map or too long', () => {
+    const long = 'x'.repeat(500)
+    expect(hostPins([['a', 'dungeon', 'A', 9000, 0, 0], [long, 'dungeon', 'B', 0, 0, 0], ['c', 'dungeon', long, 0, 0, 0]], categories, map)).toEqual([])
   })
 })

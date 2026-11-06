@@ -14,15 +14,17 @@
 //! - `UIInGameTextChat.IsChatInputActive`, `QuantumConsole.IsActive`: suppress hotkeys
 //!   while typing.
 
+mod companions;
 mod creatures;
 mod marks;
+mod places;
 mod session;
 
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::time::{Duration, Instant};
 
-use game_maps_protocol::{Capabilities, Creature, GameWorld, LocalPlayer, Marker, MarkerKind, MultiplayerSession, RemotePlayer, TeleportTarget, Vec3, WorldKind, WorldLayer, WorldSnapshot};
+use game_maps_protocol::{Capabilities, CompanionOrderOption, PlaceInfo, CompanionStatus, Creature, Environment, GamePin, GameWorld, Wind, LocalPlayer, Marker, MarkerKind, MultiplayerSession, RemotePlayer, TeleportTarget, Vec3, WorldKind, WorldLayer, WorldSnapshot};
 use unity_runtime::{read_string, Field, ListLayout, ManagedObject, Method, Runtime, Vector3};
 
 use super::{to_proto, to_unity, Cx, Provider};
@@ -45,9 +47,14 @@ const NAME_REFRESH: Duration = Duration::from_secs(5);
 /// How often the loaded world and session are read (they only change when loading another).
 const WORLD_REFRESH: Duration = Duration::from_secs(2);
 const CREATURE_REFRESH: Duration = Duration::from_millis(250);
+const COMPANION_REFRESH: Duration = Duration::from_secs(1);
+/// Discovering a place is rare, and the check goes through each one.
+const VISITED_REFRESH: Duration = Duration::from_secs(10);
 /// How often placed flags are searched for (an object search; they rarely change). A
 /// search over `SLOW_FLAG_SEARCH` stutters the game (50 ms or more in a late-game world),
 /// so those wait for the map to open, with this as the longest gap.
+/// How far a place's pin can be from where the game keeps it.
+const PLACE_REACH: f32 = 120.0;
 const FLAG_REFRESH: Duration = Duration::from_secs(10);
 const SLOW_FLAG_REFRESH: Duration = Duration::from_secs(3600);
 const SLOW_FLAG_SEARCH: Duration = Duration::from_millis(2);
@@ -104,6 +111,10 @@ struct WorldMembers {
     assistants: Option<Field>,
     boats: Option<Field>,
     ocean_y: Option<Field>,
+    /// `locationsList`.
+    locations: Option<Field>,
+    /// The `Wind` transform: which way it blows.
+    wind: Option<Field>,
 }
 
 struct DummyMembers {
@@ -204,6 +215,17 @@ pub struct Sunkenland {
     last_creature_refresh: Option<Instant>,
     nearby: Vec<Creature>,
     logged_creatures: bool,
+    companion_members: Option<companions::Companions>,
+    place_members: Option<places::Places>,
+    companions: Vec<CompanionStatus>,
+    last_companion_refresh: Option<Instant>,
+    /// `Location.get_IsDiscovered`.
+    discovered: Option<Method>,
+    visited: Vec<Vec3>,
+    last_visited_refresh: Option<Instant>,
+    wind: Option<Wind>,
+    /// Pins waiting to go on the game's map.
+    pending_pins: Option<Vec<GamePin>>,
 }
 
 // Raw object pointers are only dereferenced on the main thread.
@@ -249,6 +271,8 @@ impl Sunkenland {
             assistants: rt.field(world_class, "Assistants").ok(),
             boats: rt.field(world_class, "PlayerBoatComponents").ok(),
             ocean_y: rt.field(world_class, "oceanObjectY").ok(),
+            locations: rt.field(world_class, "locationsList").ok(),
+            wind: rt.field(world_class, "Wind").ok(),
         });
 
         let dummy = rt.class("", "PlayerDummy").ok().and_then(|d| {
@@ -355,6 +379,17 @@ impl Sunkenland {
         let session_members = session::Session::resolve(rt);
         let mark_members = marks::MapMarks::resolve(rt, global_class);
         let flag_members = marks::Flags::resolve(rt);
+        let companion_members = companions::Companions::resolve(rt);
+        let place_members = places::Places::resolve(rt);
+        let discovered = rt.class("", "Location").ok().and_then(|c| rt.method(c, "get_IsDiscovered", 0).ok());
+        notes.push(format!(
+            "Sunkenland extras: orders={} places={} game_marks={} discovered={} wind={}",
+            companion_members.is_some(),
+            place_members.is_some(),
+            mark_members.as_ref().is_some_and(|m| m.can_write()),
+            discovered.is_some(),
+            world.as_ref().is_some_and(|w| w.wind.is_some()),
+        ));
         notes.push(format!("Sunkenland map marks: {} flags: {}", mark_members.is_some(), flag_members.is_some()));
         notes.push(format!(
             "Sunkenland creatures={} ({} types) session={}",
@@ -407,6 +442,15 @@ impl Sunkenland {
             last_creature_refresh: None,
             nearby: Vec::new(),
             logged_creatures: false,
+            companion_members,
+            place_members,
+            companions: Vec::new(),
+            last_companion_refresh: None,
+            discovered,
+            visited: Vec::new(),
+            last_visited_refresh: None,
+            wind: None,
+            pending_pins: None,
         })
     }
 
@@ -678,6 +722,63 @@ impl Sunkenland {
         self.markers = markers;
     }
 
+    /// The live companion with an id from [`CompanionStatus`].
+    unsafe fn companion(&mut self, cx: &Cx, id: &str) -> Result<*mut ManagedObject, String> {
+        let (w, scene) = self.world_scene(cx).ok_or("not in a world")?;
+        let field = w.assistants;
+        self.list(cx, scene, field).into_iter().find(|&a| companion_id(a) == id).ok_or_else(|| "they aren't around".to_owned())
+    }
+
+    unsafe fn refresh_companions(&mut self, cx: &Cx) {
+        let Some((w, scene)) = self.world_scene(cx) else {
+            self.companions.clear();
+            return;
+        };
+        let field = w.assistants;
+        let (default_f, name_m, pos_f) = (self.entities.assistant_default_name, self.entities.assistant_name.clone(), self.entities.assistant_position);
+        let mut statuses = Vec::new();
+        for a in self.list(cx, scene, field) {
+            let Some(members) = &self.companion_members else { break };
+            if !members.is_recruited(cx.rt, a) {
+                continue;
+            }
+            let name = self
+                .cached_name(a, || name_m.as_ref().and_then(|m| network_string(cx.rt, m, a)).or_else(|| default_f.and_then(|f| read_string(f.get(a)))))
+                .unwrap_or_else(|| "Companion".into());
+            let position = pos_f.map(|f| to_proto(f.get::<Vector3>(a)));
+            let Some(members) = &self.companion_members else { break };
+            statuses.push(members.status(cx.rt, cx.unity, a, companion_id(a), name, position));
+        }
+        self.companions = statuses;
+    }
+
+    /// Where the places the player has discovered are, and which way the wind blows.
+    unsafe fn refresh_visited(&mut self, cx: &Cx) {
+        let Some((w, scene)) = self.world_scene(cx) else { return };
+        let (locations, wind) = (w.locations, w.wind);
+        if let Some(wind) = wind {
+            let transform: *mut ManagedObject = wind.get(scene);
+            if cx.unity.is_alive(transform) {
+                self.wind = cx.unity.rotation(cx.rt, transform).ok().map(|q| {
+                    let forward = q.forward();
+                    // The game has no speed for it: only which way the sails fill.
+                    Wind { degrees: forward.x.atan2(forward.z).to_degrees().rem_euclid(360.0) as u16, strength: 60 }
+                });
+            }
+        }
+        let Some(discovered) = self.discovered.clone() else { return };
+        let mut visited = Vec::new();
+        for location in self.list(cx, scene, locations) {
+            let found = cx.rt.invoke(&discovered, location, &mut []).and_then(|b| cx.rt.unbox::<bool>(b)).unwrap_or(false);
+            if found {
+                if let Some(p) = cx.unity.component_transform(cx.rt, location).ok().and_then(|t| cx.unity.position(cx.rt, t).ok()) {
+                    visited.push(to_proto(p));
+                }
+            }
+        }
+        self.visited = visited;
+    }
+
     /// World y of the sea surface (`WorldScene.oceanObjectY`).
     unsafe fn sea_level(&self, cx: &Cx) -> f32 {
         self.world_scene(cx).and_then(|(w, scene)| w.ocean_y.map(|f| f.get::<f32>(scene))).unwrap_or(0.0)
@@ -707,6 +808,10 @@ impl Sunkenland {
     }
 }
 
+fn companion_id(assistant: *mut ManagedObject) -> String {
+    format!("assistant:{:x}", assistant as usize)
+}
+
 /// Reads a Fusion `NetworkString<T>` property as a string.
 unsafe fn network_string(rt: &Runtime, getter: &Method, obj: *mut ManagedObject) -> Option<String> {
     let boxed = rt.invoke(getter, obj, &mut []).ok().filter(|b| !b.is_null())?;
@@ -725,7 +830,8 @@ impl Provider for Sunkenland {
             teleport: self.teleport.is_some(),
             other_players: self.dummy.is_some() && self.world.as_ref().is_some_and(|w| w.players.is_some()),
             hotkeys: true,
-            game_map: false,
+            game_map: self.mark_members.as_ref().is_some_and(|m| m.can_write()),
+            game_pings: false,
         }
     }
 
@@ -754,6 +860,8 @@ impl Provider for Sunkenland {
             self.map_marks.clear();
             self.flags.clear();
             self.last_flag_refresh = None;
+            self.companions.clear();
+            self.visited.clear();
         } else {
             if self.last_world_refresh.is_none_or(|t| now - t >= WORLD_REFRESH) {
                 self.last_world_refresh = Some(now);
@@ -792,6 +900,20 @@ impl Provider for Sunkenland {
                     self.refresh_creatures(cx, to_unity(p.position));
                 }
             }
+            if self.last_companion_refresh.is_none_or(|t| now - t >= COMPANION_REFRESH) {
+                self.last_companion_refresh = Some(now);
+                self.refresh_companions(cx);
+            }
+            if self.last_visited_refresh.is_none_or(|t| now - t >= VISITED_REFRESH) {
+                self.last_visited_refresh = Some(now);
+                self.refresh_visited(cx);
+            }
+            if let (Some(pins), Some(marks), Some(g)) = (self.pending_pins.take(), &self.mark_members, &self.global) {
+                let global: *mut ManagedObject = cx.rt.static_value(g.instance);
+                if let Err(e) = marks.sync(cx.rt, cx.unity, global, &pins) {
+                    self.notes.push(format!("Pins not added to the game's map: {e}"));
+                }
+            }
             if self.last_remote_refresh.is_none_or(|t| now - t >= REMOTE_REFRESH) {
                 self.last_remote_refresh = Some(now);
                 self.refresh_remote(cx);
@@ -801,7 +923,7 @@ impl Provider for Sunkenland {
                 self.refresh_markers(cx);
             }
         }
-        WorldSnapshot { frame, local, others: self.others.clone(), markers: self.markers.iter().chain(&self.map_marks).chain(&self.flags).cloned().collect(), creatures: self.nearby.clone(), session: self.session.clone(), world: self.game_world.clone(), ..Default::default() }
+        WorldSnapshot { frame, local, others: self.others.clone(), markers: self.markers.iter().chain(&self.map_marks).chain(&self.flags).cloned().collect(), creatures: self.nearby.clone(), session: self.session.clone(), world: self.game_world.clone(), companions: self.companions.clone(), environment: self.wind.map(|wind| Environment { day: None, hour: 0, minute: 0, season: None, weather: None, wind: Some(wind) }), visited: self.visited.clone(), ..Default::default() }
     }
 
     unsafe fn teleport(&mut self, cx: &Cx, target: &TeleportTarget) -> Result<(), String> {
@@ -890,6 +1012,38 @@ impl Provider for Sunkenland {
         cx.rt.invoke(&t.set_position, transform, &mut args).map(|_| ()).map_err(|e| e.to_string())
     }
 
+    unsafe fn set_game_pins(&mut self, _cx: &Cx, pins: Vec<GamePin>) {
+        // Applied with the next snapshot, in a world.
+        self.pending_pins = Some(pins);
+    }
+
+    unsafe fn place_info(&mut self, cx: &Cx, at: Vec3) -> Result<PlaceInfo, String> {
+        let Some((w, scene)) = self.world_scene(cx) else { return Err("not in a world".into()) };
+        let locations = w.locations;
+        let mut nearest: Option<(f32, *mut ManagedObject)> = None;
+        for location in self.list(cx, scene, locations) {
+            let Some(p) = cx.unity.component_transform(cx.rt, location).ok().and_then(|t| cx.unity.position(cx.rt, t).ok()) else { continue };
+            let p = to_proto(p);
+            let distance = (p.x - at.x).hypot(p.z - at.z);
+            if distance <= PLACE_REACH && nearest.is_none_or(|(best, _)| distance < best) {
+                nearest = Some((distance, location));
+            }
+        }
+        let (_, location) = nearest.ok_or("no place here")?;
+        self.place_members.as_ref().ok_or("unavailable in this game version")?.read(cx.rt, cx.unity, location)
+    }
+
+    unsafe fn companion_orders(&mut self, cx: &Cx, companion: &str) -> Result<Vec<CompanionOrderOption>, String> {
+        let assistant = self.companion(cx, companion)?;
+        self.companion_members.as_ref().ok_or("companions can't take orders in this game version")?.orders(cx.rt, cx.unity, assistant)
+    }
+
+    unsafe fn companion_order(&mut self, cx: &Cx, companion: &str, order: &str) -> Result<(), String> {
+        let assistant = self.companion(cx, companion)?;
+        let members = self.companion_members.as_ref().ok_or("companions can't take orders in this game version")?;
+        members.order(cx.rt, assistant, order, |x, z| self.surface_height(cx, x, z))
+    }
+
     unsafe fn input_blocked(&mut self, cx: &Cx) -> bool {
         let chat = (|| {
             let (c, g) = (self.chat.as_ref()?, self.global.as_ref()?);
@@ -964,10 +1118,14 @@ mod tests {
         let _thread = rt.attach_thread();
         let unity = unity_runtime::Unity::new(&rt).expect("engine members");
         drop(unity);
+        // A struct has no constructor to run: asking the runtime to run one aborts the game.
+        let mark = rt.class("", "MapMarkNetworkStruct").expect("map mark");
+        assert!(unsafe { rt.new_object(mark) }.is_err());
+        assert!(!unsafe { rt.new_value(mark) }.expect("zeroed mark").is_null());
         let mut p = Sunkenland::detect(&rt).expect("provider detected");
         let notes = p.take_notes().join("\n");
         println!("{notes}");
-        for want in ["global=true", "world=true", "players=true", "chat=true", "console=true", "teleport=true", "ground_probe=true", "companions=true", "boats=true", "helicopters=true", "own=true", "valid_check=true", "name=true", "joined=true", "creatures=true (10 types)", "session=true", "map marks: true flags: true"] {
+        for want in ["global=true", "world=true", "players=true", "chat=true", "console=true", "teleport=true", "ground_probe=true", "companions=true", "boats=true", "helicopters=true", "own=true", "valid_check=true", "name=true", "joined=true", "creatures=true (10 types)", "session=true", "map marks: true flags: true", "orders=true", "places=true", "game_marks=true", "discovered=true", "wind=true"] {
             assert!(notes.contains(want), "missing {want} in:\n{notes}");
         }
         let caps = p.capabilities();

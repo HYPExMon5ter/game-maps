@@ -1,13 +1,14 @@
 import { BiomeTools } from './BiomeTools'
-import { Eye, EyeOff, MapPinPlus, Search, X } from 'lucide-react'
+import { MapPinPlus, Search, X } from 'lucide-react'
 import { useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { customPinAtPlayer, flyToPin } from '../lib/actions'
 import { formatDistance } from '../lib/compass'
-import { GAME_MARKERS_CATEGORY, iconUrl, LAYER_LABELS, type BadgeShape, type Category, type Pin } from '../lib/game'
+import { iconUrl, LAYER_LABELS, type BadgeShape, type Category, type Pin } from '../lib/game'
 import { glyphColor } from '../map/badges'
 import { groundDistance } from '../lib/projection'
 import { PinSearch } from '../lib/search'
-import { EMPTY_USER_DATA, isCategoryVisible, selectAllPins, useStore } from '../state/store'
+import { EMPTY_USER_DATA, selectAllPins, useStore } from '../state/store'
+import { CategoryMatches, CategoryTree, OnlyBanner } from './CategoryTree'
 import { Button, Switch } from './controls'
 import { FilterSets } from './FilterSets'
 import { Progress, UnexploredNote } from './Progress'
@@ -56,7 +57,6 @@ export function Sidebar({ onEditPin, onPinMenu }: { onEditPin: (pin: Pin) => voi
   const setQuery = useStore((s) => s.setQuery)
   const showFound = useStore((s) => s.showFound)
   const setShowFound = useStore((s) => s.setShowFound)
-  const toggleCategory = useStore((s) => s.toggleCategory)
   const setAllCategories = useStore((s) => s.setAllCategories)
   const selectPin = useStore((s) => s.selectPin)
   const map = useStore((s) => s.map)
@@ -69,7 +69,9 @@ export function Sidebar({ onEditPin, onPinMenu }: { onEditPin: (pin: Pin) => voi
   const friendPins = useStore((s) => s.friendPins)
   const customPins = user.customPins
   const pins = useMemo(() => selectAllPins({ gamePins, user: { ...EMPTY_USER_DATA, customPins }, friendPins }), [gamePins, customPins, friendPins])
-  const index = useMemo(() => (game ? new PinSearch(pins, game.categories) : null), [pins, game])
+  // Built when it's needed: pins change while exploring, and most of the time nothing's searched.
+  const searching = query.trim().length > 0
+  const index = useMemo(() => (game && searching ? new PinSearch(pins, game.categories) : null), [pins, game, searching])
   const hiddenByFog = usePinFog()
   const gameMarkers = useStore((s) => (s.snapshot?.markers ?? []).filter((m) => m.kind !== 'companion').length)
   const search = useMemo(() => {
@@ -83,18 +85,6 @@ export function Sidebar({ onEditPin, onPinMenu }: { onEditPin: (pin: Pin) => voi
     return { results: shown.slice(0, 200), unexplored: matches.length - shown.length }
   }, [index, query, pins, hiddenByFog])
   const results = search?.results ?? null
-
-  const counts = useMemo(() => {
-    const found = new Set(user.found)
-    const c = new Map<string, { total: number; found: number }>()
-    for (const p of pins) {
-      const e = c.get(p.category) ?? { total: 0, found: 0 }
-      e.total++
-      if (found.has(p.id)) e.found++
-      c.set(p.category, e)
-    }
-    return c
-  }, [pins, user.found])
 
   if (!game) return null
   const categories = new Map(game.categories.map((c) => [c.id, c]))
@@ -136,6 +126,7 @@ export function Sidebar({ onEditPin, onPinMenu }: { onEditPin: (pin: Pin) => voi
       </div>
 
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+        <OnlyBanner />
         {results ? null : (
           <div className="mb-1 flex rounded-lg bg-black/30 p-0.5 text-[12px] font-semibold" role="tablist" aria-label="Sidebar view">
             {(['categories', 'progress'] as const).map((v) => (
@@ -153,6 +144,8 @@ export function Sidebar({ onEditPin, onPinMenu }: { onEditPin: (pin: Pin) => voi
           </div>
         )}
         {results ? (
+          <>
+          <CategoryMatches pins={pins} gameMarkers={gameMarkers} query={query} />
           <ul>
             {results.length === 0 && !search?.unexplored && <li className="px-2 py-6 text-center text-[13px] text-ink-faint">No matches</li>}
             {results.map((pin) => {
@@ -176,6 +169,7 @@ export function Sidebar({ onEditPin, onPinMenu }: { onEditPin: (pin: Pin) => voi
             })}
             {!!search?.unexplored && <UnexploredNote count={search.unexplored} />}
           </ul>
+          </>
         ) : view === 'progress' ? (
           <Progress onOpen={open} />
         ) : (
@@ -188,29 +182,7 @@ export function Sidebar({ onEditPin, onPinMenu }: { onEditPin: (pin: Pin) => voi
               </span>
             </div>
             <FilterSets />
-            <ul>
-              {game.categories.map((cat) => {
-                const visible = isCategoryVisible(cat, user)
-                const c = cat.id === GAME_MARKERS_CATEGORY ? { total: gameMarkers, found: 0 } : (counts.get(cat.id) ?? { total: 0, found: 0 })
-                return (
-                  <li key={cat.id}>
-                    <button
-                      className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-panel-raised ${visible ? '' : 'opacity-45'}`}
-                      onClick={() => toggleCategory(cat.id)}
-                      aria-pressed={visible}
-                    >
-                      <CategoryIcon gameId={game.id} category={cat} />
-                      <span className="flex-1 text-[13px]">{cat.name}</span>
-                      <span className="text-[11px] tabular-nums text-ink-faint">
-                        {c.found > 0 ? `${c.found}/` : ''}
-                        {c.total}
-                      </span>
-                      {visible ? <Eye className="size-3.5 text-ink-faint" /> : <EyeOff className="size-3.5 text-ink-faint" />}
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
+            <CategoryTree pins={pins} gameMarkers={gameMarkers} />
             <BiomeTools />
             {user.customPins.length > 0 && (
               <>

@@ -44,6 +44,8 @@ pub(crate) trait Backend: Send + Sync {
 
     /// A field of `class` or one of its bases, or null.
     unsafe fn field_from_name(&self, class: Ptr, name: &std::ffi::CStr) -> Ptr;
+    /// Full type name of a field, e.g. `System.Int32`.
+    unsafe fn field_type_name(&self, field: Ptr) -> String;
     /// Byte offset from the object start (including the header) for instance fields.
     unsafe fn field_offset(&self, field: Ptr) -> usize;
     unsafe fn field_flags(&self, field: Ptr) -> u32;
@@ -63,6 +65,8 @@ pub(crate) trait Backend: Send + Sync {
     unsafe fn new_string(&self, s: &std::ffi::CStr) -> Ptr;
     /// A new instance of `class`, initialized by its parameterless constructor.
     unsafe fn new_object(&self, class: Ptr) -> Ptr;
+    /// A new boxed instance of `class`, zeroed, with no constructor run.
+    unsafe fn new_value(&self, class: Ptr) -> Ptr;
     unsafe fn new_array(&self, element: Ptr, len: usize) -> Ptr;
     unsafe fn array_element_size(&self, array_class: Ptr) -> i32;
 }

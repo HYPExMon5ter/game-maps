@@ -12,7 +12,7 @@ import { useGameHud, useGameSetting, useSettings } from '../settings/store'
 import { mergeGameExplored, useFogStore } from './fog'
 import { useStore } from './store'
 import { keys } from './worlds'
-import { enteredDungeon, regrowthTimers } from '../lib/worldExtras'
+import { discoveredPins, enteredDungeon, regrowthTimers } from '../lib/worldExtras'
 import type { Vec3 } from '../lib/protocol'
 
 /** A new world's map can arrive while the map is still switching to that world. */
@@ -26,7 +26,7 @@ async function waitFor(ready: () => boolean): Promise<boolean> {
   return ready()
 }
 
-async function showWorldMap({ game_id: gameId, world_id: worldId, tiles }: WorldMapReady, record: boolean) {
+async function showWorldMap({ game_id: gameId, world_id: worldId, tiles, explored }: WorldMapReady, record: boolean) {
   const shown = () => {
     const s = useStore.getState()
     return s.game?.id === gameId && s.world.id === worldId
@@ -34,7 +34,7 @@ async function showWorldMap({ game_id: gameId, world_id: worldId, tiles }: World
   if (!(await waitFor(shown))) return
   const pins = await loadWorldPins(gameId, worldId, gameSettings(useSettings.getState().ui, gameId).showSilver)
   if (pins && shown()) useStore.getState().setWorldMap(pins, tiles)
-  if (!record) return
+  if (!record || !explored) return
   // What the player explored before Game Maps, or without it running.
   const key = keys.fog(gameId, worldId)
   if (!(await waitFor(() => useFogStore.getState().key === key && !!useFogStore.getState().fog))) return
@@ -117,11 +117,26 @@ function useClearedDungeons() {
   }, [])
 }
 
-/** What only the overlay does for generated worlds. */
+/** Marks places found when the game discovers them. */
+function useDiscoveredPlaces() {
+  useEffect(() => {
+    return useStore.subscribe((s, prev) => {
+      const visited = s.snapshot?.visited
+      if (!visited?.length || !s.game || visited.length === prev.snapshot?.visited?.length) return
+      const categories = new Set(s.game.categories.filter((c) => c.visitInside).map((c) => c.id))
+      const known = new Set(s.user.found)
+      const pins = discoveredPins(s.gamePins.filter((p) => categories.has(p.category)), visited).filter((p) => !known.has(p.id))
+      if (pins.length) s.markFound(pins.map((p) => p.id))
+    })
+  }, [])
+}
+
+/** What only the overlay does, for what games report about the world. */
 export function useWorldExtras() {
   useRegrowthTimers()
   useGameOptions()
   useClearedDungeons()
+  useDiscoveredPlaces()
 }
 
 /** Keeps the game's own map in line with the player's pins in the world they're in. */

@@ -20,7 +20,7 @@ mod worldmaps;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use game_maps_protocol::{CompanionOrderOption, GamePin, GroundPoint, Hotkey, HotkeyAction, PathInfo, RouteCheck, TeleportTarget, Vec3, WorldSnapshot};
+use game_maps_protocol::{CompanionOrderOption, GamePin, GroundPoint, Hotkey, HotkeyAction, PathInfo, PlaceInfo, RouteCheck, TeleportTarget, Vec3, WorldSnapshot};
 use tauri::http::{header, Response, StatusCode};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -97,6 +97,12 @@ async fn check_route(link: State<'_, Arc<AgentLink>>, points: Vec<Vec3>) -> Resu
 #[tauri::command]
 async fn probe_ground(link: State<'_, Arc<AgentLink>>, points: Vec<Vec3>) -> Result<Vec<GroundPoint>, String> {
     link.inner().clone().probe_ground(points).await
+}
+
+/// What the game says about the place at `position`.
+#[tauri::command]
+async fn place_info(link: State<'_, Arc<AgentLink>>, position: Vec3) -> Result<PlaceInfo, String> {
+    link.inner().clone().place_info(position).await
 }
 
 /// What a companion can be told to do right now.
@@ -649,6 +655,7 @@ pub fn run() {
             check_route,
             probe_ground,
             companion_orders,
+            place_info,
             companion_order,
             teleport_back_steps,
             set_back_key,

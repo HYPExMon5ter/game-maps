@@ -32,7 +32,7 @@ export interface SharedPin {
 }
 
 export type SyncMessage =
-  | { type: 'hello'; version: number; name: string | null }
+  | { type: 'hello'; version: number; name: string | null; host?: boolean }
   /** "Track this with me." */
   | { type: 'track'; target: SharedTarget }
   /** A spot to look at, shown briefly. */
@@ -65,7 +65,7 @@ export function parseMessage(data: unknown): SyncMessage | null {
   switch (data.type) {
     case 'hello':
       return typeof data.version === 'number' && (data.name === null || isText(data.name))
-        ? { type: 'hello', version: data.version, name: data.name as string | null }
+        ? { type: 'hello', version: data.version, name: data.name as string | null, host: data.host === true }
         : null
     case 'track': {
       const target = parseTarget(data.target)

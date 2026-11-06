@@ -191,10 +191,10 @@ export function startPersisting(): () => void {
     const worldId = state.world.id
     const changed: Changed = { from: self, gameId, worldId }
     if (state.user !== prev.user) {
-      const { hiddenCategories, shownCategories, filterSets, customPins, found, notes, timers } = state.user
+      const { hiddenCategories, shownCategories, filterSets, only, openGroups, customPins, found, notes, timers } = state.user
       saving(
         getStore().then((s) =>
-          Promise.all([s.set(keys.prefs(gameId), { hiddenCategories, shownCategories, filterSets }), s.set(keys.data(gameId, worldId), { customPins, found, notes, timers })]),
+          Promise.all([s.set(keys.prefs(gameId), { hiddenCategories, shownCategories, filterSets, only, openGroups }), s.set(keys.data(gameId, worldId), { customPins, found, notes, timers })]),
         ),
       )
       changed.user = state.user

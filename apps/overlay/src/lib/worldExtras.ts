@@ -2,8 +2,12 @@
 // locations a host can give to players who join. Pure data; see `state/worldMaps`.
 
 import type { Category, Pin } from './game'
+import type { Projection } from './projection'
 import type { Vec3 } from './protocol'
 import type { Location } from './sync/messages'
+
+/** Longest id or name a host's location can have. */
+const MAX_LOCATION_TEXT = 100
 
 /** How far a dungeon's door is from its pin. */
 const ENTRANCE_METERS = 40
@@ -31,6 +35,14 @@ export function enteredDungeon(dungeons: Pin[], outside: Vec3 | null, inside: Ve
   return (outside && nearest(dungeons, outside, ENTRANCE_METERS)) ?? nearest(dungeons, inside, INTERIOR_METERS)
 }
 
+/** How close a discovered place is to its pin. */
+const PLACE_METERS = 120
+
+/** Pins that places the game counts as discovered belong to. */
+export function discoveredPins(pins: Pin[], visited: Vec3[]): Pin[] {
+  return visited.flatMap((place) => nearest(pins, place, PLACE_METERS) ?? [])
+}
+
 /** `timers` with pins growing back added, or null if there's nothing new. */
 export function regrowthTimers(pins: Pin[], timers: Record<string, number>, now: number): Record<string, number> | null {
   const started = pins.filter((p) => p.respawnAt && p.respawnAt > now && timers[p.id] === undefined)
@@ -44,8 +56,18 @@ export function sharedLocations(pins: Pin[], categories: Category[]): Location[]
   return pins.filter((p) => !p.custom && !remembered.has(p.category)).map((p) => [p.id, p.category, p.name, p.position.x, p.position.y, p.position.z])
 }
 
-/** Locations from a host as pins: only in this game's categories, it's someone else's data. */
-export function hostPins(locations: Location[], categories: Category[]): Pin[] {
-  const known = new Set(categories.filter((c) => !c.remembered).map((c) => c.id))
-  return locations.filter(([, category]) => known.has(category)).map(([id, category, name, x, y, z]) => ({ id, category, name, position: { x, y, z } }))
+/** The other portals `portal` can link to: the game pairs up portals with the same tag. */
+export function linkedPortals(portal: Pin, pins: Pin[]): Pin[] {
+  return pins.filter((p) => p.category === portal.category && p.name === portal.name && p.id !== portal.id)
 }
+
+/** Locations from a host as pins, on this map and in this game's categories: it's someone else's data. */
+export function hostPins(locations: Location[], categories: Category[], p: Projection): Pin[] {
+  const known = new Set(categories.filter((c) => !c.remembered).map((c) => c.id))
+  return locations
+    .filter(([id, category, name]) => known.has(category) && id.length <= MAX_LOCATION_TEXT && name.length <= MAX_LOCATION_TEXT)
+    .map(([id, category, name, x, y, z]) => ({ id, category, name, position: { x, y, z } }))
+    .filter(({ position }) => inside(position[p.east], p.minEast, p.maxEast) && inside(position[p.north], p.minNorth, p.maxNorth))
+}
+
+const inside = (v: number, min: number, max: number) => v >= min && v <= max

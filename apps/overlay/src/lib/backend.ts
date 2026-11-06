@@ -3,7 +3,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type { Pin } from './game'
-import type { AgentLog, CompanionOrderOption, GroundPoint, Hotkey, HotkeyAction, LinkStatus, OverlayMode, PathInfo, PinConfig, RouteCheck, SnapshotUpdate, TeleportTarget, Vec3, WorldSnapshot } from './protocol'
+import type { AgentLog, CompanionOrderOption, GroundPoint, Hotkey, HotkeyAction, LinkStatus, OverlayMode, PathInfo, PinConfig, PlaceInfo, RouteCheck, SnapshotUpdate, TeleportTarget, Vec3, WorldSnapshot } from './protocol'
 
 /** A supported game as bundled with the app (subset of `game.json`). */
 export interface GameEntry {
@@ -82,6 +82,7 @@ export type UpdateState =
 export interface SetupChecks {
   needs_admin: boolean
   exclusive_fullscreen: boolean
+  map_outdated: boolean
 }
 
 export const backend = {
@@ -104,6 +105,8 @@ export const backend = {
   checkRoute: (points: Vec3[]) => invoke<RouteCheck>('check_route', { points }),
   /** The floor under points near the player, and whether the game camera sees them. */
   probeGround: (points: Vec3[]) => invoke<GroundPoint[]>('probe_ground', { points }),
+  /** What the game says about the place at `position`. */
+  placeInfo: (position: Vec3) => invoke<PlaceInfo>('place_info', { position }),
   /** What a companion can be told to do right now. */
   companionOrders: (companion: string) => invoke<CompanionOrderOption[]>('companion_orders', { companion }),
   companionOrder: (companion: string, order: string) => invoke<void>('companion_order', { companion, order }),
@@ -173,6 +176,8 @@ export interface WorldMapReady {
   world_id: string
   /** The tiles are new, not only the pins. */
   tiles: boolean
+  /** There's a new `explored.bin`. */
+  explored: boolean
 }
 
 export const events = {

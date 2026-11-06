@@ -21,6 +21,8 @@ pub struct SetupChecks {
     pub needs_admin: bool,
     /// Last seen while the game was in front: it uses exclusive fullscreen.
     pub exclusive_fullscreen: bool,
+    /// The game has updated since its map was made: pins may have moved.
+    pub map_outdated: bool,
 }
 
 /// Fullscreen state of the current game process, sampled while it is in front
@@ -32,7 +34,15 @@ pub fn current(app: &AppHandle) -> SetupChecks {
     let Some(pid) = app.state::<Arc<AgentLink>>().status().pid else { return SetupChecks::default() };
     let exclusive_fullscreen = matches!(*app.state::<FullscreenWatch>().0.lock().unwrap(), Some((p, true)) if p == pid);
     let needs_admin = is_elevated(pid).unwrap_or(false) && !is_elevated(std::process::id()).unwrap_or(false);
-    SetupChecks { needs_admin, exclusive_fullscreen }
+    SetupChecks { needs_admin, exclusive_fullscreen, map_outdated: map_outdated(app, pid) }
+}
+
+fn map_outdated(app: &AppHandle, pid: u32) -> bool {
+    let link = app.state::<Arc<AgentLink>>();
+    let Some(id) = link.status().game_id else { return false };
+    let Some(game) = app.state::<crate::Registry>().0.iter().find(|g| g.id == id).cloned() else { return false };
+    let (Some(app_id), Some(made_from)) = (game.steam_app_id, app.state::<crate::mappacks::MapPacks>().installed_build(&id)) else { return false };
+    crate::injector::exe_path(pid).and_then(|exe| crate::games::steam_build(&exe, app_id)).is_some_and(|now| now != made_from)
 }
 
 pub fn start_fullscreen_watch(app: AppHandle) {

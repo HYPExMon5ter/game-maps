@@ -545,6 +545,7 @@ impl Provider for SonsOfTheForest {
             other_players: self.remote.is_some(),
             hotkeys: true,
             game_map: false,
+            game_pings: false,
         }
     }
 
@@ -629,6 +630,7 @@ impl Provider for SonsOfTheForest {
                 self.refresh_status(cx);
             }
         }
+        let indoors = local.as_ref().is_some_and(|l| l.layer == WorldLayer::Caves);
         WorldSnapshot {
             frame,
             local,
@@ -641,6 +643,7 @@ impl Provider for SonsOfTheForest {
             environment: self.world_status.clone(),
             dropped_bag: self.dropped_bag,
             dying: self.is_dying(cx),
+            indoors,
             ..Default::default()
         }
     }

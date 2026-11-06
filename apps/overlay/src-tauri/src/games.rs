@@ -66,6 +66,28 @@ pub fn load_registry(games_dir: &Path) -> Vec<GameEntry> {
     games
 }
 
+/// Files that say a game runs anti-cheat, by the start of their lowercase names.
+const ANTI_CHEAT_FILES: &[(&str, &str)] = &[("easyanticheat", "Easy Anti-Cheat"), ("start_protected_game", "Easy Anti-Cheat"), ("battleye", "BattlEye"), ("beservice", "BattlEye")];
+
+/// The anti-cheat in a game's folder, if any. Loading into a game that has one could get
+/// the player banned, and a game can gain one in an update, so it's checked every run.
+pub fn anti_cheat_in(game_dir: &Path) -> Option<&'static str> {
+    std::fs::read_dir(game_dir).ok()?.flatten().find_map(|entry| {
+        let name = entry.file_name().to_string_lossy().to_lowercase();
+        ANTI_CHEAT_FILES.iter().find(|(start, _)| name.starts_with(start)).map(|(_, product)| *product)
+    })
+}
+
+/// The Steam build of the game at `exe`, from its `appmanifest_<id>.acf`.
+pub fn steam_build(exe: &Path, app_id: u32) -> Option<String> {
+    let steamapps = exe.ancestors().find(|p| p.file_name().is_some_and(|n| n.eq_ignore_ascii_case("steamapps")))?;
+    let manifest = std::fs::read_to_string(steamapps.join(format!("appmanifest_{app_id}.acf"))).ok()?;
+    manifest.lines().find_map(|line| {
+        let mut parts = line.split('"').filter(|p| !p.trim().is_empty());
+        (parts.next()? == "buildid").then(|| parts.next().map(str::to_owned)).flatten()
+    })
+}
+
 /// Where asset requests are looked up.
 pub struct AssetRoots<'a> {
     /// Game definitions bundled with the app (and, in development, all map data).
@@ -133,6 +155,44 @@ mod tests {
         assert_eq!(sotf.process, "SonsOfTheForest.exe");
         assert_eq!(sotf.steam_app_id, Some(1326470));
         assert_eq!(sotf.hotkeys()[0].vk, 0x4D);
+    }
+
+    #[test]
+    fn finds_anti_cheat_in_a_game_folder() {
+        let dir = std::env::temp_dir().join(format!("game-maps-ac-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("EasyAntiCheat")).unwrap();
+        assert_eq!(anti_cheat_in(&dir), Some("Easy Anti-Cheat"));
+        std::fs::remove_dir_all(dir.join("EasyAntiCheat")).unwrap();
+        assert_eq!(anti_cheat_in(&dir), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn reads_the_steam_build() {
+        let root = std::env::temp_dir().join(format!("game-maps-build-{}", std::process::id()));
+        let game = root.join("steamapps").join("common").join("Game");
+        std::fs::create_dir_all(&game).unwrap();
+        std::fs::write(root.join("steamapps/appmanifest_7.acf"), "\"AppState\"\n{\n\t\"buildid\"\t\t\"123\"\n}\n").unwrap();
+        assert_eq!(steam_build(&game.join("game.exe"), 7).as_deref(), Some("123"));
+        assert_eq!(steam_build(&game.join("game.exe"), 8), None);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn every_category_is_in_one_group() {
+        for text in [include_str!("../../../../games/valheim/game.json"), include_str!("../../../../games/sunkenland/game.json"), include_str!("../../../../games/sons-of-the-forest/game.json")] {
+            let game: serde_json::Value = serde_json::from_str(text).unwrap();
+            let ids: Vec<&str> = game["categories"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap()).collect();
+            let grouped: Vec<&str> = game["groups"].as_array().unwrap().iter().flat_map(|g| g["categories"].as_array().unwrap()).map(|c| c.as_str().unwrap()).collect();
+            for id in &grouped {
+                assert!(ids.contains(id), "{id} isn't a category");
+                assert_eq!(grouped.iter().filter(|g| *g == id).count(), 1, "{id} is in two groups");
+            }
+            // The player's own pins go in a group the app makes.
+            for id in ids.iter().filter(|id| **id != "custom") {
+                assert!(grouped.contains(id), "{id} isn't in a group");
+            }
+        }
     }
 
     #[test]

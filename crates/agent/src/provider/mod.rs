@@ -5,7 +5,7 @@ mod sotf;
 mod sunkenland;
 mod valheim;
 
-use game_maps_protocol::{Capabilities, CompanionOrderOption, GamePin, PathInfo, ZonePins, TeleportTarget, Vec3, WorldExport, WorldSnapshot};
+use game_maps_protocol::{Capabilities, CompanionOrderOption, GamePin, PathInfo, PlaceInfo, ZonePins, TeleportTarget, Vec3, WorldExport, WorldSnapshot};
 
 /// How far (world units) route ends may be from Unity's NavMesh.
 const NAVMESH_SNAP: f32 = 25.0;
@@ -94,6 +94,14 @@ pub trait Provider: Send {
     /// Must run on the game's main thread.
     unsafe fn companion_orders(&mut self, _cx: &Cx, _companion: &str) -> Result<Vec<CompanionOrderOption>, String> {
         Err("this game has no companion orders".into())
+    }
+
+    /// What the game says about the place at `at`, for a pin the player opened.
+    ///
+    /// # Safety
+    /// Must run on the game's main thread.
+    unsafe fn place_info(&mut self, _cx: &Cx, _at: Vec3) -> Result<PlaceInfo, String> {
+        Err("this game has nothing to say about places".into())
     }
 
     /// Tells `companion` to do `order` (an id from [`Provider::companion_orders`]).

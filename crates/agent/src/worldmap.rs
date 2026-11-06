@@ -42,7 +42,9 @@ pub fn save(capture: WorldMapCapture, dir: String, done: impl FnOnce(Result<Worl
 fn write(capture: WorldMapCapture, dir: &Path) -> Result<WorldMap, String> {
     let failed = |e: std::io::Error| format!("could not save the map to {}: {e}", dir.display());
     std::fs::create_dir_all(dir).map_err(failed)?;
-    std::fs::write(dir.join("explored.bin"), &capture.explored).map_err(failed)?;
+    if !capture.explored.is_empty() {
+        std::fs::write(dir.join("explored.bin"), &capture.explored).map_err(failed)?;
+    }
     if let Some(draw) = capture.terrain {
         let terrain = draw();
         std::fs::write(dir.join("biomes.bin"), terrain.biomes).map_err(failed)?;

@@ -1,9 +1,8 @@
 // Saved filter sets: named category filters to switch between, kept per game.
 
-import { isCategoryVisible, useStore, type GameUserData } from '../state/store'
+import { useStore } from '../state/store'
+import { isCategoryVisible, type Filters } from './filters'
 import type { Category } from './game'
-
-type Filters = Pick<GameUserData, 'hiddenCategories' | 'shownCategories'>
 
 export interface FilterSet extends Filters {
   id: string
@@ -19,7 +18,8 @@ export function withFilterSet(sets: FilterSet[], name: string, { hiddenCategorie
 
 /** The saved set showing exactly the categories `filters` shows, if any. */
 export function matchingFilterSet(sets: FilterSet[], categories: Category[], filters: Filters): FilterSet | undefined {
-  const shown = (f: Filters) => categories.map((c) => isCategoryVisible(c, f)).join()
+  const kinds = (keys: string[]) => keys.filter((k) => k.includes('/')).sort()
+  const shown = (f: Filters) => JSON.stringify([categories.map((c) => isCategoryVisible(c, f)), kinds(f.hiddenCategories), kinds(f.shownCategories)])
   return sets.find((s) => shown(s) === shown(filters))
 }
 
@@ -32,7 +32,7 @@ export function saveFilterSet(name: string) {
 }
 
 export function applyFilterSet({ hiddenCategories, shownCategories }: FilterSet) {
-  useStore.setState((s) => ({ user: { ...s.user, hiddenCategories, shownCategories } }))
+  useStore.setState((s) => ({ user: { ...s.user, hiddenCategories, shownCategories, only: null } }))
 }
 
 export function deleteFilterSet(id: string) {

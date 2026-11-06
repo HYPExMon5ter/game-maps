@@ -44,6 +44,13 @@
       }
     }
   ],
+  "groups": [
+    { "id": "world", "name": "World", "categories": ["boss", "trader", "dungeon", "runestone", "camp", "landmark"] },
+    { "id": "ores", "name": "Ores & Mining", "categories": ["copper", "tin", "silver", "obsidian", "flametal", "scrap", "cores"] },
+    { "id": "plants", "name": "Plants", "categories": ["berries", "mushrooms", "herbs", "crops"] },
+    { "id": "finds", "name": "Special Finds", "categories": ["tar", "dragon-egg", "giant", "excavation", "ashlands-site"] },
+    { "id": "travel", "name": "Travel", "categories": ["portal", "ship", "cart"] }
+  ],
   "categories": [
     {
       "id": "boss",
@@ -174,6 +181,7 @@
     },
     {
       "id": "scrap",
+      "split": true,
       "name": "Muddy Scrap Piles",
       "color": "#8d6e63",
       "icon": "builtin:box",
@@ -183,6 +191,7 @@
     },
     {
       "id": "cores",
+      "split": true,
       "name": "Cores",
       "color": "#ffca28",
       "icon": "builtin:gem",
@@ -192,6 +201,7 @@
     },
     {
       "id": "berries",
+      "split": true,
       "name": "Berries",
       "color": "#d81b60",
       "icon": "builtin:food",
@@ -201,6 +211,7 @@
     },
     {
       "id": "mushrooms",
+      "split": true,
       "name": "Mushrooms",
       "color": "#ffb300",
       "icon": "builtin:food",
@@ -210,6 +221,7 @@
     },
     {
       "id": "herbs",
+      "split": true,
       "name": "Herbs and Sulfur",
       "color": "#7cb342",
       "icon": "builtin:leaf",
@@ -219,6 +231,7 @@
     },
     {
       "id": "crops",
+      "split": true,
       "name": "Wild Flax and Barley",
       "color": "#c0a062",
       "icon": "builtin:leaf",
@@ -228,6 +241,7 @@
     },
     {
       "id": "portal",
+      "linksByName": true,
       "name": "Portals",
       "color": "#7e57c2",
       "icon": "builtin:layers",
@@ -237,6 +251,7 @@
     },
     {
       "id": "ship",
+      "split": true,
       "name": "Ships",
       "color": "#1e88e5",
       "icon": "builtin:map",

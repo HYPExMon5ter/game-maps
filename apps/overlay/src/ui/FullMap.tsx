@@ -1,7 +1,9 @@
-import { Check, Copy, Info, MapPinPlus, Navigation, Pencil, Radio, Trash2, Zap } from 'lucide-react'
+import { Check, Copy, Footprints, Info, MapPinPlus, Navigation, Pencil, Radio, Trash2, Zap } from 'lucide-react'
 import { Activity, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { findPin, newCustomPinAt, teleportToMapPoint } from '../lib/actions'
-import type { Pin } from '../lib/game'
+import { backend } from '../lib/backend'
+import type { GameMap, Pin } from '../lib/game'
+import type { CompanionStatus, Vec3 } from '../lib/protocol'
 import { fitRect, MIN_MAP_PANEL, toPixels } from '../lib/layout'
 import { toLngLat, toWorld } from '../lib/projection'
 import { readyPeers, sendPing, useSyncStore } from '../lib/sync/sync'
@@ -23,6 +25,16 @@ import { LinkProblem, TopBar } from './TopBar'
 import { useSettings } from '../settings/store'
 import { IS_MAP_WINDOW } from '../lib/view'
 
+/** Tells a companion to walk to a spot. */
+function sendCompanion(c: CompanionStatus, at: Vec3, map: GameMap) {
+  const p = map.projection
+  const { notify } = useStore.getState()
+  backend.companionOrder(c.id, `go:${at[p.east]},${at[p.north]}`).then(
+    () => notify(`${c.name} is on the way`),
+    (e) => notify(`${c.name} can't go there: ${String(e)}`, 'error'),
+  )
+}
+
 function ContextMenu({
   at,
   scale,
@@ -41,7 +53,10 @@ function ContextMenu({
   const notify = useStore((s) => s.notify)
   const layer = useStore(selectViewLayer)
   const together = useSyncStore((s) => readyPeers(s).length > 0)
-  const gamePings = useStore((s) => !!s.status?.capabilities?.game_map)
+  const gamePings = useStore((s) => !!s.status?.capabilities?.game_pings)
+  const canSend = useStore((s) => !!s.game?.sendCompanions)
+  const companions = useStore((s) => s.snapshot?.companions)
+  const sendable = useMemo(() => (canSend ? (companions ?? []).filter((c) => c.alive) : []), [canSend, companions])
   const world = map ? toWorld(map.projection, at.lngLat) : null
   const item = 'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] hover:bg-panel-raised disabled:opacity-40'
   const pin = at.pinId ? findPin(at.pinId) : undefined
@@ -73,6 +88,13 @@ function ContextMenu({
           <Zap className="size-4" /> Teleport here
         </button>
       )}
+      {world &&
+        map &&
+        sendable.map((c) => (
+          <button key={c.id} className={item} onClick={() => (sendCompanion(c, world, map), onClose())}>
+            <Footprints className="size-4" /> Send {c.name} here
+          </button>
+        ))}
       {(together || gamePings) && world && (
         <button className={item} onClick={() => (sendPing(world, layer), onClose())}>
           <Radio className="size-4" /> Ping here

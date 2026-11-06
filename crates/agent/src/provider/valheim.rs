@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::time::{Duration, Instant};
 
-use game_maps_protocol::{Wind, ZonePins, Capabilities, Creature, CreatureKind, Environment, GamePin, GameWorld, LocalPlayer, Marker, MarkerKind, MultiplayerSession, PathInfo, RemotePlayer, TeleportTarget, Vec3, WorldKind, WorldLayer, WorldPin, WorldSnapshot};
+use game_maps_protocol::{Wind, ZonePins, WORLD_MAP_NOT_READY, Capabilities, Creature, CreatureKind, Environment, GamePin, GameWorld, LocalPlayer, Marker, MarkerKind, MultiplayerSession, PathInfo, RemotePlayer, TeleportTarget, Vec3, WorldKind, WorldLayer, WorldPin, WorldSnapshot};
 use unity_runtime::{read_object_array, read_string, read_value_array, Class, Field, ListLayout, ManagedArray, ManagedObject, Method, Quaternion, Runtime, Vector3};
 
 use super::{to_proto, to_unity, Cx, Provider};
@@ -56,7 +56,8 @@ const WISHBONE: &str = "$item_wishbone";
 const BOSS_KEYS: &[&str] = &["defeated_eikthyr", "defeated_gdking", "defeated_bonemass", "defeated_dragon", "defeated_goblinking", "defeated_queen", "defeated_fader"];
 const CREATURE_RADIUS: f32 = 200.0;
 const MAX_ENTITIES: usize = 256;
-const MAX_MAP_PINS: usize = 2048;
+/// More than any character has: pins past this aren't seen, and would be added again.
+const MAX_MAP_PINS: usize = 65536;
 const MAX_LOCATIONS: usize = 65536;
 /// `game.json` projects the map onto this many meters per side.
 const MAP_SIDE_METERS: f32 = 24576.0;
@@ -88,8 +89,6 @@ const PIN_HILDIR3: i32 = 16;
 const PIN_FROM_APP: i32 = PIN_ICON3;
 /// Pins this close together are the same pin (saved positions are exact).
 const SAME_PIN_METERS: f32 = 1.0;
-/// Room for a `Splatform.PlatformUserID`: `AddPin` takes one by value, left empty.
-const NO_AUTHOR_BYTES: usize = 64;
 
 fn marker_icon(pin_type: i32) -> Option<(&'static str, &'static str)> {
     match pin_type {
@@ -104,12 +103,12 @@ fn marker_icon(pin_type: i32) -> Option<(&'static str, &'static str)> {
 
 struct PlayerMembers {
     local: Field,
-    all: Method,
-    name: Method,
-    is_dead: Method,
-    is_teleporting: Method,
-    is_attached: Method,
-    teleport_to: Method,
+    all: Option<Method>,
+    name: Option<Method>,
+    is_dead: Option<Method>,
+    is_teleporting: Option<Method>,
+    is_attached: Option<Method>,
+    teleport_to: Option<Method>,
     is_teleportable: Option<Method>,
     /// `Humanoid.m_utilityItem`, its `m_shared`, and that's `m_name`.
     utility_item: Option<(Field, Field, Field)>,
@@ -118,16 +117,16 @@ struct PlayerMembers {
 struct NetMembers {
     instance: Field,
     world: Field,
-    is_server: Method,
+    is_server: Option<Method>,
     open_server: Option<Field>,
     player_list: Option<Method>,
-    game: Field,
+    game: Option<Field>,
 }
 
 struct WorldFields {
-    name: Field,
+    name: Option<Field>,
     uid: Field,
-    seed: Field,
+    seed: Option<Field>,
     menu: Option<Field>,
 }
 
@@ -151,7 +150,8 @@ struct MinimapMembers {
     explored_others: Field,
     pixels32: Method,
     raw_data: Method,
-    add_pin: Option<Method>,
+    /// `AddPin`, with the class of its last parameter: a struct it takes by value, left empty.
+    add_pin: Option<(Method, Class)>,
     remove_pin: Option<Method>,
     /// `m_smallRoot`, `m_mode` and `GameObject.SetActive`.
     small_map: Option<(Field, Field, Method)>,
@@ -186,6 +186,8 @@ struct CreatureMembers {
     name: Field,
     faction: Field,
     tamed: Field,
+    /// `Character.m_baseAI` and the class of the AI that only ever runs away.
+    gentle: Option<(Field, Class)>,
 }
 
 struct EnvMembers {
@@ -282,12 +284,12 @@ impl Valheim {
 
         let players = PlayerMembers {
             local: static_field(rt, player, "m_localPlayer")?,
-            all: rt.method(player, "GetAllPlayers", 0).ok()?,
-            name: rt.method(player, "GetPlayerName", 0).ok()?,
-            is_dead: rt.method(player, "IsDead", 0).ok()?,
-            is_teleporting: rt.method(player, "IsTeleporting", 0).ok()?,
-            is_attached: rt.method(player, "IsAttached", 0).ok()?,
-            teleport_to: rt.method_with_params(player, "TeleportTo", &["UnityEngine.Vector3", "UnityEngine.Quaternion", "System.Boolean"]).ok()?,
+            all: rt.method(player, "GetAllPlayers", 0).ok(),
+            name: rt.method(player, "GetPlayerName", 0).ok(),
+            is_dead: rt.method(player, "IsDead", 0).ok(),
+            is_teleporting: rt.method(player, "IsTeleporting", 0).ok(),
+            is_attached: rt.method(player, "IsAttached", 0).ok(),
+            teleport_to: rt.method_with_params(player, "TeleportTo", &["UnityEngine.Vector3", "UnityEngine.Quaternion", "System.Boolean"]).ok(),
             is_teleportable: rt.method(player, "IsTeleportable", 1).ok(),
             utility_item: (|| {
                 let item = rt.class("", "ItemDrop/ItemData").ok()?;
@@ -298,15 +300,15 @@ impl Valheim {
         let net_members = NetMembers {
             instance: static_field(rt, net, "m_instance")?,
             world: static_field(rt, net, "m_world")?,
-            is_server: rt.method(net, "IsServer", 0).ok()?,
+            is_server: rt.method(net, "IsServer", 0).ok(),
             open_server: static_field(rt, net, "m_openServer"),
             player_list: rt.method(net, "GetPlayerList", 0).ok(),
-            game: static_field(rt, game, "<instance>k__BackingField")?,
+            game: static_field(rt, game, "<instance>k__BackingField"),
         };
         let world_fields = WorldFields {
-            name: rt.field(world, "m_name").ok()?,
-            uid: rt.field(world, "m_uid").ok()?,
-            seed: rt.field(world, "m_seed").ok()?,
+            name: rt.field(world, "m_name").ok(),
+            uid: rt.field_of(world, "m_uid", "Int64").ok()?,
+            seed: rt.field_of(world, "m_seed", "Int32").ok(),
             menu: rt.field(world, "m_menu").ok(),
         };
 
@@ -330,7 +332,7 @@ impl Valheim {
                 explored_others: rt.field(map, "m_exploredOthers").ok()?,
                 pixels32: rt.method(texture, "GetPixels32", 0).ok()?,
                 raw_data: rt.method(texture, "GetRawTextureData", 0).ok()?,
-                add_pin: rt.method(map, "AddPin", 7).ok(),
+                add_pin: rt.method(map, "AddPin", 7).ok().filter(|m| add_pin_is_known(&rt.method_params(m))).and_then(|m| Some((m, rt.class("Splatform", "PlatformUserID").ok()?))),
                 remove_pin: rt.method(map, "RemovePin", 1).ok(),
                 small_map: (|| Some((rt.field(map, "m_smallRoot").ok()?, rt.field(map, "m_mode").ok()?, rt.method(rt.class("UnityEngine", "GameObject").ok()?, "SetActive", 1).ok()?)))(),
             })
@@ -360,7 +362,7 @@ impl Valheim {
         });
 
         let creature_members = rt.class("", "Character").ok().and_then(|c| {
-            Some(CreatureMembers { all: rt.method(c, "GetAllCharacters", 0).ok()?, name: rt.field(c, "m_name").ok()?, faction: rt.field(c, "m_faction").ok()?, tamed: rt.field(c, "m_tamed").ok()? })
+            Some(CreatureMembers { all: rt.method(c, "GetAllCharacters", 0).ok()?, name: rt.field(c, "m_name").ok()?, faction: rt.field(c, "m_faction").ok()?, tamed: rt.field(c, "m_tamed").ok()?, gentle: rt.field(c, "m_baseAI").ok().zip(rt.class("", "AnimalAI").ok()) })
         });
 
         let env = (|| {
@@ -474,6 +476,22 @@ impl Valheim {
         cx.rt.invoke(method, this, &mut []).and_then(|b| cx.rt.unbox::<bool>(b)).unwrap_or(false)
     }
 
+    /// [`Self::flag`] for a member the game may not have any more.
+    unsafe fn has(cx: &Cx, method: &Option<Method>, this: *mut ManagedObject) -> bool {
+        method.as_ref().is_some_and(|m| Self::flag(cx, m, this))
+    }
+
+    /// A player's name, as the game shows it.
+    unsafe fn player_name(&self, cx: &Cx, player: *mut ManagedObject) -> Option<String> {
+        read_string(cx.rt.invoke(self.player.name.as_ref()?, player, &mut []).ok()?)
+    }
+
+    /// Whether this is the world's host. Without the game saying, nothing it only tells a
+    /// host is read, so a client isn't taken for one.
+    unsafe fn is_server(&self, cx: &Cx, net: *mut ManagedObject) -> bool {
+        Self::has(cx, &self.net.is_server, net)
+    }
+
     /// Elements of a `List<T>` of reference types.
     unsafe fn list(&mut self, cx: &Cx, list: *mut ManagedObject, max: usize) -> Vec<*mut ManagedObject> {
         if list.is_null() {
@@ -519,9 +537,10 @@ impl Valheim {
 
     /// The world that's loaded, and the session that goes with it.
     unsafe fn read_world(&self, cx: &Cx, player: *mut ManagedObject) -> Option<(GameWorld, Option<MultiplayerSession>)> {
-        let game: *mut ManagedObject = cx.rt.static_value(self.net.game);
-        if !cx.unity.is_alive(game) {
-            return None;
+        if let Some(field) = self.net.game {
+            if !cx.unity.is_alive(cx.rt.static_value(field)) {
+                return None;
+            }
         }
         let net = self.net(cx)?;
         let world: *mut ManagedObject = cx.rt.static_value(self.net.world);
@@ -529,9 +548,9 @@ impl Valheim {
             return None;
         }
         let uid: i64 = self.world_fields.uid.get(world);
-        let seed: i32 = self.world_fields.seed.get(world);
-        let name = read_string(self.world_fields.name.get(world)).filter(|n| !n.is_empty());
-        let server = Self::flag(cx, &self.net.is_server, net);
+        let seed: i32 = self.world_fields.seed.map_or(0, |f| f.get(world));
+        let name = self.world_fields.name.and_then(|f| read_string(f.get(world))).filter(|n| !n.is_empty());
+        let server = self.is_server(cx, net);
         let open = self.net.open_server.is_some_and(|f| cx.rt.static_value::<bool>(f));
         let kind = match (server, open) {
             (false, _) => WorldKind::Joined,
@@ -541,7 +560,7 @@ impl Valheim {
         let session = (kind != WorldKind::SinglePlayer).then(|| MultiplayerSession {
             // Only players in this world know both.
             id: format!("{uid:x}-{seed:x}"),
-            player_name: if player.is_null() { None } else { cx.rt.invoke(&self.player.name, player, &mut []).ok().and_then(|n| read_string(n)) },
+            player_name: if player.is_null() { None } else { self.player_name(cx, player) },
         });
         Some((GameWorld { id: format!("world-{uid}"), name, kind }, session))
     }
@@ -567,16 +586,16 @@ impl Valheim {
     }
 
     unsafe fn refresh_remote(&mut self, cx: &Cx, player: *mut ManagedObject) {
-        let local_name = read_string(cx.rt.invoke(&self.player.name, player, &mut []).unwrap_or(std::ptr::null_mut()));
+        let local_name = self.player_name(cx, player);
         let mut others: Vec<RemotePlayer> = Vec::new();
-        let loaded = cx.rt.invoke(&self.player.all, std::ptr::null_mut(), &mut []).unwrap_or(std::ptr::null_mut());
+        let loaded = self.player.all.as_ref().and_then(|m| cx.rt.invoke(m, std::ptr::null_mut(), &mut []).ok()).unwrap_or(std::ptr::null_mut());
         for other in self.list(cx, loaded, MAX_ENTITIES) {
             if other == player || !cx.unity.is_alive(other) {
                 continue;
             }
             let Ok(transform) = cx.unity.component_transform(cx.rt, other) else { continue };
             let Ok(position) = cx.unity.position(cx.rt, transform) else { continue };
-            let Some(name) = read_string(cx.rt.invoke(&self.player.name, other, &mut []).unwrap_or(std::ptr::null_mut())) else { continue };
+            let Some(name) = self.player_name(cx, other) else { continue };
             let forward = cx.unity.rotation(cx.rt, transform).ok().map(|q| to_proto(q.forward()));
             others.push(RemotePlayer { id: format!("player:{name}"), name, color: None, position: to_proto(position), forward });
         }
@@ -617,7 +636,7 @@ impl Valheim {
 
     unsafe fn refresh_creatures(&mut self, cx: &Cx, around: Vector3) {
         let Some(members) = &self.creature_members else { return };
-        let (all, name_f, faction_f, tamed_f) = (members.all.clone(), members.name, members.faction, members.tamed);
+        let (all, name_f, faction_f, tamed_f, gentle_m) = (members.all.clone(), members.name, members.faction, members.tamed, members.gentle);
         let Ok(list) = cx.rt.invoke(&all, std::ptr::null_mut(), &mut []) else { return };
         let mut found = Vec::new();
         for c in self.list(cx, list, MAX_ENTITIES) {
@@ -635,12 +654,11 @@ impl Valheim {
                 continue;
             }
             let tamed: bool = tamed_f.get(c);
-            let kind = match faction {
-                _ if tamed => CreatureKind::Friendly,
-                FACTION_PLAYER_SPAWNED => CreatureKind::Friendly,
-                FACTION_ANIMALS => CreatureKind::Animal,
-                _ => CreatureKind::Hostile,
-            };
+            let gentle = gentle_m.is_some_and(|(field, class)| {
+                let ai: *mut ManagedObject = field.get(c);
+                !ai.is_null() && cx.rt.class_of(ai) == Some(class)
+            });
+            let kind = creature_kind(faction, tamed, gentle);
             let Some(key) = read_string(name_f.get(c)) else { continue };
             let name = self.localized(cx, &key);
             found.push(Creature { id: format!("{:x}", c as usize), kind, name, position: to_proto(p) });
@@ -691,7 +709,7 @@ impl Valheim {
     /// they are, so nothing is added twice.
     unsafe fn apply_game_pins(&mut self, cx: &Cx, pins: Vec<GamePin>) -> Result<(), String> {
         let (Some(map), Some(fields)) = (&self.minimap, &self.pin_fields) else { return Err("the map is unavailable".into()) };
-        let (Some(add), Some(remove)) = (map.add_pin.clone(), map.remove_pin.clone()) else { return Err("pins are unavailable in this game version".into()) };
+        let (Some((add, author_class)), Some(remove)) = (map.add_pin.clone(), map.remove_pin.clone()) else { return Err("pins are unavailable in this game version".into()) };
         let minimap: *mut ManagedObject = cx.rt.static_value(map.instance);
         let list_field = map.pins;
         let (kind_f, position_f) = (fields.kind, fields.position);
@@ -712,7 +730,7 @@ impl Valheim {
             let mut position = to_unity(pin.position);
             let mut kind = PIN_FROM_APP;
             let (mut save, mut checked, mut owner) = (true, false, 0i64);
-            let mut author = [0u8; NO_AUTHOR_BYTES];
+            let author = cx.rt.new_value(author_class).map_err(|e| e.to_string())?;
             let mut args = [
                 &mut position as *mut Vector3 as *mut c_void,
                 &mut kind as *mut i32 as *mut c_void,
@@ -720,7 +738,7 @@ impl Valheim {
                 &mut save as *mut bool as *mut c_void,
                 &mut checked as *mut bool as *mut c_void,
                 &mut owner as *mut i64 as *mut c_void,
-                author.as_mut_ptr() as *mut c_void,
+                cx.rt.unboxed(author),
             ];
             cx.rt.invoke(&add, minimap, &mut args).map_err(|e| e.to_string())?;
         }
@@ -737,7 +755,7 @@ impl Valheim {
         }
         let net = self.net(cx).ok_or("the world isn't loaded")?;
         let mut found: Vec<(String, Vector3, bool)> = Vec::new();
-        if Self::flag(cx, &self.net.is_server, net) {
+        if self.is_server(cx, net) {
             let values = cx.rt.invoke(&z.locations, zones, &mut []).map_err(|e| e.to_string())?;
             let (array, count) = copy_collection(cx.rt, values, z.location_class, MAX_LOCATIONS)?;
             for i in 0..count {
@@ -868,6 +886,24 @@ impl Valheim {
     }
 }
 
+/// `Minimap.AddPin(Vector3, PinType, string, bool, bool, long, PlatformUserID)`.
+fn add_pin_is_known(params: &[String]) -> bool {
+    let kinds = ["Vector3", "PinType", "String", "Boolean", "Boolean", "Int64", "PlatformUserID"];
+    params.len() == kinds.len() && params.iter().zip(kinds).all(|(p, kind)| p.contains(kind))
+}
+
+/// How a creature shows on the map. Its faction isn't enough: deer, chickens and young
+/// animals are filed under monster factions but have the AI that only runs away.
+fn creature_kind(faction: i32, tamed: bool, gentle: bool) -> CreatureKind {
+    if tamed || faction == FACTION_PLAYER_SPAWNED {
+        CreatureKind::Friendly
+    } else if gentle || faction == FACTION_ANIMALS {
+        CreatureKind::Animal
+    } else {
+        CreatureKind::Hostile
+    }
+}
+
 fn same_spot(a: Vec3, b: Vec3) -> bool {
     (a.x - b.x).abs() < SAME_PIN_METERS && (a.z - b.z).abs() < SAME_PIN_METERS
 }
@@ -921,7 +957,7 @@ impl Provider for Valheim {
 
     fn capabilities(&self) -> Capabilities {
         let pins = self.minimap.as_ref().is_some_and(|m| m.add_pin.is_some() && m.remove_pin.is_some());
-        Capabilities { live_location: true, teleport: self.ground.is_some(), other_players: true, hotkeys: true, game_map: pins && self.input.ping.is_some() }
+        Capabilities { live_location: true, teleport: self.ground.is_some() && self.player.teleport_to.is_some(), other_players: self.player.all.is_some(), hotkeys: true, game_map: pins, game_pings: self.input.ping.is_some() }
     }
 
     fn frame_hooks(&self) -> &'static [HookTarget] {
@@ -1005,7 +1041,7 @@ impl Provider for Valheim {
                     environment.weather = None;
                 }
             }
-            self.dead = !player.is_null() && Self::flag(cx, &self.player.is_dead, player);
+            self.dead = !player.is_null() && Self::has(cx, &self.player.is_dead, player);
         }
 
         match &local {
@@ -1061,13 +1097,13 @@ impl Provider for Valheim {
         if player.is_null() {
             return Err("not in a world".into());
         }
-        if Self::flag(cx, &self.player.is_dead, player) {
+        if Self::has(cx, &self.player.is_dead, player) {
             return Err("you are dead".into());
         }
-        if Self::flag(cx, &self.player.is_teleporting, player) {
+        if Self::has(cx, &self.player.is_teleporting, player) {
             return Err("already teleporting".into());
         }
-        if Self::flag(cx, &self.player.is_attached, player) {
+        if Self::has(cx, &self.player.is_attached, player) {
             return Err("get off the ship or seat first".into());
         }
         if !self.teleport_restricted && self.carrying_restricted(cx, player) {
@@ -1100,7 +1136,8 @@ impl Provider for Valheim {
         let mut rotation: Quaternion = cx.unity.rotation(cx.rt, transform).map_err(|e| e.to_string())?;
         let mut distant = true;
         let mut args = [&mut dest as *mut Vector3 as *mut c_void, &mut rotation as *mut Quaternion as *mut c_void, &mut distant as *mut bool as *mut c_void];
-        let started = cx.rt.invoke(&self.player.teleport_to, player, &mut args).and_then(|b| cx.rt.unbox::<bool>(b)).map_err(|e| e.to_string())?;
+        let method = self.player.teleport_to.as_ref().ok_or("teleport is unavailable in this game version")?;
+        let started = cx.rt.invoke(method, player, &mut args).and_then(|b| cx.rt.unbox::<bool>(b)).map_err(|e| e.to_string())?;
         if started {
             Ok(())
         } else {
@@ -1133,7 +1170,7 @@ impl Provider for Valheim {
     unsafe fn read_world_map(&mut self, cx: &Cx, terrain: bool) -> Result<WorldMapCapture, String> {
         // Until the player has spawned, a new world may still be placing its locations.
         if !self.spawned || !self.map_ready(cx) {
-            return Err("the game hasn't built its map yet".into());
+            return Err(WORLD_MAP_NOT_READY.into());
         }
         let m = self.minimap.as_ref().ok_or("the map is unavailable in this game version")?;
         let minimap: *mut ManagedObject = cx.rt.static_value(m.instance);
@@ -1145,7 +1182,11 @@ impl Provider for Valheim {
         let size = size as usize;
         let pixels = size * size;
 
-        let explored = self.read_explored(cx, m, minimap)?;
+        // Without these the map still works, and a retry wouldn't bring them.
+        let explored = self.read_explored(cx, m, minimap).unwrap_or_else(|e| {
+            crate::filelog::write(&format!("explored areas unavailable: {e}"));
+            Vec::new()
+        });
         let draw = if terrain {
             let started = Instant::now();
             let array = |texture: *mut ManagedObject, method: &Method| -> Result<*mut ManagedObject, String> {
@@ -1158,7 +1199,12 @@ impl Provider for Valheim {
             let after_biome = started.elapsed();
             let mask = read_value_array::<Color32>(array(m.mask.get(minimap), &m.pixels32)?, pixels);
             let after_mask = started.elapsed();
-            let height = read_value_array::<u16>(array(m.height.get(minimap), &m.raw_data)?, pixels);
+            let heights = array(m.height.get(minimap), &m.raw_data)?;
+            // Its size in bytes says what format it's in: 16-bit heights are expected.
+            if heights.is_null() || ManagedArray::of(cx.rt, heights, usize::MAX).len != pixels * 2 {
+                return Err("the map's heights aren't in a known format".into());
+            }
+            let height = read_value_array::<u16>(heights, pixels);
             if biome.len() != pixels || mask.len() != pixels || height.len() != pixels {
                 return Err(format!("unexpected map textures: {} {} {}", biome.len(), mask.len(), height.len()));
             }
@@ -1169,7 +1215,10 @@ impl Provider for Valheim {
             None
         };
         let started = Instant::now();
-        let pins = self.read_locations(cx)?;
+        let pins = self.read_locations(cx).unwrap_or_else(|e| {
+            crate::filelog::write(&format!("locations unavailable: {e}"));
+            Vec::new()
+        });
         self.notes.push(format!("Valheim locations read in {:?}", started.elapsed()));
         Ok(WorldMapCapture { size: (size * terrain::UPSCALE) as u32, pins, explored, terrain: draw })
     }
@@ -1205,6 +1254,16 @@ mod tests {
 
     /// Hosts the game's own Mono runtime, loads its managed assemblies (no engine, so
     /// nothing runs) and resolves every member the provider uses by name.
+    #[test]
+    fn deer_are_animals_whatever_their_faction() {
+        use super::{creature_kind, CreatureKind, FACTION_ANIMALS};
+        const FOREST_MONSTERS: i32 = 2;
+        assert_eq!(creature_kind(FOREST_MONSTERS, false, true), CreatureKind::Animal);
+        assert_eq!(creature_kind(FACTION_ANIMALS, false, false), CreatureKind::Animal);
+        assert_eq!(creature_kind(FOREST_MONSTERS, false, false), CreatureKind::Hostile);
+        assert_eq!(creature_kind(FOREST_MONSTERS, true, true), CreatureKind::Friendly);
+    }
+
     #[test]
     #[ignore = "needs a Valheim install: set VALHEIM_DIR and run with --ignored"]
     fn resolves_members_against_game_assemblies() {
@@ -1242,6 +1301,10 @@ mod tests {
         let _thread = rt.attach_thread();
         let unity = unity_runtime::Unity::new(&rt).expect("engine members");
         drop(unity);
+        // A struct has no constructor to run: asking the runtime to run one aborts the game.
+        let author = rt.class("Splatform", "PlatformUserID").expect("pin author");
+        assert!(unsafe { rt.new_object(author) }.is_err());
+        assert!(!unsafe { rt.new_value(author) }.expect("zeroed author").is_null());
         let mut p = Valheim::detect(&rt).expect("provider detected");
         let notes = p.take_notes().join("\n");
         println!("{notes}");

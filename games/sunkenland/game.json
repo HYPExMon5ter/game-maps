@@ -4,6 +4,8 @@
   "process": "Sunkenland.exe",
   "steamAppId": 2080690,
   "liveFeatures": true,
+  "gameMap": true,
+  "sendCompanions": true,
   "engine": "unity-mono",
   "unitsPerMeter": 1,
   "defaultHotkeys": [
@@ -41,9 +43,20 @@
       }
     }
   ],
+  "groups": [
+    { "id": "places", "name": "Places", "categories": ["location", "trader", "companion", "captive", "hazard"] },
+    { "id": "research", "name": "Research", "categories": ["research", "fragment"] },
+    { "id": "ores", "name": "Ores & Mining", "categories": ["ore"] },
+    { "id": "crates", "name": "Crates & Safes", "categories": ["valuable", "supply", "airdrop"] },
+    { "id": "containers", "name": "Containers", "categories": ["container"] },
+    { "id": "plants", "name": "Plants & Foraging", "categories": ["forage"] },
+    { "id": "fish", "name": "Fish", "categories": ["fish"] }
+  ],
   "categories": [
     {
       "id": "location",
+      "visitInside": true,
+      "placeInfo": true,
       "name": "Locations",
       "color": "#fbc02d",
       "icon": "game:Island",
@@ -110,6 +123,7 @@
     },
     {
       "id": "valuable",
+      "split": true,
       "name": "Safes & Military Crates",
       "color": "#ec407a",
       "icon": "builtin:gem",
@@ -118,6 +132,8 @@
     },
     {
       "id": "ore",
+      "split": true,
+      "mergeNames": { "Iron ore vein": "Iron ore", "Copper ore vein": "Copper ore" },
       "name": "Ore & Mining",
       "color": "#78909c",
       "icon": "builtin:pickaxe",
@@ -125,6 +141,7 @@
     },
     {
       "id": "fish",
+      "split": true,
       "name": "Fish",
       "color": "#29b6f6",
       "icon": "builtin:fish",
@@ -132,6 +149,7 @@
     },
     {
       "id": "forage",
+      "split": true,
       "name": "Plants & Foraging",
       "color": "#66bb6a",
       "icon": "builtin:leaf",
@@ -139,6 +157,7 @@
     },
     {
       "id": "container",
+      "split": true,
       "name": "Other Containers",
       "color": "#9e9d24",
       "icon": "builtin:chest",

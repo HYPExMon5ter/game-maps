@@ -51,3 +51,14 @@ class BuildPackTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PinGateTest(unittest.TestCase):
+    def test_small_changes_pass(self):
+        self.assertEqual(publish.lost_pins({"a": 100}, {"a": 95}), [])
+
+    def test_a_lost_category_stops_the_publish(self):
+        self.assertEqual(publish.lost_pins({"a": 100, "b": 10}, {"a": 100}), ["b: 10 -> 0"])
+
+    def test_nothing_to_compare_with_passes(self):
+        self.assertEqual(publish.lost_pins({}, {"a": 1}), [])

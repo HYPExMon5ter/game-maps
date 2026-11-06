@@ -50,6 +50,14 @@ export interface Category {
   visitInside?: boolean
   /** Filled in as the player goes, not known for the whole world. */
   remembered?: boolean
+  /** Places the game has details on: scavenged share and what's there (see `PlaceDetails`). */
+  placeInfo?: boolean
+  /** Portals: pins with the same name link up. */
+  linksByName?: boolean
+  /** Listed and filtered by kind of thing, going by pin names (see `lib/filters`). */
+  split?: boolean
+  /** Pin names that count as another kind in a split category. */
+  mergeNames?: Record<string, string>
 }
 
 export interface GameDefinition {
@@ -60,8 +68,12 @@ export interface GameDefinition {
   defaultHotkeys: Hotkey[]
   maps: GameMap[]
   categories: Category[]
+  /** How the sidebar groups the categories. */
+  groups?: { id: string; name: string; categories: string[] }[]
   /** What the player's things are called where they fall when they die. */
   bagName?: string
+  /** Companions can be sent to a spot on the map. */
+  sendCompanions?: boolean
   /** Heading of `checklist`. */
   checklistName?: string
   /** The biomes in a generated world's `biomes.bin`. */

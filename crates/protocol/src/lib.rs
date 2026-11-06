@@ -15,6 +15,9 @@ use serde::{Deserialize, Serialize};
 /// Bumped on any incompatible change. Both sides refuse to talk across versions.
 pub const PROTOCOL_VERSION: u32 = 6;
 
+/// Error of `ReadWorldMap` while the game is still building the map: worth asking again.
+pub const WORLD_MAP_NOT_READY: &str = "the game hasn't built its map yet";
+
 /// Name of the pipe an agent serves for a given game process id.
 pub fn pipe_name(pid: u32) -> String {
     format!(r"\\.\pipe\game-maps-agent-{pid}")
@@ -62,9 +65,12 @@ pub struct Capabilities {
     pub teleport: bool,
     pub other_players: bool,
     pub hotkeys: bool,
-    /// Pins and pings can go on the game's own map, so players without the app see them.
+    /// Pins can go on the game's own map, so players without the app see them.
     #[serde(default)]
     pub game_map: bool,
+    /// The game has a ping of its own, which reaches players without the app.
+    #[serde(default)]
+    pub game_pings: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -162,6 +168,9 @@ pub struct WorldSnapshot {
     /// Milestones reached in this world, as `game.json`'s checklist names them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub progress: Vec<String>,
+    /// Places the game counts as discovered.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visited: Vec<Vec3>,
 }
 
 /// What changed since the last [`WorldSnapshot`]. Sent in its place: looking around would
@@ -188,6 +197,8 @@ pub struct SnapshotUpdate {
     pub indoors: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub progress: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visited: Vec<Vec3>,
 }
 
 impl SnapshotUpdate {
@@ -202,6 +213,7 @@ impl SnapshotUpdate {
         snapshot.dying = self.dying;
         snapshot.indoors = self.indoors;
         snapshot.progress = self.progress;
+        snapshot.visited = self.visited;
         if let Some(markers) = self.markers {
             snapshot.markers = markers;
         }
@@ -220,7 +232,7 @@ pub struct CompanionStat {
 }
 
 /// What's known about an AI companion right now.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct CompanionStatus {
     /// Stable id for the companion in this game.
     pub id: String,
@@ -231,6 +243,30 @@ pub struct CompanionStatus {
     /// What they're doing, when the game says.
     pub activity: Option<String>,
     pub stats: Vec<CompanionStat>,
+}
+
+/// Something to find at a place. `taken` is only known for one-off finds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaceItem {
+    pub name: String,
+    pub taken: bool,
+}
+
+/// A kind of thing to find at a place.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaceLoot {
+    pub title: String,
+    pub items: Vec<PlaceItem>,
+}
+
+/// What the game's own map says about a place.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaceInfo {
+    pub name: String,
+    pub level: i32,
+    /// How much of it has been scavenged, in percent. `None` if there's nothing to scavenge.
+    pub scavenged: Option<u8>,
+    pub loot: Vec<PlaceLoot>,
 }
 
 /// Something a companion can be told to do.
@@ -454,6 +490,7 @@ pub enum AgentMessage {
     GroundProbeResult { request_id: u32, points: Option<Vec<GroundPoint>>, error: Option<String> },
     CompanionOrdersResult { request_id: u32, orders: Option<Vec<CompanionOrderOption>>, error: Option<String> },
     CompanionOrderResult { request_id: u32, ok: bool, error: Option<String> },
+    PlaceInfoResult { request_id: u32, place: Option<PlaceInfo>, error: Option<String> },
     WorldMapResult { request_id: u32, map: Option<WorldMap>, error: Option<String> },
     /// What's in an area of the world now, replacing what it had.
     ZonePins(ZonePins),
@@ -552,6 +589,8 @@ pub enum AppMessage {
     ProbeGround { request_id: u32, points: Vec<Vec3> },
     /// What `companion` can be told to do right now.
     CompanionOrders { request_id: u32, companion: String },
+    /// What the game says about the place at `position`.
+    PlaceInfo { request_id: u32, position: Vec3 },
     /// Tells `companion` to do `order` (an id from `CompanionOrders`).
     CompanionOrder { request_id: u32, companion: String, order: String },
     /// Reads the loaded world's map into `dir`: where it's explored, always, and the
@@ -590,7 +629,7 @@ mod tests {
                 protocol_version: PROTOCOL_VERSION,
                 agent_version: "0.1.0".into(),
                 game: Some("sons-of-the-forest".into()),
-                capabilities: Capabilities { live_location: true, teleport: true, other_players: true, hotkeys: true, game_map: false },
+                capabilities: Capabilities { live_location: true, teleport: true, other_players: true, hotkeys: true, game_map: false, game_pings: false },
                 module: Some("game_maps_agent-0123.dll".into()),
             },
             AgentMessage::Snapshot(Box::new(WorldSnapshot {
@@ -632,6 +671,7 @@ mod tests {
                 dying: true,
                 indoors: false,
                 progress: vec![],
+                visited: vec![],
             })),
             AgentMessage::HotkeyPressed { action: HotkeyAction::ToggleMap },
             AgentMessage::HotkeyPressed { action: HotkeyAction::QuickMark },

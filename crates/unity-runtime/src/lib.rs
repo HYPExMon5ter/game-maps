@@ -185,6 +185,22 @@ impl Runtime {
         Method { ptr: m, name, is_static: flags & METHOD_ATTRIBUTE_STATIC != 0 }
     }
 
+    /// A field read straight from memory: `field`, but only if its type name contains
+    /// `kind`. A game update that changes the type then loses a feature, not the game.
+    pub fn field_of(&self, class: Class, name: &str, kind: &str) -> Result<Field> {
+        let field = self.field(class, name)?;
+        if unsafe { self.backend.field_type_name(field.ptr) }.contains(kind) {
+            Ok(field)
+        } else {
+            Err(Error::MemberNotFound(format!("{}::{name} as {kind}", self.class_name(class))))
+        }
+    }
+
+    /// Full type names of a method's parameters.
+    pub fn method_params(&self, method: &Method) -> Vec<String> {
+        unsafe { self.backend.method_param_types(method.ptr) }
+    }
+
     /// Looks up a field by name (walks base classes).
     pub fn field(&self, class: Class, name: &str) -> Result<Field> {
         let c = CString::new(name).map_err(|_| Error::MemberNotFound(name.into()))?;
@@ -280,6 +296,14 @@ impl Runtime {
         self.invoke(method, this, args)
     }
 
+    /// Pointer to the value in a boxed struct, to pass it by value to a managed call.
+    ///
+    /// # Safety
+    /// `boxed` must be a live boxed value.
+    pub unsafe fn unboxed(&self, boxed: *mut ManagedObject) -> *mut c_void {
+        self.backend.unbox(boxed as Ptr)
+    }
+
     /// Unboxes a value-type result from [`Runtime::invoke`].
     ///
     /// # Safety
@@ -363,10 +387,30 @@ impl Runtime {
     /// A new instance of `class` built by its parameterless constructor. Only kept alive
     /// by references the GC can see, so don't keep it across frames.
     ///
+    /// A class without that constructor is an error here: the runtime would abort the game.
+    /// Structs don't have one, see [`Runtime::new_value`].
+    ///
     /// # Safety
     /// Must run on an attached thread (the main thread for Unity types).
     pub unsafe fn new_object(&self, class: Class) -> Result<*mut ManagedObject> {
+        // On the class itself: `Self::method` would find `System.Object`'s.
+        if self.backend.method_from_name(class.0, c".ctor", 0).is_null() {
+            return Err(Error::MemberNotFound(format!("{}::.ctor()", self.class_name(class))));
+        }
         let obj = self.backend.new_object(class.0);
+        if obj.is_null() {
+            return Err(Error::Null);
+        }
+        Ok(obj as *mut ManagedObject)
+    }
+
+    /// A new boxed struct of type `class`, all zeroes, under the same rules as
+    /// [`Runtime::new_object`] for how long it lives.
+    ///
+    /// # Safety
+    /// Must run on an attached thread.
+    pub unsafe fn new_value(&self, class: Class) -> Result<*mut ManagedObject> {
+        let obj = self.backend.new_value(class.0);
         if obj.is_null() {
             return Err(Error::Null);
         }

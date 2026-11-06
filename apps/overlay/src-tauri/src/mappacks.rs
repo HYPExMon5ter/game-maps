@@ -47,11 +47,16 @@ pub struct RemotePack {
     pub sha256: String,
     /// Download size in bytes.
     pub size: u64,
+    /// The game's Steam build the map was made from.
+    #[serde(default, rename = "gameBuild", skip_serializing_if = "Option::is_none")]
+    pub game_build: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct InstalledPack {
     version: String,
+    #[serde(default)]
+    game_build: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -164,6 +169,11 @@ impl MapPacks {
         &self.dir
     }
 
+    /// The game build the installed map of `id` was made from, if it says.
+    pub fn installed_build(&self, id: &str) -> Option<String> {
+        read_installed(&self.dir, id)?.game_build
+    }
+
     pub fn statuses(&self) -> Vec<PackStatus> {
         let mut list: Vec<_> = self.statuses.lock().unwrap().values().cloned().collect();
         list.sort_by(|a, b| a.game_id.cmp(&b.game_id));
@@ -272,8 +282,8 @@ impl MapPacks {
         let result = async {
             self.download(app, id, remote, &zip_path).await?;
             let (zip, out) = (zip_path.clone(), staging.clone());
-            let version = remote.version.clone();
-            tauri::async_runtime::spawn_blocking(move || extract(&zip, &out, &version))
+            let (version, build) = (remote.version.clone(), remote.game_build.clone());
+            tauri::async_runtime::spawn_blocking(move || extract(&zip, &out, &version, build.as_deref()))
                 .await
                 .map_err(|e| e.to_string())??;
             let (from, to) = (staging.clone(), self.dir.join(id));
@@ -317,11 +327,11 @@ fn read_installed(dir: &Path, id: &str) -> Option<InstalledPack> {
 }
 
 /// Extracts a pack into `out` (zip entries are confined to it) and marks it complete.
-fn extract(zip: &Path, out: &Path, version: &str) -> Result<(), String> {
+fn extract(zip: &Path, out: &Path, version: &str, game_build: Option<&str>) -> Result<(), String> {
     let file = std::fs::File::open(zip).map_err(|e| e.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("invalid map pack: {e}"))?;
     archive.extract(out).map_err(|e| format!("could not unpack the map: {e}"))?;
-    let marker = serde_json::to_vec(&InstalledPack { version: version.to_owned() }).map_err(|e| e.to_string())?;
+    let marker = serde_json::to_vec(&InstalledPack { version: version.to_owned(), game_build: game_build.map(str::to_owned) }).map_err(|e| e.to_string())?;
     std::fs::write(out.join(PACK_FILE), marker).map_err(|e| e.to_string())
 }
 
@@ -404,7 +414,7 @@ mod tests {
     use super::*;
 
     fn pack(installed: Option<&str>, available: Option<&str>) -> PackStatus {
-        let remote = |v: &str| RemotePack { version: v.into(), url: String::new(), sha256: String::new(), size: 1 };
+        let remote = |v: &str| RemotePack { version: v.into(), url: String::new(), sha256: String::new(), size: 1 , game_build: None };
         PackStatus { game_id: "game".into(), installed: installed.map(Into::into), available: available.map(remote), downloading: None, error: None }
     }
 
@@ -482,7 +492,7 @@ mod tests {
         std::fs::write(target.join("stale.txt"), b"old").unwrap();
 
         let staging = dir.join("staging");
-        extract(&zip, &staging, "2").unwrap();
+        extract(&zip, &staging, "2", None).unwrap();
         swap_into_place(&staging, &target).unwrap();
 
         assert!(target.join("tiles/3/3/3.webp").exists());
@@ -497,14 +507,14 @@ mod tests {
         let dir = temp_dir("slip");
         let zip = dir.join("evil.zip");
         write_zip(&zip, &[("../escape.txt", b"x")]);
-        let _ = extract(&zip, &dir.join("out"), "1");
+        let _ = extract(&zip, &dir.join("out"), "1", None);
         assert!(!dir.join("escape.txt").exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn update_available_only_for_installed_packs() {
-        let remote = RemotePack { version: "2".into(), url: String::new(), sha256: String::new(), size: 0 };
+        let remote = RemotePack { version: "2".into(), url: String::new(), sha256: String::new(), size: 0 , game_build: None };
         let status = |installed: Option<&str>| PackStatus {
             game_id: "g".into(),
             installed: installed.map(Into::into),

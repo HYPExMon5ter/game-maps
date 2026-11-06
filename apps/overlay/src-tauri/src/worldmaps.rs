@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use game_maps_protocol::{WorldPin, ZonePins};
+use game_maps_protocol::{WorldPin, ZonePins, WORLD_MAP_NOT_READY};
 use image::imageops::{self, FilterType};
 use image::{ImageBuffer, RgbImage};
 use serde::{Deserialize, Serialize};
@@ -43,6 +43,8 @@ struct Ready {
     world_id: String,
     /// The tiles are new, not only the pins.
     tiles: bool,
+    /// There's a new `explored.bin`.
+    explored: bool,
 }
 
 /// What's been seen in a world, by area (see `Provider::next_zone_pins`).
@@ -105,11 +107,14 @@ pub fn remember(app: &AppHandle, game: &str, world: &str, zone: ZonePins) {
         };
         let saved = bytes.map_err(|e| e.to_string()).and_then(|b| {
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-            std::fs::write(dir.join(REMEMBERED_FILE), b).map_err(|e| e.to_string())
+            // Whole or not at all: it's a record of everywhere the player has been.
+            let partial = dir.join(format!("{REMEMBERED_FILE}.tmp"));
+            std::fs::write(&partial, b).map_err(|e| e.to_string())?;
+            std::fs::rename(&partial, dir.join(REMEMBERED_FILE)).map_err(|e| e.to_string())
         });
         match saved {
             Ok(()) => {
-                let _ = app.emit(READY_EVENT, Ready { game_id: game, world_id: world, tiles: false });
+                let _ = app.emit(READY_EVENT, Ready { game_id: game, world_id: world, tiles: false, explored: false });
             }
             Err(e) => log::warn!("could not save what was seen in {world}: {e}"),
         }
@@ -122,7 +127,7 @@ pub fn save_host_pins(app: &AppHandle, game: &str, world: &str, pins: &[WorldPin
     let bytes = serde_json::to_vec(&PinFile { version: 1, pins }).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     std::fs::write(dir.join(HOST_PINS_FILE), bytes).map_err(|e| e.to_string())?;
-    let _ = app.emit(READY_EVENT, Ready { game_id: game.to_owned(), world_id: world.to_owned(), tiles: false });
+    let _ = app.emit(READY_EVENT, Ready { game_id: game.to_owned(), world_id: world.to_owned(), tiles: false, explored: false });
     Ok(())
 }
 
@@ -156,7 +161,7 @@ pub fn refresh_soon(app: &AppHandle, game: &str, world: &str) {
         REFRESHING.lock().unwrap().remove(&dir);
         match result {
             Ok(tiles) => {
-                let _ = app.emit(READY_EVENT, Ready { game_id: game, world_id: world, tiles });
+                let _ = app.emit(READY_EVENT, Ready { game_id: game, world_id: world, tiles, explored: true });
             }
             Err(e) => log::warn!("world map {world}: {e}"),
         }
@@ -186,7 +191,7 @@ async fn refresh(app: &AppHandle, dir: &Path) -> Result<bool, String> {
     let map = loop {
         match link.read_world_map(dir.to_string_lossy().into_owned(), needs_terrain).await {
             Ok(map) => break map,
-            Err(e) if tries + 1 >= READ_TRIES => return Err(e),
+            Err(e) if e != WORLD_MAP_NOT_READY || tries + 1 >= READ_TRIES => return Err(e),
             Err(_) => {
                 tries += 1;
                 tokio::time::sleep(READ_RETRY).await;

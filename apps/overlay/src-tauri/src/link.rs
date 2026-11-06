@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use game_maps_protocol::{
+    PlaceInfo,
     decode_line, encode_line, pipe_name, AgentMessage, AppMessage, Capabilities, CompanionOrderOption, Hotkey, HotkeyAction, LogLevel, TeleportTarget,
     GamePin, GroundPoint, PathInfo, RouteCheck, Vec3, WorldExport, WorldLayer, WorldMap, WorldSnapshot, PROTOCOL_VERSION,
 };
@@ -22,7 +23,7 @@ use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
 use tokio::sync::{mpsc, oneshot, Notify};
 
 use crate::analytics::{self, Feature, HookFailure};
-use crate::games::GameEntry;
+use crate::games::{self, GameEntry};
 use crate::injector::{self, InjectError};
 use crate::map_window;
 use crate::overlay;
@@ -191,6 +192,7 @@ pub struct AgentLink {
     route_checks: Pending<RouteCheck>,
     ground_probes: Pending<Vec<GroundPoint>>,
     companion_orders: Pending<Vec<CompanionOrderOption>>,
+    places: Pending<PlaceInfo>,
     companion_results: Pending<()>,
     next_request: AtomicU32,
 }
@@ -250,6 +252,7 @@ impl AgentLink {
             route_checks: Pending::default(),
             ground_probes: Pending::default(),
             companion_orders: Pending::default(),
+            places: Pending::default(),
             companion_results: Pending::default(),
             next_request: AtomicU32::new(1),
         });
@@ -444,6 +447,10 @@ impl AgentLink {
     }
 
     /// What `companion` can be told to do right now.
+    pub async fn place_info(&self, position: Vec3) -> Result<PlaceInfo, String> {
+        self.request(&self.places, PROBE_TIMEOUT, |request_id| AppMessage::PlaceInfo { request_id, position }).await
+    }
+
     pub async fn companion_orders(&self, companion: String) -> Result<Vec<CompanionOrderOption>, String> {
         self.request(&self.companion_orders, PROBE_TIMEOUT, |request_id| AppMessage::CompanionOrders { request_id, companion }).await
     }
@@ -502,6 +509,8 @@ impl AgentLink {
     async fn run(self: Arc<Self>, app: AppHandle, config: LinkConfig) {
         // Failed attempts in a row.
         let mut failures: u32 = 0;
+        // The anti-cheat found in the running game's folder.
+        let mut protection: Option<(u32, Option<&'static str>)> = None;
         loop {
             let names: Vec<&str> = config.games.iter().map(|g| g.process.as_str()).collect();
             let found = injector::find_first(&names).map(|(index, pid)| (&config.games[index], pid));
@@ -515,6 +524,17 @@ impl AgentLink {
                 continue;
             };
             overlay::set_game_window(&app, pid);
+            if protection.is_none_or(|(p, _)| p != pid) {
+                let found = injector::exe_path(pid).and_then(|exe| games::anti_cheat_in(exe.parent()?));
+                protection = Some((pid, found));
+            }
+            if let Some((_, Some(product))) = protection {
+                log::warn!("{}: {product} found, not connecting", game.id);
+                let message = format!("{product} found, so Game Maps won't connect to this game. The map still works by itself.");
+                self.set_status(&app, LinkStatus { state: LinkState::Ready, game_id: Some(game.id.clone()), pid: Some(pid), capabilities: None, message: Some(message) });
+                self.idle(GAME_SCAN_INTERVAL).await;
+                continue;
+            }
             let status = |state: LinkState, message: Option<String>| LinkStatus {
                 state,
                 game_id: Some(game.id.clone()),
@@ -751,6 +771,7 @@ impl AgentLink {
         self.route_checks.fail_all("connection closed");
         self.ground_probes.fail_all("connection closed");
         self.companion_orders.fail_all("connection closed");
+        self.places.fail_all("connection closed");
         self.companion_results.fail_all("connection closed");
         let _ = app.emit("world-snapshot", WorldSnapshot::default());
         if end == SessionEnd::AgentReplaced {
@@ -851,6 +872,7 @@ impl AgentLink {
             AgentMessage::PathResult { request_id, path, error } => self.paths.resolve(request_id, path, error, "no route"),
             AgentMessage::RouteCheckResult { request_id, check, error } => self.route_checks.resolve(request_id, check, error, "route check failed"),
             AgentMessage::GroundProbeResult { request_id, points, error } => self.ground_probes.resolve(request_id, points, error, "ground probe failed"),
+            AgentMessage::PlaceInfoResult { request_id, place, error } => self.places.resolve(request_id, place, error, "nothing known about this place"),
             AgentMessage::CompanionOrdersResult { request_id, orders, error } => self.companion_orders.resolve(request_id, orders, error, "no orders"),
             AgentMessage::CompanionOrderResult { request_id, ok, error } => self.companion_results.resolve(request_id, ok.then_some(()), error, "order failed"),
             AgentMessage::ExportResult { request_id, export, error } => self.exports.resolve(request_id, export, error, "export failed"),

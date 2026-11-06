@@ -268,7 +268,7 @@ function GameRow({
       </div>
 
       {/* Problems stay visible while collapsed. */}
-      {(checks?.needs_admin || checks?.exclusive_fullscreen) && (
+      {(checks?.needs_admin || checks?.exclusive_fullscreen || checks?.map_outdated) && (
         <div className="px-3.5 pb-2.5">
           {checks.needs_admin && (
             <Warning>
@@ -276,6 +276,7 @@ function GameRow({
               right-click it and choose <b>Run as administrator</b>.
             </Warning>
           )}
+          {checks.map_outdated && <Warning>{game.name} has updated since its map was made, so some pins may be out of place until the map catches up.</Warning>}
           {checks.exclusive_fullscreen && (
             <Warning>
               {game.name} is in exclusive fullscreen, which hides the map. In the game's display settings, set the display

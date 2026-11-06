@@ -200,10 +200,10 @@ impl Scanner {
         })();
         Some(Self {
             instance: rt.field(man, "s_instance").ok().filter(|f| f.is_static)?,
-            sectors: rt.field(man, "m_objectsBySector").ok()?,
+            sectors: rt.field_of(man, "m_objectsBySector", "[]").ok()?,
             portals: rt.method(man, "GetPortals", 0).ok(),
-            prefab: rt.field(zdo, "m_prefab").ok()?,
-            position: rt.field(zdo, "m_position").ok()?,
+            prefab: rt.field_of(zdo, "m_prefab", "Int32").ok()?,
+            position: rt.field_of(zdo, "m_position", "Vector3").ok()?,
             uid: rt.field(zdo, "m_uid").ok()?,
             object_id: rt.class("", "ZDOID").ok().and_then(|c| rt.field(c, "<ID>k__BackingField").ok())?,
             get_string: rt.method_with_params(zdo, "GetString", &["System.Int32", "System.String"]).ok(),
