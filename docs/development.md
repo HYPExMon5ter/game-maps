@@ -35,6 +35,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 python -I -m unittest discover -s tools/pins
 python -I -m unittest discover -s tools/mappack
+.venv/Scripts/python -I -m unittest discover -s tools/mapgen   # see "Map data" for the venv
 cd apps/overlay && bun run lint && bun run build && bun run test
 ```
 
