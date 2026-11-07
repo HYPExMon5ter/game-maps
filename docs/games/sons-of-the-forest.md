@@ -11,7 +11,17 @@ Unity 2022.2, IL2CPP (metadata v29), no anti-cheat. Steam app 1326470.
 - Validated against two independent reference points (game position → terrain
   height): errors under 0.1 m.
 - Splat maps (3 × RGBA, 2048²) live in `resources.assets`. There are 12 terrain
-  layers (sand, dirt, rock, grass, forest ground, …).
+  layers (sand, dirt, rock, grass, forest ground, …), some only named `Layer8` and so
+  on, so colors go by each layer's diffuse texture name. UnityPy returns images top row
+  first while the heightmap's row 0 is min z, so splat maps are flipped to match.
+- The ocean surface is at y = 14 (`Atmosphere/CrestOcean` in `level7`), not 0. Ground
+  below that only counts as sea if it connects to the map's edge.
+- Rivers and lakes are meshes under `Streams` and `Lakes` in `Site02StreamsAndLakes`
+  (build scene 13, `level13`). Their terrain is carved, so they don't show in the
+  heightmap. Materials containing `TerrainBlend` are moss on the banks, not water.
+- Validated against data the render doesn't use: all 80 `WorldUnderWater` spawns are in
+  water, 99% of the 2,181 `WaterStimuli_*` markers are within 4 m of it, and there's
+  next to no ocean inside the `SonsOceanOccluder` boxes.
 - Icons (white glyphs on transparent backgrounds, trimmed to the glyph): the GPS icon
   set (`items_assets_gpslocatoritem_*.bundle`), the cave icon (`uishared_assets_all_*`),
   and every inventory item icon (`<Item>Icon` textures in `resources.assets`, named by

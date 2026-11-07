@@ -70,3 +70,7 @@ jobs:
       - run: |
           python3 -I -m unittest discover -s tools/pins
           python3 -I -m unittest discover -s tools/mappack
+      - run: |
+          python3 -m venv .venv
+          .venv/bin/pip install -r tools/mapgen/requirements.txt
+          .venv/bin/python -I -m unittest discover -s tools/mapgen

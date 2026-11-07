@@ -1,7 +1,8 @@
 """Render the Sons of the Forest surface map from the game's own terrain data.
 
-Reads the island terrain (heightmap + splat maps) straight from the installed game,
-renders a shaded-relief map, and cuts it into a MapLibre raster tile pyramid.
+Reads the island terrain (heightmap + splat maps) and the rivers and lakes straight from
+the installed game, renders a shaded-relief map, and cuts it into a MapLibre raster tile
+pyramid.
 Re-run after game updates; nothing is hand-edited.
 
 Usage:
@@ -21,11 +22,14 @@ import sys
 import numpy as np
 import UnityPy
 from PIL import Image, ImageFilter
+from scipy import ndimage
 
 # Shared tile writer (`python -I` leaves the script's directory off the import path).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tiles  # noqa: E402
 from icons import trim_icon, write_icon_index  # noqa: E402
+from topdown import TopDownRenderer  # noqa: E402
+from unity_world import Assets, Hierarchy, collect_renderers, read_material, read_mesh  # noqa: E402
 
 # The map image occupies Web Mercator tile (MAP_TILE_X, MAP_TILE_Y) at zoom MAP_TILE_ZOOM;
 # tiles are written in that absolute XYZ scheme. Must match `projection` in game.json.
@@ -35,28 +39,38 @@ MAP_TILE_ZOOM = 3
 MAP_TILE_X = 3
 MAP_TILE_Y = 3
 UNITY_MAX_HEIGHT = 32766.0
-SEA_LEVEL = 0.0  # world Y of the ocean surface
+SEA_LEVEL = 14.0  # world Y of the ocean surface: "Atmosphere/CrestOcean" in level7
 # The island terrain object sits at (-2000, -19, -2000) in level7 ("Site02Terrain Tess").
 TERRAIN_ORIGIN = (-2000.0, -19.0, -2000.0)
+# Rivers and lakes are meshes in "Site02StreamsAndLakes" (build scene 13), with their
+# assets spread over these files. Meshes with a TerrainBlend material are moss on the
+# banks, not water.
+WATER_FILES = ("level13", "sharedassets13.assets", "sharedassets11.assets", "sharedassets10.assets", "sharedassets7.assets")
+WATER_SCENE = "level13"
+WATER_ROOTS = ("Streams", "Lakes")
+NOT_WATER_MATERIAL = "TerrainBlend"
+WATER_HEIGHT_RANGE = (0.0, 800.0)
 
-# Terrain layer name fragment -> map color (sRGB). Curated rather than the textures'
-# average colors, which are too muddy to read at map scale.
+# Terrain layer texture name fragment -> map color (sRGB), first match wins. Curated
+# rather than the textures' average colors, which are too muddy to read at map scale.
 LAYER_COLORS = [
     ("Sand", (214, 200, 160)),
     ("Dirt", (150, 128, 96)),
+    ("MuddyPath", (120, 104, 80)),
+    ("SharpRocks", (128, 124, 118)),
+    ("BedRock", (120, 116, 110)),
     ("Rock", (138, 134, 128)),
+    ("GolfGrass", (120, 170, 80)),
     ("Grass", (122, 150, 82)),
-    ("ForestGround", (72, 102, 58)),
+    ("Moss", (72, 102, 58)),
     ("Roots", (82, 104, 62)),
     ("RiverBed", (150, 140, 118)),
-    ("SharpRocks", (128, 124, 118)),
-    ("GolfGrass", (120, 170, 80)),
-    ("BedRock", (120, 116, 110)),
 ]
 DEFAULT_LAYER_COLOR = (110, 130, 85)
 SNOW_COLOR = np.array([244, 246, 250], dtype=np.float32)
 DEEP_WATER = np.array([46, 92, 128], dtype=np.float32)
 SHALLOW_WATER = np.array([110, 170, 190], dtype=np.float32)
+INLAND_WATER = np.array([72, 138, 172], dtype=np.float32)
 
 
 def load_terrain(data_dir: str):
@@ -97,12 +111,15 @@ def load_terrain(data_dir: str):
         tex = lookup(ref)
         if tex is None:
             raise SystemExit(f"cannot resolve splat texture {ref}")
-        img = np.asarray(tex.read().image.convert("RGBA"), dtype=np.float32) / 255.0
+        # Images come out top row first; the heightmap's row 0 is min z.
+        img = np.asarray(tex.read().image.convert("RGBA"), dtype=np.float32)[::-1] / 255.0
         weights.extend(img[..., c] for c in range(4))
     layer_names = []
     for ref in splat["m_TerrainLayers"]:
         layer = lookup(ref)
-        layer_names.append(layer.read_typetree()["m_Name"] if layer is not None else "")
+        # Named after the texture: some layers are only called "Layer8" and so on.
+        diffuse = lookup(layer.read_typetree()["m_DiffuseTexture"]) if layer is not None else None
+        layer_names.append(diffuse.peek_name() if diffuse is not None else "")
 
     return {
         "heights": world_h,  # [z_row, x_col], row 0 = min z
@@ -110,6 +127,40 @@ def load_terrain(data_dir: str):
         "weights": weights[: len(layer_names)],
         "layers": layer_names,
     }
+
+
+def load_inland_water(data_dir: str, n: int, cell: float) -> np.ndarray:
+    """Surface height of the rivers and lakes at each terrain sample, NaN where there are none."""
+    assets = Assets()
+    assets.load(*[os.path.join(data_dir, f) for f in WATER_FILES])
+    scene = Hierarchy(assets, WATER_SCENE)
+    gpu = TopDownRenderer(WATER_HEIGHT_RANGE)
+    meshes = 0
+    for root in scene.roots():
+        if scene.nodes[root].name not in WATER_ROOTS:
+            continue
+        for rd in collect_renderers(scene, root):
+            if not rd.materials or rd.materials[0] is None or NOT_WATER_MATERIAL in read_material(assets, rd.materials[0]).name:
+                continue
+            mesh = read_mesh(assets, rd.mesh)
+            pos = (mesh.positions.astype(np.float64) @ rd.matrix[:3, :3].T + rd.matrix[:3, 3]).astype(np.float32)
+            for triangles in mesh.submeshes:
+                gpu.add(pos, None, triangles, -1, (1.0, 1.0, 1.0, 1.0), None)
+            meshes += 1
+    if not meshes:
+        raise SystemExit(f"no rivers or lakes found in {WATER_SCENE}")
+    gpu.build()
+    # One pixel per terrain sample, centered on it.
+    x0, z0 = TERRAIN_ORIGIN[0] - cell / 2, TERRAIN_ORIGIN[2] - cell / 2
+    _, height = gpu.render(x0, z0, n * cell, n * cell, n, n)
+    return height[::-1]  # the renderer's row 0 is max z
+
+
+def ocean_mask(h: np.ndarray) -> np.ndarray:
+    """Ground below sea level that the ocean reaches, leaving out dry inland hollows."""
+    regions, _ = ndimage.label(h < SEA_LEVEL)
+    edges = np.concatenate((regions[0], regions[-1], regions[:, 0], regions[:, -1]))
+    return np.isin(regions, np.unique(edges[edges > 0]))
 
 
 def layer_color(name: str):
@@ -158,10 +209,15 @@ def render(t, size: int) -> Image.Image:
     shade = hillshade(h, t["cell"])
     lit = base * (0.45 + 0.75 * shade[..., None])
 
+    # Rivers and lakes wherever their surface is above the ground.
+    inland = np.clip((np.nan_to_num(t["water"], nan=-1e3) - h + 0.3) / 0.6, 0, 1)[..., None]
+    lit = lit * (1 - inland) + INLAND_WATER * inland
+
     # Ocean with a depth gradient and a soft shoreline.
-    depth = np.clip((SEA_LEVEL - h) / 40.0, 0, 1)[..., None]
+    depth = np.clip((SEA_LEVEL - h) / 30.0, 0, 1)[..., None]
     water = SHALLOW_WATER * (1 - depth) + DEEP_WATER * depth
-    wet = np.clip((SEA_LEVEL + 0.4 - h) / 0.8, 0, 1)[..., None]
+    ocean = ndimage.binary_dilation(ocean_mask(h), iterations=2)
+    wet = (np.clip((SEA_LEVEL + 0.4 - h) / 0.8, 0, 1) * ocean)[..., None]
     # Fade open water into the deep-water background color toward the image edges,
     # so the map blends into the viewer's background instead of ending in a hard square.
     idx = np.arange(n, dtype=np.float32)
@@ -173,7 +229,7 @@ def render(t, size: int) -> Image.Image:
     # Thin contours every 25 m, emphasized every 100 m, on land.
     fine = contour_lines(h, 25.0)
     major = contour_lines(h, 100.0)
-    land = (h > SEA_LEVEL)[..., None]
+    land = wet + inland < 0.5
     rgb = np.where(land & fine[..., None], rgb * 0.93, rgb)
     rgb = np.where(land & major[..., None], rgb * 0.82, rgb)
 
@@ -241,6 +297,7 @@ def main():
     if args.icons_only:
         return
     t = load_terrain(data_dir)
+    t["water"] = load_inland_water(data_dir, t["heights"].shape[0], t["cell"])
     img = render(t, args.size)
     os.makedirs(args.out, exist_ok=True)
     img.resize((1024, 1024), Image.LANCZOS).save(os.path.join(args.out, "preview.png"))
