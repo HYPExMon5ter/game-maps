@@ -92,6 +92,11 @@ python -I tools/pins/sunkenland.py --out games/sunkenland world.json
 
 Add `--preview-only` for a quick 2048 px `preview.png`.
 
+### Valheim
+
+Nothing to generate or publish: worlds come from a seed, so each map and its pins are read
+from the running game. See [Valheim](games/valheim.md#world).
+
 ## Adding a game
 
 1. Create `games/<id>/game.json`. Copy the Sons of the Forest one and adjust:
@@ -106,3 +111,6 @@ Add `--preview-only` for a quick 2048 px `preview.png`.
    register it in `provider::detect`. IL2CPP and Mono games use the same runtime API.
    Without one, the game works as a static map.
 5. Publish its map pack and release the app. The launcher lists the game automatically.
+6. Add its page to `docs/supported-games/`, with screenshots in `docs/images/<id>/`, and
+   add it to [Supported games](../README.md#supported-games) and the GitHub topics. Don't
+   put the page under `games/<id>/`: map packs include what's in there.

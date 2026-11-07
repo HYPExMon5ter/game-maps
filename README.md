@@ -16,6 +16,8 @@ other players, and teleport. Press a key and it's there.**
 
 <sub>Real gameplay in Sons of the Forest. Click to watch the 44-second showcase on YouTube.</sub>
 
+**See it in your game:** [Sons of the Forest](docs/supported-games/sons-of-the-forest.md) · [Sunkenland](docs/supported-games/sunkenland.md) · [Valheim](docs/supported-games/valheim.md)
+
 </div>
 
 ## Features
@@ -53,7 +55,9 @@ other players, and teleport. Press a key and it's there.**
 - **Your pins on the game's own map** in Valheim and Sunkenland, so friends without Game
   Maps see them too.
 - **Your bag, marked**: when you die in Sons of the Forest, a pin goes where your gear
-  dropped, and it's gone once you pick it up.
+  dropped, and it's gone once you pick it up. In Valheim, it marks your grave.
+- **Nearest biome** in Valheim: click a biome to track the closest one, and hover the map
+  to see what's under the cursor.
 - **Collectibles are marked found** as you walk up to them.
 - **Custom pins** with your own names, colors and icons. Right-click any pin to track,
   edit or delete it.
@@ -70,7 +74,8 @@ other players, and teleport. Press a key and it's there.**
   spoiled. Hiding land and hiding pins are separate options, and the reveal distance is
   yours to set.
 - **Progress**: how much of each category you've found, and what's left, nearest first.
-  Sons of the Forest also has a checklist of keycards, key gear and artifact pieces.
+  Sons of the Forest also has a checklist of keycards, key gear and artifact pieces, and
+  Valheim one of its bosses.
 - **Put it where you want it**: drag and resize the map and mini-map over your game. Each
   game keeps its own mini-map layout.
 - **Map on a second monitor**: keep the full map open on another screen while you play.
@@ -84,47 +89,58 @@ other players, and teleport. Press a key and it's there.**
 
 <table>
 <tr>
-<td width="50%"><img src="docs/images/map.png" alt="The whole Sons of the Forest map over the game"><br><sub>The whole island, every location pinned</sub></td>
-<td width="50%"><img src="docs/images/fog-of-war.png" alt="Clouds clearing along the player's path"><br><sub>Fog of war: clouds clear where you've been</sub></td>
+<td width="50%"><img src="docs/images/sons-of-the-forest/map.png" alt="The whole Sons of the Forest map over the game"><br><sub>The whole island, every location pinned</sub></td>
+<td width="50%"><img src="docs/images/sons-of-the-forest/fog-of-war.png" alt="Clouds clearing where the player has been"><br><sub>Fog of war: clouds clear where you've been</sub></td>
 </tr>
 <tr>
-<td><img src="docs/images/hud.png" alt="An in-world marker, mini-map and walking route over the game"><br><sub>A marker in the world, and the route on your mini-map</sub></td>
-<td><img src="docs/images/pin-details.png" alt="The Rebreather's details with Tracking, Teleport and Mark found"><br><sub>Every pin says what's there; track it, teleport to it or mark it found</sub></td>
+<td><img src="docs/images/sons-of-the-forest/hud.png" alt="An in-world marker, mini-map and walking route over the game"><br><sub>A marker in the world, and the route on your mini-map</sub></td>
+<td><img src="docs/images/sons-of-the-forest/pin-details.png" alt="The Rebreather's details with Tracking, Teleport and Mark found"><br><sub>Every pin says what's there; track it, teleport to it or mark it found</sub></td>
 </tr>
 <tr>
-<td><img src="docs/images/kelvin.png" alt="Kelvin's panel with his stats and orders"><br><sub>Kelvin's condition and orders, right on the map</sub></td>
-<td><img src="docs/images/bag.png" alt="The right-click menu on the Your bag pin"><br><sub>Your bag marked after you die; right-click any pin</sub></td>
+<td><img src="docs/images/sons-of-the-forest/kelvin.png" alt="Kelvin's panel with his stats and orders"><br><sub>Kelvin's condition and orders, right on the map</sub></td>
+<td><img src="docs/images/sons-of-the-forest/bag.png" alt="The right-click menu on the Your bag pin"><br><sub>Your bag marked after you die; right-click any pin</sub></td>
 </tr>
 <tr>
 <td><img src="docs/images/edit-mode.png" alt="Moving and resizing the map and mini-map"><br><sub>Move and resize the map and mini-map</sub></td>
-<td><img src="docs/images/sunkenland.png" alt="The Sunkenland map showing only iron ore"><br><sub>Sunkenland, filtered down to iron ore</sub></td>
+<td><img src="docs/images/sunkenland/map.png" alt="The Sunkenland map showing only iron ore"><br><sub>Sunkenland, filtered down to iron ore</sub></td>
 </tr>
 <tr>
-<td><img src="docs/images/valheim.png" alt="A Valheim world map showing only raspberries"><br><sub>Valheim: each world's map comes from the game itself</sub></td>
-<td><img src="docs/images/sunkenland-companion.png" alt="Freya's card in Sunkenland with her health and orders"><br><sub>A Sunkenland companion's condition and orders</sub></td>
+<td><img src="docs/images/valheim/bosses.png" alt="A Valheim world map showing only bosses"><br><sub>Valheim: each world's map comes from the game itself</sub></td>
+<td><img src="docs/images/sunkenland/companion.png" alt="Freya's card in Sunkenland with her health and orders"><br><sub>A Sunkenland companion's condition and orders</sub></td>
 </tr>
 </table>
 
 ## Supported games
 
-| Game | Map | Live location | Teleport | Other players | Nearby creatures | Separate worlds |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|
-| Sons of the Forest | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Sunkenland | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Valheim | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+Each game has its own page with everything it can do, and screenshots.
 
-Every Valheim world is different, so its map is drawn from the game the first time you
-load it, with no download. If you host, it has every location in the world. If you join
-someone else's world, the game only shares bosses, traders and the like, unless the host runs
-Game Maps too. Ore, plants, ships and carts are remembered as you pass them, and you can
-filter each resource. Valheim also has boss progress, biome tools, a wind arrow on the
-mini-map, and options for silver without the wishbone and teleporting with ores.
+<table>
+<tr>
+<td width="33%" align="center"><a href="docs/supported-games/sons-of-the-forest.md"><img src="docs/images/sons-of-the-forest/map.png" alt="Sons of the Forest in Game Maps"></a><br><b><a href="docs/supported-games/sons-of-the-forest.md">Sons of the Forest</a></b><br><sub>Caves and bunkers, walking routes, Kelvin's orders</sub></td>
+<td width="33%" align="center"><a href="docs/supported-games/sunkenland.md"><img src="docs/images/sunkenland/map.png" alt="Sunkenland in Game Maps"></a><br><b><a href="docs/supported-games/sunkenland.md">Sunkenland</a></b><br><sub>Island details, crew orders, shared map marks</sub></td>
+<td width="33%" align="center"><a href="docs/supported-games/valheim.md"><img src="docs/images/valheim/map.png" alt="Valheim in Game Maps"></a><br><b><a href="docs/supported-games/valheim.md">Valheim</a></b><br><sub>A map of your own world, boss progress, nearest biome</sub></td>
+</tr>
+</table>
 
-Sunkenland adds your companions' stats and orders, what's on each island, your pins as
-marks on the game's map, and a wind arrow on the mini-map. Marks are shared with everyone
-in the world, the game limits how many there can be, and their names are cut to 8
-characters. Sons of the Forest has no map marks a player can place, so pins stay in Game
-Maps there.
+Every game has the map, search and filters, live location, teleport, other players, nearby
+creatures, tracking, the mini-map, fog of war, progress, and separate data for each world.
+What's different:
+
+| | Sons of the Forest | Sunkenland | Valheim |
+|---|:---:|:---:|:---:|
+| Map comes from | Download | Download | Your world, as you load it |
+| Underground map | ✓ | | |
+| Walking routes through caves | ✓ | | |
+| Companion stats and orders | ✓ | ✓ | |
+| Your bag or grave marked | ✓ | | ✓ |
+| Progress checklist | Key items | | Bosses |
+| Details for each location | | ✓ | |
+| Nearest biome | | | ✓ |
+| Resources remembered as you pass | | | ✓ |
+| Your pins on the game's own map | | ✓ | ✓ |
+| Your pings on the game's own map | | | ✓ |
+| Wind arrow on the mini-map | | ✓ | ✓ |
+| Time and weather on the mini-map | ✓ | | ✓ |
 
 Games with anti-cheat aren't supported. If Game Maps finds Easy Anti-Cheat or BattlEye in
 a game's folder, it won't connect to that game, since doing so could get you banned.
@@ -238,7 +254,7 @@ In Sunkenland, click a companion you've recruited for their health, what they're
 and the same orders as in the game: follow, stand by, rest, the jobs they can do, charge
 enemies (they need a weapon) and hold fire. Right-click the map to send them there.
 
-<img src="docs/images/sunkenland-island.png" alt="A Sunkenland location's details" width="200" align="right">
+<img src="docs/images/sunkenland/island.png" alt="A Sunkenland location's details" width="200" align="right">
 
 ### Islands in Sunkenland
 
@@ -250,8 +266,9 @@ what the game lists there. Key finds are crossed off as they're taken.
 ### Your bag
 
 When you die, a pin marks the spot. It moves to your bag once the game drops it, so
-tracking it leads you to your gear, and it goes away when you pick the bag up. Turn this
-off with **Mark where you die** under Settings → Map content.
+tracking it leads you to your gear, and it goes away when you pick the bag up. In Valheim
+the pin is your grave. Turn this off with **Mark where you die** under Settings → Map
+content.
 
 ### Worlds
 
@@ -268,7 +285,7 @@ save.
 The **Progress** tab shows the share of this world's pins you've found and a bar for each
 category. Open a category to see what's left, nearest first, and click a row to go to it.
 In Sons of the Forest, a checklist above them follows the keycards, key gear and artifact
-pieces.
+pieces. In Valheim, it follows the bosses you've beaten.
 
 ### Fog of war
 

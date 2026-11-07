@@ -21,7 +21,7 @@ yet), **Deferred** (wanted, waiting on something).
 | Completion tracker | Built | Progress per collectible category with what's left, per world. |
 | Map on a second monitor | Built | An always-on, interactive map window on a chosen monitor that follows you live while you play on the main screen. |
 | Path history | Built | A trail of where you walked since the app started, on the map and mini-map. |
-| Death marker | Built | A pin where you last died, to recover your gear. In Sons of the Forest it moves to your dropped bag, and goes when you pick that up. Death detection is per game (Sons of the Forest so far); the pin is shared code. |
+| Death marker | Built | A pin where you last died, to recover your gear. In Sons of the Forest it moves to your dropped bag, and goes when you pick that up. In Valheim it marks your grave. Death detection is per game (Sons of the Forest and Valheim so far); the pin is shared code. |
 | Pin menu | Built | Right-click a pin, on the map or in a list, to track, edit or delete it, or mark it found. |
 | Distinct badges | Built | Every category has its own shape, color and symbol. Symbols ship with the app; a game's `iconAliases` replaces icons from its map pack that don't read on a badge. |
 | Nearest unfound | Built | A key that tracks the closest thing not found yet, in the categories shown on the map. |
