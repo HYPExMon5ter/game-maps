@@ -23,6 +23,9 @@ pub fn classify(name: &str) -> Option<(&'static str, &'static str)> {
         "BARREL_PILE" => ("salvage", "Barrels"),
         "BUOYBALL_PILE" => ("salvage", "Buoy balls"),
         "DRIFTWOOD_PILE" => ("salvage", "Driftwood"),
+        "CLOTH" => ("salvage", "Cloth"),
+        "SCRAP_PLANK" => ("salvage", "Scrap planks"),
+        "SCRAP_CORRUGATED" => ("salvage", "Corrugated scrap"),
 
         "POTATO_PLANT" => ("food", "Potato"),
         "YUCCA" => ("food", "Yucca"),
@@ -122,11 +125,13 @@ mod tests {
         assert_eq!(classify("Shelter04(Clone)"), Some(("shelter", "Shelter")));
         assert_eq!(classify("HIDESPOT_SNAKE(Clone)"), Some(("den", "Snake")));
         assert_eq!(classify("STRUCTURE_SMALL(Clone)"), Some(("build", "Building")));
+        assert_eq!(classify("CLOTH(Clone)"), Some(("salvage", "Cloth")));
+        assert_eq!(classify("VEHICLE_LIFERAFT(Clone)"), Some(("boat", "Life raft")));
     }
 
     #[test]
     fn leaves_out_scenery_and_loose_items() {
-        for name in ["PALM_1(Clone)", "SHORELINE_ROCK_2(Clone)", "STICK(Clone)", "YUCCA_CUTTING(Clone)", "CONTAINER_SHELF(Clone)", "CRAB_SPAWNER(Clone)", "Shelter", "SHIPPING_CONTAINER_DOOR"] {
+        for name in ["PALM_1(Clone)", "SHORELINE_ROCK_2(Clone)", "STICK(Clone)", "ROCK(Clone)", "COCONUT_ORANGE(Clone)", "SHIPPING_CONTAINER_PANEL_STATIC(Clone)", "YUCCA_CUTTING(Clone)", "CONTAINER_SHELF(Clone)", "CRAB_SPAWNER(Clone)", "Shelter", "SHIPPING_CONTAINER_DOOR"] {
             assert_eq!(classify(name), None, "{name}");
         }
     }

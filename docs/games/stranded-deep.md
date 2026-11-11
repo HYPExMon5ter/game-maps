@@ -20,8 +20,13 @@ zone's heights are applied when the world loads, visited or not. The agent reads
 with `TerrainData.GetHeights` (about 10 ms for the whole world, once) and
 `provider/stranded_deep/terrain.rs` draws 4096 pixels per side from them, with hillshade:
 sand at the shore, then grass, forest and bare rock on cliffs and rocky islands, and
-shallow water lighter over reefs. `biomes.bin` has land, shallows (to 6 m deep), open sea
-(to 60 m) and deep sea.
+shallow water lighter over reefs. Where there's no floor, the sea darkens with distance
+from the nearest island's drop-off, over a soft swell, so it reads as ocean rather than
+empty map. `biomes.bin` has land, shallows (to 6 m deep), open sea (to 60 m) and deep sea.
+
+The zones are laid out and given their biomes during the opening cutscene, after the world
+exists: the agent waits until some zone has an island biome before it reads anything, or
+the terrain would be drawn where the zones were before they moved.
 
 The sea is at y = 0. `StrandedWorld.GetHeight` is the ground anywhere, loaded or not.
 
@@ -55,7 +60,13 @@ loaded (`Zone.Loaded`). Everything saved in a zone is a child of its `SaveContai
 after its prefab (`SHIPWRECK_3A(Clone)`). `provider/stranded_deep/scan.rs` reads 40
 children every 100 ms, so a zone of a few hundred objects takes a second or two at about
 60–170 µs a step, and each loaded zone again every 20 seconds. `objects.rs` sorts the
-prefab names; things of a kind close together are one pin. The full list of prefab names is
+prefab names; things of a kind close together are one pin.
+
+What's spawned or built during play (the life raft, new rafts and buildings, things that
+drift) goes into a zone of its own, `StrandedWorld._nmlZone`, until its island's zone is next
+saved, and anything out at sea stays there. The scanner reads that zone too, as zone 49.
+
+The full list of prefab names is
 in `resources.assets`:
 
 ```sh

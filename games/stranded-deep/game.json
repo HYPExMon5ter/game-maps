@@ -20,7 +20,7 @@
       "layers": [
         "surface"
       ],
-      "background": "#0b2f4a",
+      "background": "#041324",
       "tiles": {
         "url": "tiles/{z}/{x}/{y}.jpg",
         "tileSize": 256,
@@ -112,7 +112,7 @@
       "color": "#90a4ae",
       "icon": "builtin:wrench",
       "shape": "diamond",
-      "visible": false,
+      "visible": true,
       "remembered": true
     },
     {
@@ -121,7 +121,7 @@
       "name": "Food Plants",
       "color": "#8bc34a",
       "icon": "builtin:food",
-      "visible": false,
+      "visible": true,
       "remembered": true
     },
     {
@@ -130,7 +130,7 @@
       "name": "Medicinal Plants",
       "color": "#26a69a",
       "icon": "builtin:leaf",
-      "visible": false,
+      "visible": true,
       "remembered": true
     },
     {
@@ -139,7 +139,7 @@
       "name": "Clay & Stone",
       "color": "#bcaaa4",
       "icon": "builtin:pickaxe",
-      "visible": false,
+      "visible": true,
       "remembered": true
     },
     {
@@ -149,7 +149,7 @@
       "color": "#c2185b",
       "icon": "builtin:hazard",
       "shape": "diamond",
-      "visible": false,
+      "visible": true,
       "remembered": true
     },
     {

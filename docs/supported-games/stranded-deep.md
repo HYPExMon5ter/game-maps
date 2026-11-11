@@ -29,7 +29,8 @@ and the carrier marked. Wrecks, crates and plants are remembered as you find the
 Every Stranded Deep world is placed from its own seed, so no download could have yours.
 Game Maps draws the map from the game the first time you load a world, and keeps a separate
 one for each save slot and seed. Each island's sand, grass and rock comes from its terrain,
-and the sea gets lighter over reefs and shallows.
+and the sea gets lighter over reefs and shallows. Out between the islands there's no sea
+floor, so the open ocean darkens the further it is from land.
 
 Every island is pinned with its name as the game gives it, along with the three boss
 arenas (Megalodon, Lusca the Great and the Great Abaia) and the aircraft carrier. Islands
@@ -47,15 +48,16 @@ pass:
 - **Wrecks and ruins**: shipwrecks, the plane wreck, the sea fort and rowboats.
 - **Shelters**, which you can save at.
 - **Loot**: crates, lockers, consoles, shipping containers and supply crates.
-- **Salvage piles**: tyres, barrels, buoy balls and driftwood.
+- **Salvage**: piles of tyres, barrels, buoy balls and driftwood, and cloth and scrap lying
+  about.
 - **Food and medicine**: potatoes, yucca, kura fruit, quwawa, pipi, wavulavula and
   bananas; aloe vera, ajuga and coca.
 - **Clay and stone** to mine.
 - **Animal dens**: where giant crabs, boars, hogs and snakes come from.
 - **Yours**: your rafts, boats and gyrocopter, your buildings, beds and stills.
 
-Each has its own filter, and the big groups split by kind (only potatoes, only crates).
-Nature and salvage start hidden, so the map isn't crowded on the first look.
+This covers wrecks and crates on the sea floor as well as what's on land. Each has its own
+filter, and the big groups split by kind (only potatoes, only crates).
 
 ## The story
 

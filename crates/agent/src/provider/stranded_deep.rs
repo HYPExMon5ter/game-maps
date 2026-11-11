@@ -134,6 +134,9 @@ struct SessionMembers {
 struct WorldMembers {
     class: Class,
     zones: Field,
+    /// The zone that holds what's spawned or built during play until its island's zone
+    /// is next saved, and whatever's out at sea.
+    nml_zone: Option<Field>,
     height: Option<Method>,
 }
 
@@ -292,7 +295,7 @@ impl StrandedDeep {
             let token = rt.class("Funlabs", "MultiplayerTokens/Session").ok()?;
             Some(SessionMembers { current: rt.method(matchmaking, "get_CurrentSession", 0).ok()?, token: rt.method(extensions, "GetToken", 1).ok()?, id: rt.field_of(token, "SessionId", "String").ok()? })
         })();
-        let world_members = WorldMembers { class: world, zones: rt.field(world, "_zones").ok()?, height: rt.method_with_params(world, "GetHeight", &["UnityEngine.Vector3"]).ok() };
+        let world_members = WorldMembers { class: world, zones: rt.field(world, "_zones").ok()?, nml_zone: rt.field(world, "_nmlZone").ok(), height: rt.method_with_params(world, "GetHeight", &["UnityEngine.Vector3"]).ok() };
         let zone_fields = ZoneFields {
             terrain: rt.field(zone, "_terrain").ok()?,
             name: rt.field_of(zone, "ZoneName", "String").ok()?,
@@ -496,8 +499,9 @@ impl StrandedDeep {
                 center: to_proto(center),
             });
         }
-        // Zones sit at the origin until the world is laid out.
-        if zones.iter().filter(|z| z.center == Vec3::ZERO).count() > 1 {
+        // Zones sit at the origin until the world is laid out, and get their biomes after
+        // that (still during the opening cutscene).
+        if zones.iter().filter(|z| z.center == Vec3::ZERO).count() > 1 || !zones.iter().any(|z| (BIOME_ISLAND..=BIOME_ISLAND_ROCK).contains(&z.biome)) {
             return false;
         }
         self.zones = zones;
@@ -724,11 +728,13 @@ impl StrandedDeep {
         self.zone_objects(cx).into_iter().enumerate().filter(|(_, z)| field.get::<bool>(*z)).map(|(i, _)| i).collect()
     }
 
-    /// The zones the game has loaded, for the scanner.
-    unsafe fn loaded_zones(&mut self, cx: &Cx) -> Vec<LoadedZone> {
+    /// The zones the game has loaded, for the scanner, and the zone of what's new since
+    /// (read as zone `WORLD_ZONES`, as if it were always next to the player).
+    unsafe fn loaded_zones(&mut self, cx: &Cx, around: Vec3) -> Vec<LoadedZone> {
         let (Some(loaded), Some(container)) = (self.zone_fields.loaded, self.zone_fields.container) else { return Vec::new() };
         let centers: Vec<Vec3> = self.zones.iter().map(|z| z.center).collect();
-        self.zone_objects(cx)
+        let mut zones: Vec<LoadedZone> = self
+            .zone_objects(cx)
             .into_iter()
             .enumerate()
             .filter(|(_, z)| loaded.get::<bool>(*z))
@@ -736,7 +742,15 @@ impl StrandedDeep {
                 let container: *mut ManagedObject = container.get(z);
                 cx.unity.is_alive(container).then(|| LoadedZone { index, container, center: centers.get(index).copied().unwrap_or(Vec3::ZERO) })
             })
-            .collect()
+            .collect();
+        let nml = self.world_members.nml_zone.zip(self.world_object(cx)).map(|(f, world)| f.get::<*mut ManagedObject>(world)).filter(|z| cx.unity.is_alive(*z));
+        if let Some(nml) = nml {
+            let nml_container: *mut ManagedObject = container.get(nml);
+            if cx.unity.is_alive(nml_container) {
+                zones.push(LoadedZone { index: WORLD_ZONES, container: nml_container, center: around });
+            }
+        }
+        zones
     }
 
     /// Each zone's terrain.
@@ -911,7 +925,7 @@ impl Provider for StrandedDeep {
         }
         let transform = cx.unity.component_transform(cx.rt, player).ok()?;
         let around = to_proto(cx.unity.position(cx.rt, transform).ok()?);
-        let loaded = self.loaded_zones(cx);
+        let loaded = self.loaded_zones(cx, around);
         let scanner = self.scanner.as_mut()?;
         let pins = scanner.next(cx, &loaded, around);
         if let Some(found) = &pins {

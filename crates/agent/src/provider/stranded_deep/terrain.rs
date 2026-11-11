@@ -1,6 +1,7 @@
 //! Draws a Stranded Deep world from its zones' terrains. Every zone has a square terrain
 //! a few hundred meters across, its own heightmap applied whether or not it's been
-//! visited. Between them is open ocean with no floor at all, drawn as deep water.
+//! visited. Between them is open ocean with no floor at all, drawn darkening away from the
+//! islands.
 
 use crate::worldmap::Terrain;
 
@@ -11,6 +12,8 @@ pub const MAP_SIDE: f32 = 4800.0;
 pub const IMAGE_SIDE: usize = 4096;
 /// Cells per side of `biomes.bin`. Finer would make looking for the nearest one slow.
 const BIOME_SIDE: usize = 1024;
+/// Cells per side of the open ocean's shading, which changes slowly.
+const SEA_SIDE: usize = 1024;
 
 /// The sea's surface (Ceto's ocean sits at 0).
 pub const SEA_LEVEL: f32 = 0.0;
@@ -109,6 +112,10 @@ type Rgb = [f32; 3];
 const SHALLOW_WATER: Rgb = [0.42, 0.83, 0.82];
 const MID_WATER: Rgb = [0.13, 0.52, 0.68];
 const DEEP_WATER: Rgb = [0.043, 0.184, 0.29];
+/// The open ocean far from any island (`game.json`'s map background).
+const ABYSS: Rgb = [0.016, 0.075, 0.14];
+/// The sea darkens from `DEEP_WATER` at an island's drop-off to `ABYSS` over this distance.
+const ABYSS_METERS: f32 = 450.0;
 const SURF: Rgb = [0.72, 0.93, 0.9];
 const SAND: Rgb = [0.9, 0.84, 0.64];
 const GRASS: Rgb = [0.42, 0.6, 0.25];
@@ -129,6 +136,76 @@ fn water(depth: f32) -> Rgb {
     let color = if t < 0.3 { mix(SHALLOW_WATER, MID_WATER, t / 0.3) } else { mix(MID_WATER, DEEP_WATER, (t - 0.3) / 0.7) };
     // A band of surf where the sea meets the beach.
     mix(SURF, color, depth / 0.8)
+}
+
+/// The open ocean, `meters` from the nearest drop-off: lighter near islands, with slow
+/// swells so it doesn't read as an empty background. `swell` is -1 to 1.
+fn open_sea(meters: f32, swell: f32) -> Rgb {
+    let t = (meters / ABYSS_METERS).clamp(0.0, 1.0);
+    let t = t * t * (3.0 - 2.0 * t);
+    mix(DEEP_WATER, ABYSS, t).map(|v| v * (1.0 + swell * 0.09 * t))
+}
+
+/// Distance in cells from each cell to the nearest `true` one (8-way chamfer, rows of `side`).
+fn distance_to(mask: &[bool], side: usize) -> Vec<f32> {
+    const DIAGONAL: f32 = std::f32::consts::SQRT_2;
+    let mut d: Vec<f32> = mask.iter().map(|&m| if m { 0.0 } else { f32::MAX / 2.0 }).collect();
+    let neighbors = |d: &[f32], r: usize, c: usize, back: bool| -> f32 {
+        let mut best = d[r * side + c];
+        let (dr, dc): (isize, [isize; 3]) = if back { (1, [1, 0, -1]) } else { (-1, [-1, 0, 1]) };
+        let near = |rr: isize, cc: isize| (rr >= 0 && cc >= 0 && (rr as usize) < side && (cc as usize) < side).then(|| d[rr as usize * side + cc as usize]);
+        let (r, c) = (r as isize, c as isize);
+        for (i, step) in dc.iter().enumerate() {
+            if let Some(v) = near(r + dr, c + step) {
+                best = best.min(v + if i == 1 { 1.0 } else { DIAGONAL });
+            }
+        }
+        if let Some(v) = near(r, c - if back { -1 } else { 1 }) {
+            best = best.min(v + 1.0);
+        }
+        best
+    };
+    for r in 0..side {
+        for c in 0..side {
+            d[r * side + c] = neighbors(&d, r, c, false);
+        }
+    }
+    for r in (0..side).rev() {
+        for c in (0..side).rev() {
+            d[r * side + c] = neighbors(&d, r, c, true);
+        }
+    }
+    d
+}
+
+/// Smooth noise from -1 to 1 with features about `period` cells across.
+fn swell(c: f32, r: f32, period: f32) -> f32 {
+    let lattice = |x: i32, y: i32| -> f32 {
+        let mut h = (x as u32).wrapping_mul(0x9E37_79B1) ^ (y as u32).wrapping_mul(0x85EB_CA77);
+        h ^= h >> 15;
+        h = h.wrapping_mul(0x2C1B_3C6D);
+        h ^= h >> 12;
+        (h & 0xFFFF) as f32 / 32767.5 - 1.0
+    };
+    let (x, y) = (c / period, r / period);
+    let (x0, y0) = (x.floor(), y.floor());
+    let ease = |t: f32| t * t * (3.0 - 2.0 * t);
+    let (fx, fy) = (ease(x - x0), ease(y - y0));
+    let (x0, y0) = (x0 as i32, y0 as i32);
+    let top = lattice(x0, y0) * (1.0 - fx) + lattice(x0 + 1, y0) * fx;
+    let bottom = lattice(x0, y0 + 1) * (1.0 - fx) + lattice(x0 + 1, y0 + 1) * fx;
+    top * (1.0 - fy) + bottom * fy
+}
+
+/// Bilinear sample of a `side`-square grid at fractional cell `(c, r)`.
+fn sample(grid: &[f32], side: usize, c: f32, r: f32) -> f32 {
+    let (c, r) = (c.clamp(0.0, (side - 1) as f32), r.clamp(0.0, (side - 1) as f32));
+    let (c0, r0) = ((c as usize).min(side - 2), (r as usize).min(side - 2));
+    let (fc, fr) = (c - c0 as f32, r - r0 as f32);
+    let at = |r: usize, c: usize| grid[r * side + c];
+    let top = at(r0, c0) * (1.0 - fc) + at(r0, c0 + 1) * fc;
+    let bottom = at(r0 + 1, c0) * (1.0 - fc) + at(r0 + 1, c0 + 1) * fc;
+    top * (1.0 - fr) + bottom * fr
 }
 
 fn land(height: f32, slope: f32, rocky: bool) -> Rgb {
@@ -162,6 +239,23 @@ pub fn draw(zones: &[ZoneTerrain]) -> Terrain {
         }
     }
 
+    // The open ocean's shading, on a coarser grid sampled smoothly: how far each point is
+    // from an island's drop-off, and its swells.
+    let step = IMAGE_SIDE / SEA_SIDE;
+    let cell = MAP_SIDE / SEA_SIDE as f32;
+    let shelf: Vec<bool> = (0..SEA_SIDE * SEA_SIDE).map(|i| heights[(i / SEA_SIDE * step + step / 2) * IMAGE_SIDE + i % SEA_SIDE * step + step / 2] > SEA_LEVEL - OPEN_SEA_DEPTH).collect();
+    let meters_out: Vec<f32> = distance_to(&shelf, SEA_SIDE).into_iter().map(|d| (d * cell).min(ABYSS_METERS * 2.0)).collect();
+    let swells: Vec<f32> = (0..SEA_SIDE * SEA_SIDE)
+        .map(|i| {
+            let (c, r) = ((i % SEA_SIDE) as f32 * cell, (i / SEA_SIDE) as f32 * cell);
+            swell(c, r, 260.0) * 0.65 + swell(c + 1000.0, r, 90.0) * 0.35
+        })
+        .collect();
+    let sea_at = |c: usize, r: usize| -> Rgb {
+        let (gc, gr) = ((c as f32 + 0.5) / step as f32 - 0.5, (r as f32 + 0.5) / step as f32 - 0.5);
+        open_sea(sample(&meters_out, SEA_SIDE, gc, gr), sample(&swells, SEA_SIDE, gc, gr))
+    };
+
     let mut image = vec![0u8; IMAGE_SIDE * IMAGE_SIDE * 3];
     let height = |c: usize, r: usize| heights[r.min(IMAGE_SIDE - 1) * IMAGE_SIDE + c.min(IMAGE_SIDE - 1)];
     for row in 0..IMAGE_SIDE {
@@ -176,6 +270,8 @@ pub fn draw(zones: &[ZoneTerrain]) -> Terrain {
             let color = if h > SEA_LEVEL {
                 let rocky = zones.get(zone as usize).is_some_and(|z| z.rocky);
                 land(h - SEA_LEVEL, slope, rocky).map(|v| v * light)
+            } else if SEA_LEVEL - h >= OPEN_SEA_DEPTH {
+                sea_at(c, row)
             } else {
                 // The sea floor shows through shallow water only.
                 let depth = SEA_LEVEL - h;
@@ -222,6 +318,17 @@ mod tests {
     }
 
     #[test]
+    fn measures_distance_to_the_nearest_cell() {
+        let mut mask = vec![false; 25];
+        mask[12] = true;
+        let d = distance_to(&mask, 5);
+        assert_eq!(d[12], 0.0);
+        assert_eq!(d[13], 1.0);
+        assert_eq!(d[14], 2.0);
+        assert!((d[0] - 2.0 * std::f32::consts::SQRT_2).abs() < 1e-5);
+    }
+
+    #[test]
     fn biomes_go_by_depth() {
         assert_eq!(biome_of(3.0, true), LAND);
         assert_eq!(biome_of(-2.0, true), SHALLOWS);
@@ -240,6 +347,9 @@ mod tests {
         assert!(ne[1] > ne[2], "the north-east is land: {ne:?}");
         let sw = pixel(5, IMAGE_SIDE - 5);
         assert!(sw[2] > sw[0], "the south-west is sea: {sw:?}");
+        // The sea darkens away from the island.
+        let near = pixel(IMAGE_SIDE - 150, 150);
+        assert!(near[2] > sw[2] + 30, "near the island the sea is lighter: {near:?} against {sw:?}");
         // Biomes run from the south.
         assert_eq!(terrain.biomes[0], DEEP_SEA);
         assert_eq!(terrain.biomes[terrain.biomes.len() - 1], LAND);
