@@ -2,6 +2,7 @@
 //! teleport routine live. Everything game-specific in the agent goes here.
 
 mod sotf;
+mod stranded_deep;
 mod sunkenland;
 mod valheim;
 
@@ -171,6 +172,7 @@ pub fn detect(rt: &Runtime) -> Option<Box<dyn Provider>> {
         .map(|p| Box::new(p) as Box<dyn Provider>)
         .or_else(|| sunkenland::Sunkenland::detect(rt).map(|p| Box::new(p) as Box<dyn Provider>))
         .or_else(|| valheim::Valheim::detect(rt).map(|p| Box::new(p) as Box<dyn Provider>))
+        .or_else(|| stranded_deep::StrandedDeep::detect(rt).map(|p| Box::new(p) as Box<dyn Provider>))
 }
 
 /// Layers games commonly use for things that aren't the world's solid geometry.

@@ -1,0 +1,223 @@
+{
+  "id": "stranded-deep",
+  "name": "Stranded Deep",
+  "process": "Stranded_Deep.exe",
+  "steamAppId": 313120,
+  "liveFeatures": true,
+  "worldMaps": true,
+  "engine": "unity-mono",
+  "unitsPerMeter": 1,
+  "defaultHotkeys": [
+    {
+      "action": "toggle_map",
+      "vk": 77
+    }
+  ],
+  "maps": [
+    {
+      "id": "world",
+      "name": "World",
+      "layers": [
+        "surface"
+      ],
+      "background": "#0b2f4a",
+      "tiles": {
+        "url": "tiles/{z}/{x}/{y}.jpg",
+        "tileSize": 256,
+        "minNativeZoom": 3,
+        "maxNativeZoom": 7,
+        "maxZoom": 10
+      },
+      "projection": {
+        "east": "x",
+        "north": "z",
+        "up": "y",
+        "minEast": -2400,
+        "maxEast": 2400,
+        "minNorth": -2400,
+        "maxNorth": 2400,
+        "tileZoom": 3,
+        "tileX": 3,
+        "tileY": 3
+      }
+    }
+  ],
+  "groups": [
+    { "id": "world", "name": "World", "categories": ["island", "boss", "carrier", "wreck", "shelter"] },
+    { "id": "loot", "name": "Loot & Salvage", "categories": ["container", "salvage"] },
+    { "id": "nature", "name": "Nature", "categories": ["food", "medicine", "mining", "den"] },
+    { "id": "yours", "name": "Yours", "categories": ["boat", "build"] }
+  ],
+  "categories": [
+    {
+      "id": "island",
+      "name": "Islands",
+      "color": "#2e9e4f",
+      "icon": "builtin:island",
+      "shape": "hexagon",
+      "visible": true,
+      "visitInside": true
+    },
+    {
+      "id": "boss",
+      "name": "Bosses",
+      "color": "#e53935",
+      "icon": "builtin:skull",
+      "shape": "shield",
+      "visible": true,
+      "visitInside": true
+    },
+    {
+      "id": "carrier",
+      "name": "Aircraft Carrier",
+      "color": "#fdd835",
+      "icon": "builtin:flag",
+      "shape": "shield",
+      "visible": true,
+      "visitInside": true
+    },
+    {
+      "id": "wreck",
+      "split": true,
+      "name": "Wrecks & Ruins",
+      "color": "#5c8db8",
+      "icon": "builtin:anchor",
+      "shape": "square",
+      "visible": true,
+      "remembered": true
+    },
+    {
+      "id": "shelter",
+      "name": "Shelters",
+      "color": "#a1887f",
+      "icon": "builtin:tent",
+      "shape": "square",
+      "visible": true,
+      "remembered": true
+    },
+    {
+      "id": "container",
+      "split": true,
+      "name": "Loot Containers",
+      "color": "#ff9800",
+      "icon": "builtin:chest",
+      "shape": "diamond",
+      "visible": true,
+      "remembered": true
+    },
+    {
+      "id": "salvage",
+      "split": true,
+      "name": "Salvage Piles",
+      "color": "#90a4ae",
+      "icon": "builtin:wrench",
+      "shape": "diamond",
+      "visible": false,
+      "remembered": true
+    },
+    {
+      "id": "food",
+      "split": true,
+      "name": "Food Plants",
+      "color": "#8bc34a",
+      "icon": "builtin:food",
+      "visible": false,
+      "remembered": true
+    },
+    {
+      "id": "medicine",
+      "split": true,
+      "name": "Medicinal Plants",
+      "color": "#26a69a",
+      "icon": "builtin:leaf",
+      "visible": false,
+      "remembered": true
+    },
+    {
+      "id": "mining",
+      "split": true,
+      "name": "Clay & Stone",
+      "color": "#bcaaa4",
+      "icon": "builtin:pickaxe",
+      "visible": false,
+      "remembered": true
+    },
+    {
+      "id": "den",
+      "split": true,
+      "name": "Animal Dens",
+      "color": "#c2185b",
+      "icon": "builtin:hazard",
+      "shape": "diamond",
+      "visible": false,
+      "remembered": true
+    },
+    {
+      "id": "boat",
+      "split": true,
+      "name": "Boats & Rafts",
+      "color": "#29b6f6",
+      "icon": "builtin:sailboat",
+      "visible": true,
+      "remembered": true
+    },
+    {
+      "id": "build",
+      "split": true,
+      "name": "Your Base",
+      "color": "#7e57c2",
+      "icon": "builtin:hammer",
+      "visible": true,
+      "remembered": true
+    }
+  ],
+  "checklistName": "Story",
+  "checklist": [
+    {
+      "name": "Megalodon",
+      "pins": [
+        "Megalodon"
+      ],
+      "note": "Its arena counts once you've been there"
+    },
+    {
+      "name": "Lusca the Great",
+      "pins": [
+        "Lusca the Great"
+      ],
+      "note": "Its arena counts once you've been there"
+    },
+    {
+      "name": "The Great Abaia",
+      "pins": [
+        "The Great Abaia"
+      ],
+      "note": "Its arena counts once you've been there"
+    },
+    {
+      "name": "Aircraft carrier",
+      "pins": [
+        "Aircraft carrier"
+      ],
+      "note": "The way off the islands, once the gyrocopter is built"
+    }
+  ],
+  "biomes": [
+    {
+      "id": 1,
+      "name": "Land"
+    },
+    {
+      "id": 2,
+      "name": "Shallows"
+    },
+    {
+      "id": 3,
+      "name": "Open sea"
+    },
+    {
+      "id": 4,
+      "name": "Deep sea"
+    }
+  ]
+}

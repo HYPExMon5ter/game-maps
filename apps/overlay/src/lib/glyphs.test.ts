@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import sonsOfTheForest from '../../../../games/sons-of-the-forest/game.json'
+import strandedDeep from '../../../../games/stranded-deep/game.json'
 import sunkenland from '../../../../games/sunkenland/game.json'
 import { withIconAliases, type Category, type GameDefinition, type Pin } from './game'
 import { GLYPH_NAMES, glyphUrl } from './glyphs'
 
-const GAMES = [sonsOfTheForest, sunkenland] as unknown as GameDefinition[]
+const GAMES = [sonsOfTheForest, sunkenland, strandedDeep] as unknown as GameDefinition[]
 const builtin = (icon: string) => (icon.startsWith('builtin:') ? icon.slice('builtin:'.length) : null)
 
 describe('glyphs', () => {

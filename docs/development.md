@@ -98,6 +98,11 @@ Add `--preview-only` for a quick 2048 px `preview.png`.
 Nothing to generate or publish: worlds come from a seed, so each map and its pins are read
 from the running game. See [Valheim](games/valheim.md#world).
 
+### Stranded Deep
+
+Nothing to generate or publish either: each world's islands are placed from its seed, and
+the map and pins come from the running game. See [Stranded Deep](games/stranded-deep.md#world).
+
 ## Adding a game
 
 1. Create `games/<id>/game.json`. Copy the Sons of the Forest one and adjust:
