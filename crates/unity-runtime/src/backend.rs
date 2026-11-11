@@ -69,6 +69,39 @@ pub(crate) trait Backend: Send + Sync {
     unsafe fn new_value(&self, class: Ptr) -> Ptr;
     unsafe fn new_array(&self, element: Ptr, len: usize) -> Ptr;
     unsafe fn array_element_size(&self, array_class: Ptr) -> i32;
+
+    /// The runtime's weak GC handles, if it exports them.
+    fn weak_handles(&self) -> Option<WeakHandles>;
+}
+
+/// A runtime's weak GC handle functions (`mono_gchandle_*` / `il2cpp_gchandle_*`), which
+/// have the same shape in both.
+#[derive(Clone, Copy)]
+pub(crate) struct WeakHandles {
+    /// `(object, track resurrection)` to a handle; 0 on failure.
+    pub new: unsafe extern "C" fn(Ptr, i32) -> u32,
+    /// The object, or null once it's been collected.
+    pub target: unsafe extern "C" fn(u32) -> Ptr,
+    pub free: unsafe extern "C" fn(u32),
+}
+
+impl WeakHandles {
+    /// Looks the three functions up in `module`, named `<prefix>gchandle_*`.
+    ///
+    /// # Safety
+    /// `module` must be the runtime's module, whose exports have these signatures.
+    pub(crate) unsafe fn load(module: windows::Win32::Foundation::HMODULE, prefix: &str) -> Option<Self> {
+        use windows::Win32::System::LibraryLoader::GetProcAddress;
+        let get = |name: &str| {
+            let name = std::ffi::CString::new(format!("{prefix}gchandle_{name}")).ok()?;
+            GetProcAddress(module, windows::core::PCSTR(name.as_ptr() as *const u8))
+        };
+        Some(Self {
+            new: std::mem::transmute::<unsafe extern "system" fn() -> isize, unsafe extern "C" fn(Ptr, i32) -> u32>(get("new_weakref")?),
+            target: std::mem::transmute::<unsafe extern "system" fn() -> isize, unsafe extern "C" fn(u32) -> Ptr>(get("get_target")?),
+            free: std::mem::transmute::<unsafe extern "system" fn() -> isize, unsafe extern "C" fn(u32)>(get("free")?),
+        })
+    }
 }
 
 /// Splits an IL2CPP-style icall name `Namespace.Class::method(Type1,Type2)` into
