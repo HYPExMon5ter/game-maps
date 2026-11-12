@@ -1,0 +1,78 @@
+{
+  "id": "grounded-2",
+  "name": "Grounded 2",
+  "process": "Grounded2Steam-Win64-Shipping.exe",
+  "steamAppId": 2661300,
+  "liveFeatures": true,
+  "bagName": "Your backpack",
+  "engine": "unreal",
+  "unitsPerMeter": 1,
+  "defaultHotkeys": [
+    {
+      "action": "toggle_map",
+      "vk": 77
+    }
+  ],
+  "maps": [
+    {
+      "id": "park",
+      "name": "Brookhollow Park",
+      "layers": [
+        "surface"
+      ],
+      "background": "#26331f",
+      "tiles": {
+        "url": "tiles/surface/{z}/{x}/{y}.webp",
+        "tileSize": 256,
+        "minNativeZoom": 3,
+        "maxNativeZoom": 8,
+        "maxZoom": 11
+      },
+      "projection": {
+        "east": "x",
+        "north": "z",
+        "up": "y",
+        "minEast": -1350.0,
+        "maxEast": 4042.49,
+        "minNorth": -2547.49,
+        "maxNorth": 2845.0,
+        "tileZoom": 3,
+        "tileX": 3,
+        "tileY": 3
+      }
+    }
+  ],
+  "groups": [
+    { "id": "places", "name": "Places", "categories": ["landmark", "outpost", "lab", "mixr", "teleporter", "burgl", "analyzer", "comm-array"] },
+    { "id": "collectibles", "name": "Collectibles", "categories": ["disk", "note", "key", "recipe", "science", "paint", "orc", "upgrade"] },
+    { "id": "resources", "name": "Resources", "categories": ["resource", "milk", "dig"] },
+    { "id": "gear", "name": "Gear & Loot", "categories": ["unique", "cache", "body", "egg"] },
+    { "id": "creatures", "name": "Creatures", "categories": ["boss"] }
+  ],
+  "categories": [
+    { "id": "landmark", "name": "Landmarks", "color": "#fbc02d", "icon": "builtin:map", "shape": "square", "visible": true, "visitInside": true },
+    { "id": "outpost", "name": "Ranger Outposts", "color": "#43a047", "icon": "builtin:radio", "shape": "hexagon", "visible": true },
+    { "id": "lab", "name": "Labs", "color": "#26c6da", "icon": "builtin:research", "shape": "hexagon", "visible": true },
+    { "id": "mixr", "name": "MIX.R", "color": "#e53935", "icon": "builtin:hazard", "shape": "shield", "visible": true },
+    { "id": "teleporter", "name": "Teleporters", "color": "#7e57c2", "icon": "builtin:layers", "shape": "hexagon", "visible": true },
+    { "id": "burgl", "name": "BURG.L Stations", "color": "#ff7043", "icon": "builtin:wrench", "visible": true },
+    { "id": "analyzer", "name": "Resource Analyzers", "color": "#8d6e63", "icon": "builtin:research", "visible": false },
+    { "id": "comm-array", "name": "Comm Arrays", "color": "#78909c", "icon": "builtin:radio", "visible": false },
+    { "id": "disk", "name": "Optical Disks", "color": "#ab47bc", "icon": "builtin:gem", "shape": "diamond", "visible": true, "autoFound": true },
+    { "id": "note", "name": "Notes & Audio Logs", "color": "#90caf9", "icon": "builtin:book", "visible": true, "autoFound": true },
+    { "id": "key", "name": "Keys & Key Items", "color": "#ffd54f", "icon": "builtin:key", "shape": "diamond", "visible": true, "autoFound": true },
+    { "id": "recipe", "name": "Recipes & Figurines", "color": "#4db6ac", "icon": "builtin:blueprint", "visible": true, "autoFound": true },
+    { "id": "science", "name": "Raw Science", "color": "#66bb6a", "icon": "builtin:leaf", "visible": true, "autoFound": true },
+    { "id": "paint", "name": "Paint", "color": "#ec407a", "icon": "builtin:mod", "visible": true, "autoFound": true },
+    { "id": "orc", "name": "O.R.C. Receivers", "color": "#ef5350", "icon": "builtin:radio", "visible": true, "autoFound": true },
+    { "id": "upgrade", "name": "Upgrade Shards", "color": "#b0bec5", "icon": "builtin:gem", "visible": true, "autoFound": true, "split": true },
+    { "id": "unique", "name": "Unique Gear", "color": "#ffa726", "icon": "builtin:sword", "shape": "shield", "visible": true, "autoFound": true },
+    { "id": "cache", "name": "Loot Bags", "color": "#a1887f", "icon": "builtin:backpack", "visible": false },
+    { "id": "body", "name": "Scientist Remains", "color": "#8d6e63", "icon": "builtin:skull", "visible": false },
+    { "id": "resource", "name": "Resource Nodes", "color": "#9ccc65", "icon": "builtin:pickaxe", "visible": false, "split": true },
+    { "id": "milk", "name": "Milk Nuggets", "color": "#eceff1", "icon": "builtin:gem", "shape": "diamond", "visible": true, "autoFound": true },
+    { "id": "dig", "name": "Buried Items", "color": "#795548", "icon": "builtin:hammer", "visible": false },
+    { "id": "egg", "name": "Buggy Eggs", "color": "#fff176", "icon": "builtin:leaf", "visible": false, "split": true },
+    { "id": "boss", "name": "Bosses & Named Creatures", "color": "#c62828", "icon": "builtin:skull", "shape": "shield", "visible": true }
+  ]
+}

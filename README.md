@@ -16,7 +16,7 @@ other players, and teleport. Press a key and it's there.**
 
 <sub>Real gameplay in Sons of the Forest. Click to watch the 44-second showcase on YouTube.</sub>
 
-**See it in your game:** [Sons of the Forest](docs/supported-games/sons-of-the-forest.md) · [Sunkenland](docs/supported-games/sunkenland.md) · [Valheim](docs/supported-games/valheim.md)
+**See it in your game:** [Sons of the Forest](docs/supported-games/sons-of-the-forest.md) · [Sunkenland](docs/supported-games/sunkenland.md) · [Valheim](docs/supported-games/valheim.md) · [Grounded 2](docs/supported-games/grounded-2.md)
 
 </div>
 
@@ -116,9 +116,10 @@ Each game has its own page with everything it can do, and screenshots.
 
 <table>
 <tr>
-<td width="33%" align="center"><a href="docs/supported-games/sons-of-the-forest.md"><img src="docs/images/sons-of-the-forest/map.png" alt="Sons of the Forest in Game Maps"></a><br><b><a href="docs/supported-games/sons-of-the-forest.md">Sons of the Forest</a></b><br><sub>Caves and bunkers, walking routes, Kelvin's orders</sub></td>
-<td width="33%" align="center"><a href="docs/supported-games/sunkenland.md"><img src="docs/images/sunkenland/map.png" alt="Sunkenland in Game Maps"></a><br><b><a href="docs/supported-games/sunkenland.md">Sunkenland</a></b><br><sub>Island details, crew orders, shared map marks</sub></td>
-<td width="33%" align="center"><a href="docs/supported-games/valheim.md"><img src="docs/images/valheim/map.png" alt="Valheim in Game Maps"></a><br><b><a href="docs/supported-games/valheim.md">Valheim</a></b><br><sub>A map of your own world, boss progress, nearest biome</sub></td>
+<td width="25%" align="center"><a href="docs/supported-games/sons-of-the-forest.md"><img src="docs/images/sons-of-the-forest/map.png" alt="Sons of the Forest in Game Maps"></a><br><b><a href="docs/supported-games/sons-of-the-forest.md">Sons of the Forest</a></b><br><sub>Caves and bunkers, walking routes, Kelvin's orders</sub></td>
+<td width="25%" align="center"><a href="docs/supported-games/sunkenland.md"><img src="docs/images/sunkenland/map.png" alt="Sunkenland in Game Maps"></a><br><b><a href="docs/supported-games/sunkenland.md">Sunkenland</a></b><br><sub>Island details, crew orders, shared map marks</sub></td>
+<td width="25%" align="center"><a href="docs/supported-games/valheim.md"><img src="docs/images/valheim/map.png" alt="Valheim in Game Maps"></a><br><b><a href="docs/supported-games/valheim.md">Valheim</a></b><br><sub>A map of your own world, boss progress, nearest biome</sub></td>
+<td width="25%" align="center"><a href="docs/supported-games/grounded-2.md"><img src="docs/images/grounded-2/map.png" alt="Grounded 2 in Game Maps"></a><br><b><a href="docs/supported-games/grounded-2.md">Grounded 2</a></b><br><sub>The park and the Abyss, every collectible and resource node</sub></td>
 </tr>
 </table>
 
@@ -126,21 +127,21 @@ Every game has the map, search and filters, live location, teleport, other playe
 creatures, tracking, the mini-map, fog of war, progress, and separate data for each world.
 What's different:
 
-| | Sons of the Forest | Sunkenland | Valheim |
-|---|:---:|:---:|:---:|
-| Map comes from | Download | Download | Your world, as you load it |
-| Underground map | ✓ | | |
-| Walking routes through caves | ✓ | | |
-| Companion stats and orders | ✓ | ✓ | |
-| Your bag or grave marked | ✓ | | ✓ |
-| Progress checklist | Key items | | Bosses |
-| Details for each location | | ✓ | |
-| Nearest biome | | | ✓ |
-| Resources remembered as you pass | | | ✓ |
-| Your pins on the game's own map | | ✓ | ✓ |
-| Your pings on the game's own map | | | ✓ |
-| Wind arrow on the mini-map | | ✓ | ✓ |
-| Time and weather on the mini-map | ✓ | | ✓ |
+| | Sons of the Forest | Sunkenland | Valheim | Grounded 2 |
+|---|:---:|:---:|:---:|:---:|
+| Map comes from | Download | Download | Your world, as you load it | Download |
+| Underground map | ✓ | | | The Abyss |
+| Walking routes through caves | ✓ | | | |
+| Companion stats and orders | ✓ | ✓ | | Your buggy |
+| Your bag or grave marked | ✓ | | ✓ | ✓ |
+| Progress checklist | Key items | | Bosses | |
+| Details for each location | | ✓ | | |
+| Nearest biome | | | ✓ | |
+| Resource nodes, by resource | | | Remembered as you pass | ✓ |
+| Your pins on the game's own map | | ✓ | ✓ | |
+| Your pings on the game's own map | | | ✓ | ✓ |
+| Wind arrow on the mini-map | | ✓ | ✓ | |
+| Time and weather on the mini-map | ✓ | | ✓ | Time |
 
 Games with anti-cheat aren't supported. If Game Maps finds Easy Anti-Cheat or BattlEye in
 a game's folder, it won't connect to that game, since doing so could get you banned.
@@ -434,8 +435,8 @@ has player names from your sessions, then attach it to
 Game Maps is a [Tauri](https://tauri.app) app (Rust + React +
 [MapLibre](https://maplibre.org)). When a supported game starts, it loads a small
 Rust agent into the game process. The agent reads the player's position through
-Unity's scripting runtime (IL2CPP or Mono) and streams it to the app over a local
-named pipe. The map is a separate transparent window drawn over the game, so it
+Unity's scripting runtime (IL2CPP or Mono) or Unreal Engine's reflection data, and streams
+it to the app over a local named pipe. The map is a separate transparent window drawn over the game, so it
 costs the game almost nothing to render.
 
 Map tiles, icons and pins are generated from the game's own files, so they line up

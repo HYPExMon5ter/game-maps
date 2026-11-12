@@ -69,7 +69,7 @@ pub struct Block {
 
 /// Which legs between consecutive `points` (on the floor, about a meter apart) a player
 /// can't walk now. Stops when `budget` runs out; `checked` tells how far it got.
-pub fn check_route(world: &impl World, points: &[Vector3], budget: Duration) -> (RouteCheck, Vec<Block>) {
+pub fn check_route(world: &(impl World + ?Sized), points: &[Vector3], budget: Duration) -> (RouteCheck, Vec<Block>) {
     let started = Instant::now();
     let mut check = RouteCheck { blocked: Vec::new(), checked: 0 };
     let mut blocks = Vec::new();
@@ -88,7 +88,7 @@ pub fn check_route(world: &impl World, points: &[Vector3], budget: Duration) -> 
 
 /// Walks the floor from `a` to `b` in short steps: blocked by a ledge too high to step
 /// up, or by anything solid at body height.
-fn leg_blocker(world: &impl World, a: Vector3, b: Vector3) -> Option<(Blocker, Vector3)> {
+fn leg_blocker(world: &(impl World + ?Sized), a: Vector3, b: Vector3) -> Option<(Blocker, Vector3)> {
     let mut prev = Vector3 { y: floor_below(world, a).unwrap_or(a.y), ..a };
     let steps = (horizontal(a, b) / SAMPLE).ceil().max(1.0) as usize;
     for k in 1..=steps {
@@ -111,7 +111,7 @@ fn leg_blocker(world: &impl World, a: Vector3, b: Vector3) -> Option<(Blocker, V
 }
 
 /// Whether lines `SIDE_STEP` to the left and right of the leg are both blocked.
-fn sides_blocked(world: &impl World, a: Vector3, b: Vector3) -> bool {
+fn sides_blocked(world: &(impl World + ?Sized), a: Vector3, b: Vector3) -> bool {
     let length = horizontal(a, b);
     if length < 1e-4 {
         return true;
@@ -121,12 +121,12 @@ fn sides_blocked(world: &impl World, a: Vector3, b: Vector3) -> bool {
 }
 
 /// Height of the first surface below `LIFT` above `p`, down to `MAX_DROP` below it.
-fn floor_below(world: &impl World, p: Vector3) -> Option<f32> {
+fn floor_below(world: &(impl World + ?Sized), p: Vector3) -> Option<f32> {
     world.ray(add(p, scale(UP, LIFT)), add(p, scale(UP, -MAX_DROP))).map(|h| h.point.y)
 }
 
 /// For each point: the floor nearest it, and whether `camera` can see it.
-pub fn probe_ground(world: &impl World, points: &[Vector3], camera: Option<Vector3>) -> Vec<GroundPoint> {
+pub fn probe_ground(world: &(impl World + ?Sized), points: &[Vector3], camera: Option<Vector3>) -> Vec<GroundPoint> {
     points
         .iter()
         .map(|&p| {

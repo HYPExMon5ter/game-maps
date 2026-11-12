@@ -5,7 +5,7 @@
 **A map of your own world, drawn from the running game, with every boss, trader and
 dungeon on it. No download needed.**
 
-[All games](../../README.md#supported-games) · [Sons of the Forest](sons-of-the-forest.md) · [Sunkenland](sunkenland.md)
+[All games](../../README.md#supported-games) · [Sons of the Forest](sons-of-the-forest.md) · [Sunkenland](sunkenland.md) · [Grounded 2](grounded-2.md)
 
 <img src="../images/valheim/map.png" alt="A whole Valheim world in Game Maps, with biomes and pins" width="900">
 

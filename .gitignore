@@ -3,6 +3,7 @@ node_modules/
 dist/
 *.log
 __pycache__/
+.venv/
 .DS_Store
 apps/overlay/src-tauri/gen/
 
@@ -11,3 +12,7 @@ games/*/tiles/
 games/*/nav/
 games/*/icons/game/
 games/*/preview*.png
+
+# .NET build output of the map tools.
+tools/mapgen/*/bin/
+tools/mapgen/*/obj/

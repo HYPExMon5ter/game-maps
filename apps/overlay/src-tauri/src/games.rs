@@ -206,6 +206,16 @@ mod tests {
     }
 
     #[test]
+    fn parses_grounded2_game_json() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../games");
+        let games = load_registry(&path);
+        let game = games.iter().find(|g| g.id == "grounded-2").expect("grounded-2 registered");
+        assert_eq!(game.process, "Grounded2Steam-Win64-Shipping.exe");
+        assert_eq!(game.steam_app_id, Some(2661300));
+        assert!(game.live_features && !game.world_maps && !game.game_map);
+    }
+
+    #[test]
     fn parses_sunkenland_game_json() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../games");
         let games = load_registry(&path);

@@ -11,7 +11,8 @@ them. This page records the main design decisions and how the pieces fit togethe
  ┌──────────────────────────┐          ┌──────────────────────────────────────┐
  │ agent DLL (crates/agent) │  named   │ Rust backend (apps/overlay/src-tauri)│
  │  frame hook → provider   │◄────────►│  detect game, inject, agent link     │
- │  (IL2CPP/Mono by name)   │  pipe    │  map packs, updater, settings        │
+ │  (Unity or Unreal, by    │  pipe    │  map packs, updater, settings        │
+ │   name)                  │          │                                      │
  └──────────────────────────┘          │ Web UI (apps/overlay/src)            │
                                        │  overlay window: MapLibre map, HUD   │
                                        │  launcher window                     │
@@ -27,8 +28,8 @@ them. This page records the main design decisions and how the pieces fit togethe
 | Topic | Decision | Why |
 |---|---|---|
 | Overlay | Tauri v2 transparent, always-on-top window over the game. The game runs in borderless / "Fullscreen Window" mode. | Simplest way to get a full web UI (MapLibre). It costs the game almost nothing to render, unlike hooking the game's swap chain. |
-| Game integration | Native agent DLL (Rust), injected by the app at runtime. It talks to Unity's scripting runtime by **name**, through IL2CPP's or Mono's exported API (`crates/unity-runtime`). | No mod loader, and the game folder is never modified. Works as a non-host client. Name-based lookups survive most game updates. The same agent core and provider style work for any Unity game, IL2CPP or Mono. |
-| Main-thread work | Detours on a few per-frame methods (engine render loop, uGUI, plus game-specific ones). Work runs once per frame and does almost nothing. | Unity APIs must be called on the main thread. One cheap call per frame keeps lag minimal. |
+| Game integration | Native agent DLL (Rust), injected by the app at runtime. It talks to the game by **name**: to Unity's scripting runtime through IL2CPP's or Mono's exported API (`crates/unity-runtime`), or to Unreal Engine through its reflection data, whose tables it finds by their shape (`crates/unreal-runtime`). | No mod loader, and the game folder is never modified. Works as a non-host client. Name-based lookups survive most game updates. The same agent core and provider style work for any Unity or Unreal Engine 5 game. |
+| Main-thread work | Unity: detours on a few per-frame methods (engine render loop, uGUI, plus game-specific ones). Unreal: the game thread's message pump, which runs once at the start of every frame, before the world ticks. Work runs once per frame and does almost nothing. | Engine APIs must be called on the main thread. One cheap call per frame keeps lag minimal. |
 | IPC | Named pipe `\\.\pipe\game-maps-agent-<pid>`, newline-delimited JSON, versioned protocol. Position is pushed only when it changes, capped at 30 Hz, or 2 Hz with nothing on screen. A whole `WorldSnapshot` goes out on entering a world or session; after that `SnapshotUpdate`s carry what moved, with the marker and creature lists only when they changed. | Local only, no firewall prompt, trivial cost at this message size. |
 | Map renderer | MapLibre GL JS. Raster tile pyramid. Game ↔ map conversion via a fitted affine transform in Web-Mercator space. | Proven, GPU-accelerated, handles 10k+ pins with clustering. |
 | Map data | Generated from the game's own files: tiles are rendered from the terrain data or, for worlds built from meshes, drawn top-down on the GPU (`tools/mapgen`); pins come from an in-game world export or straight from the scene files (`tools/pins`). User pins are stored locally. | Uses the game's own data, so live positions and pins share one coordinate system by construction. |
@@ -121,6 +122,21 @@ if it finds one.
 A game that sets `gameMap` and whose provider reports `Capabilities::game_map` also gets the
 player's pins and pings on its own map (`Provider::set_game_pins`, `Provider::game_ping`),
 so players without Game Maps see them, and those players' pings come back as markers.
+
+### Engines
+
+`crates/agent/src/engine.rs` is what the agent needs from an engine: the context
+providers work in, frames, the camera, the engine's own pathfinding, and physics for route
+checks. `UnityEngine` and `UnrealEngine` (`crates/agent/src/unreal.rs`) implement it, and a
+provider implements `Provider<E>` for its engine. Positions are in Unity's convention
+everywhere (meters, Y up); Unreal positions are converted where they're read, so the app,
+the protocol and the route checks don't know which engine a game runs on.
+
+Unreal's reflection tables move between engine versions, so `unreal-runtime` finds each
+layout by reading engine types whose contents are known (the `Vector` struct has `X`, `Y`
+and `Z`; `Actor` has `RootComponent`) rather than writing them down per version, and finds
+`ProcessEvent` by what its code checks. Every read of memory that could have been freed is
+checked first, against a small per-thread cache of readable regions.
 
 A game with only `game.json`, tiles and pins works as a static map. A provider in
 `crates/agent/src/provider/` adds live location, teleport, other players and the

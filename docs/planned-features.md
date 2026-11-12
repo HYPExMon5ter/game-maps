@@ -74,7 +74,7 @@ yet), **Deferred** (wanted, waiting on something).
 | Map window on a second monitor | Built | Mirrors the overlay's connection: friends' pins, requests, pings and Share all work there. |
 | Connection check | Built | Tests the servers that find friends and your network type, says how each friend is connected, and who isn't and why. Connections stay direct: there's no relay, so two strict networks can't link. |
 | Regroup key | Idea | One press asks everyone to track you. |
-| In-game pins and pings | Built (Valheim, Sunkenland) | Your pins go on the game's own map, so players without Game Maps see them too (`Capabilities.game_map`). Valheim also uses the game's ping and shows theirs in Game Maps; Sunkenland has marks but no ping. Sons of the Forest has no player-placed map marks. |
+| In-game pins and pings | Built (Valheim, Sunkenland, Grounded 2) | Your pins go on the game's own map, so players without Game Maps see them too (`Capabilities.game_map`). Valheim also uses the game's ping and shows theirs in Game Maps; Sunkenland has marks but no ping. Grounded 2 takes pings as your waypoint, but has one per player, so pins stay in Game Maps. Sons of the Forest has no player-placed map marks. |
 
 ### Safety and upkeep
 
@@ -147,6 +147,23 @@ yet), **Deferred** (wanted, waiting on something).
 | Fuel range ring | Deferred | Left out for now: the fuel level is easy to read, but range needs real burn rates measured on a boat, and a wrong ring could strand someone. |
 | In-game pins and pings | Built | Your pins become map marks everyone in the world can see, up to the game's limit, with names cut to its 8 characters. The game has no ping. Not tested with a second player yet. |
 
+## Grounded 2
+
+| Feature | Status | Notes |
+|---|---|---|
+| Map | Built | The game's own paintings of the park and the Abyss, on one map at their real places. |
+| Pins | Built | About 4,200, from the level files and a world export: places, collectibles, raw science, paint, milk nuggets, buried items, loot and every resource node by what it gives (from the same data as the game's resource finder). |
+| World detection | Built | The save's playthrough id, which is also the session for playing together. |
+| Teleport | Built | Into ground that hasn't loaded yet too: held in the air until it loads. A client asks the host through the game's teleporter call; not tested with a second player yet. |
+| Creatures and danger alert | Built | Bugs within 150 m, by name. Hostile when the bug is going after a player. |
+| Buggy | Built | Health and orders: call over, follow me, roam and send home. The game has no other behaviors (no passive or stay). |
+| Death and backpack | Built | Where you died, and your dropped backpack until you pick it up. |
+| Pings | Built | Become your waypoint in the game. |
+| Routes | Built | The game's navigation mesh. |
+| Chat | Built | Hotkeys pause while chat is open. Single player has no chat. |
+| Underground layer | Idea | The facility under the cooler and the labs under the outposts share the park's map for now. The game has no separate painting of them. |
+| Time on the mini-map | Built | The game's clock and day. Weather isn't read yet. |
+
 ## Other games
 
 Ranked by players, how much of Game Maps already applies, and whether the owner has
@@ -156,12 +173,12 @@ anti-cheat stays out: injecting into it and teleporting could get players banned
 | Game | Average players | Engine | Status | Notes |
 |---|---|---|---|---|
 | Schedule I | 10k | Unity IL2CPP | Idea | One handmade map on a runtime that's already supported. Quick to add. |
-| Palworld | 37k | Unreal | Idea | 1.0 launched July 2026. Needs an Unreal agent; Wand already has live location and teleport here. |
-| Satisfactory | 16k | Unreal | Idea | Comes much cheaper with the Unreal agent. |
+| Palworld | 37k | Unreal | Idea | 1.0 launched July 2026. The Unreal agent is in place now (Grounded 2); Wand already has live location and teleport here. |
+| Satisfactory | 16k | Unreal | Idea | Comes much cheaper now the Unreal agent exists. |
 | 7 Days to Die | 21k | Unity | Idea | Wand has a map with no live features. It ships with Easy Anti-Cheat, which has to be off for this to work: check that first. |
 | Core Keeper | 8k | Unity Mono | Idea | Generated worlds, so it can use the same runtime map as Valheim. |
 | Subnautica 2 | 2k, 467k at launch | Unreal | Idea | Worth it when an update brings players back. |
-| Grounded 2 | 4k | Unreal | Idea | With the Unreal agent. |
+| Grounded 2 | 4k | Unreal | Built | The first Unreal game: see above. |
 | The Forest | 5k | Unity | Idea | Same audience as Sons of the Forest, and caves make a map useful. |
 | Raft | 7k | Unity | Idea | |
 | Project Zomboid | 46k | Java | Deferred | Needs a third agent type, and its servers may reject teleports. A strong candidate later. |
