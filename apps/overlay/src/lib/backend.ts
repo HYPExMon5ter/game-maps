@@ -62,6 +62,16 @@ export interface RemotePack {
   url: string
   sha256: string
   size: number
+  /** Optional parts of the map published for download on request, by name (`3d`). */
+  extras?: Record<string, RemotePack>
+}
+
+/** An optional part of a map (see `RemotePack.extras`) on this computer. */
+export interface ExtraStatus {
+  /** Installed version (`"development"` from the repository); null until asked for. */
+  installed: string | null
+  downloading: { received: number; total: number } | null
+  error: string | null
 }
 
 export interface PackStatus {
@@ -71,6 +81,7 @@ export interface PackStatus {
   available: RemotePack | null
   downloading: { received: number; total: number } | null
   error: string | null
+  extras: Record<string, ExtraStatus>
 }
 
 export type UpdateState =
@@ -159,6 +170,8 @@ export const backend = {
   setupChecks: () => invoke<SetupChecks>('get_setup_checks'),
   mapPacks: () => invoke<PackStatus[]>('get_map_packs'),
   installMapPack: (gameId: string) => invoke<void>('install_map_pack', { gameId }),
+  /** Downloads an optional part of a game's map (`3d`). */
+  installMapExtra: (gameId: string, extra: string) => invoke<void>('install_map_extra', { gameId, extra }),
   updateState: () => invoke<UpdateState>('get_update_state'),
   checkForUpdates: () => invoke<void>('check_for_updates'),
   installUpdate: () => invoke<void>('install_update'),
@@ -192,6 +205,8 @@ export const events = {
   mapPacks: (cb: (p: PackStatus[]) => void): Promise<UnlistenFn> => listen<PackStatus[]>('map-packs', (e) => cb(e.payload)),
   mapPackInstalled: (cb: (gameId: string) => void): Promise<UnlistenFn> =>
     listen<string>('map-pack-installed', (e) => cb(e.payload)),
+  mapExtraInstalled: (cb: (e: { game_id: string; extra: string }) => void): Promise<UnlistenFn> =>
+    listen<{ game_id: string; extra: string }>('map-extra-installed', (e) => cb(e.payload)),
   appSettings: (cb: (s: AppSettings) => void): Promise<UnlistenFn> => listen<AppSettings>('app-settings', (e) => cb(e.payload)),
   updateState: (cb: (s: UpdateState) => void): Promise<UnlistenFn> => listen<UpdateState>('update-state', (e) => cb(e.payload)),
   /** A world's map files changed (see `state/worldMaps`). */

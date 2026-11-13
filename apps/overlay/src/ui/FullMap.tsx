@@ -1,6 +1,6 @@
 import { Check, Copy, Footprints, Info, MapPinPlus, Navigation, Pencil, Radio, Trash2, Zap } from 'lucide-react'
 import { Activity, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { findPin, navigateTo, newCustomPinAt, teleportToMapPoint } from '../lib/actions'
+import { findPin, navigateTo, newCustomPinAt, teleportToMapPoint, teleportToWorld } from '../lib/actions'
 import { backend } from '../lib/backend'
 import type { GameMap, Pin } from '../lib/game'
 import type { CompanionStatus, Vec3 } from '../lib/protocol'
@@ -9,9 +9,14 @@ import { toLngLat, toWorld } from '../lib/projection'
 import { readyPeers, sendPing, useSyncStore } from '../lib/sync/sync'
 import { useUiScale, useWindowSize } from '../lib/uiScale'
 import { MapView, type MapContextMenuEvent } from '../map/MapView'
+import { Cave3DView } from '../map/Cave3DView'
+import { use3DMode, useMap3D } from '../state/view3d'
+import { Cave3DControls } from './Cave3DControls'
+import { Surface3DControls } from './Surface3DControls'
 import { useCanTeleport, useTeleportOffered } from '../lib/teleport'
 import { selectViewLayer, useStore } from '../state/store'
 import { MissingMap } from './MissingMap'
+import { Download3D } from './Download3D'
 import { FogTip } from './Onboarding'
 import { Compass } from './Compass'
 import { LayoutEditor } from './LayoutEditor'
@@ -57,7 +62,7 @@ function ContextMenu({
   const canSend = useStore((s) => !!s.game?.sendCompanions)
   const companions = useStore((s) => s.snapshot?.companions)
   const sendable = useMemo(() => (canSend ? (companions ?? []).filter((c) => c.alive) : []), [canSend, companions])
-  const world = map ? toWorld(map.projection, at.lngLat) : null
+  const world = at.world ?? (map ? toWorld(map.projection, at.lngLat) : null)
   const item = 'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] hover:bg-panel-raised disabled:opacity-40'
   const pin = at.pinId ? findPin(at.pinId) : undefined
   // Up from the bottom of the map when it wouldn't fit there.
@@ -79,17 +84,17 @@ function ContextMenu({
       {pin ? (
         <PinMenuItems pin={pin} item={item} onEdit={onAddPin} onClose={onClose} />
       ) : (
-        <button className={item} onClick={() => (onAddPin(newCustomPinAt(at.lngLat)), onClose())}>
+        <button className={item} onClick={() => (onAddPin(newCustomPinAt(at.lngLat, at.world)), onClose())}>
           <MapPinPlus className="size-4" /> Add pin here
         </button>
       )}
       {!pin && (
-        <button className={item} onClick={() => (navigateTo(at.lngLat, layer), onClose())}>
+        <button className={item} onClick={() => (void navigateTo(at.lngLat, at.world, layer), onClose())}>
           <Navigation className="size-4" /> Navigate here
         </button>
       )}
       {teleportOffered && (
-        <button className={item} disabled={!canTeleport} onClick={() => (void teleportToMapPoint(at.lngLat), onClose())}>
+        <button className={item} disabled={!canTeleport} onClick={() => (void (at.world ? teleportToWorld(at.world, layer) : teleportToMapPoint(at.lngLat)), onClose())}>
           <Zap className="size-4" /> Teleport here
         </button>
       )}
@@ -214,6 +219,8 @@ export function FullMap() {
   const shown = useStore((s) => IS_MAP_WINDOW || s.mode === 'open')
   const uiScale = useUiScale()
   const fitPadding = useMemo(() => panelPadding(uiScale), [uiScale])
+  const mode3d = use3DMode()
+  const data3d = useMap3D()
   // The same menu as on the map, from a pin in a list.
   const openPinMenu = (pin: Pin, e: ReactMouseEvent) => {
     e.preventDefault()
@@ -230,6 +237,7 @@ export function FullMap() {
         style={{ ...rect, opacity, borderRadius: fills ? 0 : undefined }}
       >
         <MapView variant="full" onContextMenu={setMenu} fitPadding={fitPadding} />
+        {mode3d === 'caves' && data3d && <Cave3DView data={data3d} onContextMenu={setMenu} />}
 
         {/* Interface layer, scaled for the screen size; the map underneath is not. Paused
             while the map is closed: it would keep up with every snapshot for nobody. */}
@@ -245,7 +253,18 @@ export function FullMap() {
               <div className="pointer-events-auto min-h-0">
                 <Sidebar onEditPin={setEditing} onPinMenu={openPinMenu} />
               </div>
-              <div className="flex-1" />
+              <div className="flex min-w-0 flex-1 items-end justify-center">
+                {mode3d === 'caves' && data3d && (
+                  <div className="pointer-events-auto">
+                    <Cave3DControls data={data3d} />
+                  </div>
+                )}
+                {mode3d === 'surface' && (
+                  <div className="pointer-events-auto">
+                    <Surface3DControls />
+                  </div>
+                )}
+              </div>
               <div className="flex min-h-0 flex-col items-end gap-3">
                 {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
                 {!settingsOpen && hasSelection && <PinDetails onEdit={setEditing} />}
@@ -262,6 +281,7 @@ export function FullMap() {
           </div>
 
           <MissingMap />
+          <Download3D />
           <FogTip />
           {menu && <ContextMenu at={menu} scale={uiScale} onClose={() => setMenu(null)} onAddPin={setEditing} />}
           {editing && <PinEditor pin={editing} onClose={() => setEditing(null)} />}

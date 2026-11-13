@@ -9,7 +9,9 @@ contour lines every few meters, dark walls around them, transparent everywhere e
 It also writes each cave's walkable floors as a navigation grid (`nav/caves.json` plus
 `nav/cave-<area>.bin`, `nav/cave-<area>-water.bin` marking the water and
 `nav/cave-<area>-dive.bin` the water under rock), which the app routes on inside caves:
-the game's own pathfinding doesn't cover them.
+the game's own pathfinding doesn't cover them. And from the same grids, the caves' 3D
+models (`3d/<id>.bin` and `3d/<id>-water.bin`, listed in `3d/index.json`; see
+`cave_model.py`), so the 3D view shows exactly where routes go.
 
 Cells the scan found nothing in are filled from the floor scan `sotf_3d.py` makes of each
 cave's collision (`build/floors-*.npz`; the game caps a scan's size and can miss parts
@@ -18,7 +20,7 @@ of big caves). Water comes from the cave water surfaces and volumes `sotf_3d.py`
 height, so routes cross lakes and pools, and the map shows the water. Floors inside a
 water volume with rock above are swum along underwater (dives). The climbing ropes and
 ziplines from `build/traversal.json` join the floors they lead between (`links` in
-`caves.json`).
+`caves.json`). Caves get their names from `build/groups.json`.
 
 Usage:
     python -I tools/mapgen/sotf_caves.py --out games/sons-of-the-forest EXPORT.json [EXPORT.json ...]
@@ -39,6 +41,7 @@ from PIL import Image
 # the script's directory off the import path).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sotf import TERRAIN_ORIGIN, hillshade, write_tiles  # noqa: E402
+import cave_model  # noqa: E402
 import mesh3d  # noqa: E402
 
 # World square covered by the map (must match `projection` in game.json).
@@ -494,6 +497,72 @@ def write_nav(caves: list[dict], out_dir: str) -> None:
         json.dump({"version": 1, "caves": index}, f, indent=1)
 
 
+def load_groups(game_dir: str) -> dict:
+    """The caves and bunkers `sotf_3d.py` knows, by id: {name, min, max} (world bounds)."""
+    path = os.path.join(game_dir, "build", "groups.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        return json.load(f)
+
+
+def group_of(cave: dict, groups: dict) -> str | None:
+    """The cave or bunker whose bounds hold most of a cave grid's floors."""
+    scan, floors = cave["scan"], cave["floors"]
+    layer, row, col = np.nonzero(floors != NONE)
+    if not len(layer):
+        return None
+    x = scan["origin_x"] + (col + 0.5) * scan["cell"]
+    z = scan["origin_z"] + (row + 0.5) * scan["cell"]
+    y = floors[layer, row, col] / 10.0
+    best, best_share = None, 0.5
+    for gid, g in groups.items():
+        lo, hi = np.array(g["min"]) - 2, np.array(g["max"]) + 2
+        share = float(((x >= lo[0]) & (x <= hi[0]) & (y >= lo[1]) & (y <= hi[1]) & (z >= lo[2]) & (z <= hi[2])).mean())
+        if share > best_share:
+            best, best_share = gid, share
+    return best
+
+
+def write_models(caves: list[dict], out_dir: str, groups: dict) -> None:
+    """Each cave's 3D model and water (see `cave_model.py`), and their list in
+    `3d/index.json`. A model is named after the cave or bunker it's in; there's one per
+    area the game loads, which holds all of a cave a player can get to from inside it."""
+    mesh_dir = os.path.join(out_dir, "3d")
+    os.makedirs(mesh_dir, exist_ok=True)
+    entries, written = [], set()
+    for cave in caves:
+        scan = cave["scan"]
+        gid = group_of(cave, groups)
+        mid = gid or f"area-{scan['area']}"
+        name = groups[gid]["name"] if gid else f"Underground area {scan['area']}"
+        floors, swim, dive = cave["floors"], cave["swim"], cave["dive"]
+        ox, oz, cell = scan["origin_x"], scan["origin_z"], scan["cell"]
+        node_links = [(link["from"], link["to"]) for link in cave["links"]]
+        keep = cave_model.pieces(floors, swim | dive, node_links)
+        positions, faces = cave_model.build(floors, keep, swim, cave["water_level"], ox, oz, cell)
+        if not len(faces):
+            continue
+        file = f"{mid}.bin"
+        entry = {"id": mid, "name": name, "file": f"3d/{file}", **mesh3d.write_mesh(os.path.join(mesh_dir, file), positions, faces)}
+        written.add(file)
+        wet = ((swim | dive) & keep).any(axis=0)
+        wp, wf = cave_model.water(cave["water_level"], wet, ox, oz, cell)
+        if len(wf):
+            water_file = f"{mid}-water.bin"
+            mesh3d.write_mesh(os.path.join(mesh_dir, water_file), wp, wf)
+            entry["water"] = f"3d/{water_file}"
+            written.add(water_file)
+        entries.append(entry)
+        print(f"  {name}: {entry['triangles']} triangles, {os.path.getsize(os.path.join(mesh_dir, file)) // 1024} KB")
+    for stale in glob.glob(os.path.join(mesh_dir, "*.bin")):
+        if os.path.basename(stale) not in written:
+            os.remove(stale)
+    order = list(groups)
+    entries.sort(key=lambda e: (order.index(e["id"]) if e["id"] in order else len(order), e["id"]))
+    mesh3d.update_index(out_dir, "surface", meshes=entries)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--out", required=True, help="games/sons-of-the-forest directory")
@@ -528,6 +597,10 @@ def main() -> int:
     img = render(world, relative, rasterize_surfaces(water, WORLD_MIN, WORLD_MIN, cell, GRID, GRID) if water else None)
     caves = [cave_grids(scan, water, traversal, volumes) for scan in scans.values()]
     write_nav(caves, args.out)
+    groups = load_groups(args.out)
+    if not groups:
+        print("no cave names (build/groups.json): run sotf_3d.py first", file=sys.stderr)
+    write_models(caves, args.out, groups)
     img.resize((1024, 1024), Image.BILINEAR).save(os.path.join(args.out, "preview-caves.png"))
     min_zoom, max_zoom = write_tiles(img, args.out, "caves")
     print(f"rendered {len(scans)} caves ({int((~np.isnan(world)).sum())} m2 of floor), tiles z{min_zoom}..{max_zoom}")

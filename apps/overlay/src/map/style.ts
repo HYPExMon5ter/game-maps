@@ -265,7 +265,7 @@ export function buildStyle(game: GameDefinition, map: GameMap, assetOrigin: stri
 }
 
 /** Shrinks bounds slightly so MapLibre doesn't request neighbor tiles that only touch the edge. */
-function insetBounds([w, s, e, n]: [number, number, number, number]): [number, number, number, number] {
+export function insetBounds([w, s, e, n]: [number, number, number, number]): [number, number, number, number] {
   const dx = (e - w) * 1e-4
   const dy = (n - s) * 1e-4
   return [w + dx, s + dy, e - dx, n - dy]

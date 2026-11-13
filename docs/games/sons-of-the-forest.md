@@ -234,6 +234,43 @@ Cave GA reported the player indoors and marked the cave found.
   spot each frame until there's floor within 4 m under it (up to 5 s), then sets them
   down once more.
 
+## 3D view
+
+- The cave and bunker models are drawn from the routing grids (`tools/mapgen/cave_model.py`,
+  run by `sotf_caves.py`), not from the rock: the floors you can stand on as one smooth
+  surface, a 1.4 m wall where the cave ends, the face of each step between floors, and no
+  roof. Seen from above they read as open-topped tunnels, and routes always lie on them.
+  The first models were the collision itself, simplified; they read as lumpy rock, and
+  the simplification lost narrow passages (replaced 2026-11-10).
+- What's drawn: every piece of floor joined to at least 30 m² of others by walking (a
+  step of up to 1.2 m), swimming, a rope or a zipline. Smaller pieces are the tops of
+  rocks and props. In a cell, a floor less than 3 m above another is a rock top, left
+  out; gaps of up to 8 cells are filled. Outlines and bumps are smoothed by averaging
+  with neighbors. Swum cells are drawn as water (`3d/<id>-water.bin`, at the surface, or
+  at the top of the water volume over a dive), with no wall along a shore.
+- Walls face into the cave only. The viewer draws front faces only, so the walls between
+  the camera and a passage aren't drawn and never hide it.
+- Sizes: about 22 MB for all 14 (Cave D 7.3 MB, 359k triangles). With the terrain tiles
+  they're the map's 3D pack, 13.7 MB zipped, which the app downloads only when the
+  player first picks 3D (`tools/mappack/publish.py`, `EXTRAS` in `mappacks.rs`).
+  They're not simplified: quadric simplification moved the outlines away from the walls.
+- Some caves are still several pieces routes can't join (see "Filling the cave scans
+  from collision"). The model shows them all.
+- The snow caves (`IceCaves`, level 19) have no model. Their own scene holds only a few
+  details (about 10 m across); the chambers are part of the island's merged rock
+  collision (`MergedWorldCollision*` in level 7), whose faces point out of the rock, so
+  a model cut from it shows only the outside of boulders (tried 2026-11-10).
+- There's one model per area the game loads (`CurrentAreaMask` bit), which holds all of
+  a cave you can reach from inside it: the Luxury bunker's area includes Cave E. Each is
+  named after the cave or bunker whose collision bounds hold most of its floors
+  (`build/groups.json`), and its id is that cave's (`cave-a`, `bunker-food`, …), not the
+  area id.
+- Terrain elevation tiles are the island heightmap at 4 m per pixel (zoom 3 to 5), about
+  0.8 MB. MapLibre scales heights by the latitude in the middle of the view, and the map's
+  tile spans about 0° to 41°, so the app recomputes the true-scale exaggeration whenever
+  the view settles (when it changes by more than 2%).
+- The 3D view draws the rest of an incomplete route as a thinner, fainter line.
+
 ## Stability (verified 2026-11-02)
 
 - Alt-tab with the map open closes it, leaving focus in the other app. The pinned

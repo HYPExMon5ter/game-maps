@@ -17,7 +17,7 @@ and orders for Kelvin.**
 
 | | |
 |---|---|
-| **Map** | Surface and underground, built from the game's own files |
+| **Map** | Surface and underground, built from the game's own files, in 2D or 3D |
 | **Pins** | About 1,800: caves, bunkers, weapons, tools, key items and collectibles |
 | **Live location** | You, other players, Kelvin, GPS locators and vehicles |
 | **Teleport** | Anywhere on the map, including into caves and bunkers |
@@ -41,6 +41,34 @@ automatically when you go in.
 Caves and bunkers are marked found when you go in, and collectibles when you walk up to
 them.
 
+## 3D view
+
+The **2D / 3D** switch in the top bar turns the map 3D. The first time, Game Maps asks
+before downloading the 3D map (about 14 MB, on top of the regular map), shows its
+progress, and opens it as soon as it's there; it stays up to date from then on. Without
+it, nothing extra is downloaded. On the surface the island tilts so you
+can see its hills and valleys. Underground, every cave and bunker is shown as open-topped
+tunnels: the floor you can walk on, colored by height with a line every 2.5 m, and a low
+wall where the cave ends. You can see which tunnels run over or under each other and
+where they climb or drop. Everything you can reach from inside a cave is part of it,
+ropes, ziplines and underwater passages included. You, other players, pins and your
+walking route are shown at their real heights.
+
+<img src="../images/sons-of-the-forest/surface-3d.png" alt="The island tilted in 3D, the snowy mountain in the middle" width="900">
+
+<img src="../images/sons-of-the-forest/cave-3d.png" alt="Cave D in 3D, with a route that climbs two ropes to the tunnel above" width="900">
+
+- **Drag** to turn around the middle of the view, **right-drag** (or Shift-drag) to
+  move, **scroll** to zoom, **double-click** to look at a spot. **Top** looks straight
+  down, north up; **Angled** tilts the view to show the levels.
+- **Cut away: Above me** hides what's above your level while you're underground, so the
+  level you're on is never covered. **Height** lets you pick the cut, to look at one level
+  at a time. **Nothing** shows them all.
+- Right-click a spot in a cave to add a pin there or teleport to it, at that exact height.
+- Where your route can't be walked all the way (the target is under water, say), the
+  part you can walk is bright and the rest is a faint line.
+- The snow caves are small enough to need no model, and the mini-map stays 2D.
+
 ## Walking routes
 
 Track something and a waypoint shows in the world, with a walking route on the map and
@@ -57,7 +85,7 @@ Hold E to grab a rope; tap E at the top of a zipline.
 - Where a route can't go all the way (a climb it doesn't know), the rest is a
   faint dotted line, and the compass says the route ends short. From the surface, a
   route to something underground leads to the cave's entrance.
-- Water shows on the underground map.
+- Water shows on the underground map, in 2D and 3D.
 
 <img src="../images/sons-of-the-forest/hud.png" alt="An in-world marker, mini-map and walking route over the game" width="900">
 

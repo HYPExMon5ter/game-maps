@@ -1,5 +1,5 @@
-"""Sons of the Forest cave geometry from the game files: what `sotf_caves.py` needs to
-build the caves' routes.
+"""Sons of the Forest 3D map data from the game files: terrain elevation tiles, and
+what `sotf_caves.py` needs to build the caves' routes and 3D models.
 
 Cave geometry comes from the game's own collision: each cave's collision prefab (an
 Addressables bundle, `caves_assets_cave<x>_*.bundle`, named parts such as
@@ -7,10 +7,11 @@ CaveCollisionFloorA or CaveCollisionWallsB) and the static colliders of its scen
 (layer BasicCollider: rocks placed in caves, and the rooms of the bunkers, which are
 mostly box colliders).
 
-Writes to `build/` (not part of the map pack), per cave or bunker: a floor scan of its
-collision (`floors-<id>.npz`), its water surfaces (`water-<id>.bin`, mesh format in
-`mesh3d.py`), and its climbing ropes, ziplines and water volumes (`traversal.json`,
-`water-volumes.npz`).
+Writes the terrain tiles to `games/sons-of-the-forest/3d/` (and their entry in
+`index.json`, format in `mesh3d.py`), and to `build/` (not part of the map pack), per
+cave or bunker: its name and bounds (`groups.json`), a floor scan of its collision
+(`floors-<id>.npz`), its water surfaces (`water-<id>.bin`), and its climbing ropes,
+ziplines and water volumes (`traversal.json`, `water-volumes.npz`).
 
 Usage:
     python -I tools/mapgen/sotf_3d.py --game "D:/SteamLibrary/steamapps/common/Sons Of The Forest" --out games/sons-of-the-forest
@@ -29,7 +30,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mesh3d  # noqa: E402
-from sotf import TERRAIN_ORIGIN, load_terrain  # noqa: E402
+from sotf import MAP_TILE_X, MAP_TILE_Y, MAP_TILE_ZOOM, TERRAIN_ORIGIN, load_terrain  # noqa: E402
 from unity_world import Assets, Hierarchy, bundle_files, read_mesh  # noqa: E402
 
 # Static environment collision.
@@ -44,6 +45,9 @@ WATER_LAYER = 4
 LOWER_LOD = re.compile(r"LOD[1-9]")
 # Triangles facing up at least this much are the surface (not a lake's sides).
 SURFACE_NORMAL_Y = 0.7
+# Terrain elevation: 4 m per pixel is plenty for tilting the map, and keeps the tiles
+# small (about 1 MB in all).
+DEM_MAX_ZOOM = MAP_TILE_ZOOM + 2
 # The water volumes: where the player swims (trigger colliders on the Water layer). Lava
 # pools are on that layer too.
 WATER_VOLUME = re.compile(r"^(_Lake\w*Zone_|WaterZone|SwimVolume)")
@@ -303,11 +307,25 @@ def ground_height(t: dict, x: np.ndarray, z: np.ndarray) -> np.ndarray:
     return h[r, c]
 
 
+def write_terrain(t: dict, out: str) -> dict:
+    heights = t["heights"][::-1]  # row 0 north
+    lo, hi = mesh3d.write_dem_tiles(heights, os.path.join(out, "3d", "dem"), MAP_TILE_ZOOM, MAP_TILE_X, MAP_TILE_Y, DEM_MAX_ZOOM)
+    return {
+        "url": "3d/dem/{z}/{x}/{y}.webp",
+        "tileSize": mesh3d.DEM_TILE,
+        "minNativeZoom": lo,
+        "maxNativeZoom": hi,
+        "minHeight": round(float(heights.min()), 2),
+        "maxHeight": round(float(heights.max()), 2),
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--game", required=True, help="Sons Of The Forest install directory")
     ap.add_argument("--out", required=True, help="games/sons-of-the-forest directory")
     ap.add_argument("--only", nargs="*", help="group ids to build (for testing)")
+    ap.add_argument("--skip-terrain", action="store_true")
     args = ap.parse_args()
 
     data_dir = os.path.join(args.game, "SonsOfTheForest_Data")
@@ -318,6 +336,9 @@ def main():
     print(f"loaded scenes in {time.time() - t0:.0f}s")
     build_dir = os.path.join(args.out, "build")
     os.makedirs(build_dir, exist_ok=True)
+    groups_path = os.path.join(build_dir, "groups.json")
+    # A partial build (--only) keeps the other caves' entries.
+    known = json.load(open(groups_path)) if args.only and os.path.exists(groups_path) else {}
     terrain_data = load_terrain(data_dir)
     for g in groups:
         parts, boxes = group_collision(a, g, aa_dir, scene_keys)
@@ -336,8 +357,15 @@ def main():
             print(f"  water: {info['triangles']} triangles, y {info['min'][1]:.0f}..{info['max'][1]:.0f}")
         elif os.path.exists(water_path):
             os.remove(water_path)
+        known[g.id] = {"name": g.name, "min": [round(float(v), 2) for v in lo], "max": [round(float(v), 2) for v in hi]}
+    with open(groups_path, "w") as f:
+        json.dump({g.id: known[g.id] for g in GROUPS if g.id in known}, f, indent=1)
     write_traversal(a, groups, aa_dir, scene_keys, build_dir)
 
+    if not args.skip_terrain:
+        terrain = write_terrain(terrain_data, args.out)
+        mesh3d.update_index(args.out, "surface", terrain=terrain)
+        print(f"terrain tiles z{terrain['minNativeZoom']}..{terrain['maxNativeZoom']}")
     print(f"done in {time.time() - t0:.0f}s")
 
 

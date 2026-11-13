@@ -2,7 +2,7 @@
 // thing in them ("Ore" into iron, copper...). A filter is a category id, or
 // `<category>/<kind>` for one kind; a kind follows its category until it's set by itself.
 
-import type { Category, GameDefinition, Pin } from './game'
+import type { BadgeShape, Category, GameDefinition, Pin } from './game'
 
 export interface Filters {
   hiddenCategories: string[]
@@ -116,4 +116,35 @@ export function filterGroups(game: GameDefinition, pins: Pin[], found: Set<strin
     const items = members.flatMap((c) => itemsOf(c, byCategory.get(c.id) ?? [], found))
     return { id, name, categories: members, items, total: items.reduce((n, i) => n + i.total, 0), found: items.reduce((n, i) => n + i.found, 0) }
   })
+}
+
+/** A pin as the map draws it. */
+export interface ShownPin {
+  pin: Pin
+  color: string
+  icon: string
+  shape?: BadgeShape
+}
+
+/**
+ * The pins a map shows: those its filters let through, less found ones (unless found
+ * pins are shown) and those the fog of war hides. The selected pin always shows.
+ */
+export function shownPins(
+  pins: Pin[],
+  categories: Map<string, Category>,
+  filters: Filters,
+  found: Set<string>,
+  options: { selected: string | null; showFound: boolean; hiddenByFog?: ((pin: Pin) => boolean) | null },
+): ShownPin[] {
+  const out: ShownPin[] = []
+  for (const pin of pins) {
+    const cat = categories.get(pin.category)
+    const selected = pin.id === options.selected
+    if (!selected && !isPinVisible(cat, pin, filters)) continue
+    if (!selected && !options.showFound && found.has(pin.id)) continue
+    if (options.hiddenByFog?.(pin)) continue
+    out.push({ pin, color: pin.color ?? cat?.color ?? '#ffffff', icon: pin.icon ?? cat?.icon ?? 'builtin:pin', shape: cat?.shape })
+  }
+  return out
 }

@@ -142,5 +142,18 @@ class FillFromCollision(unittest.TestCase):
         self.assertEqual(floors.tolist(), [2132, 2058, 1984, 1910])
 
 
+class Names(unittest.TestCase):
+    def test_a_grid_takes_the_name_of_the_cave_holding_its_floors(self):
+        floors = np.full((1, 10, 10), NONE, np.int16)
+        floors[0] = 50
+        cave = {"scan": {"origin_x": 100.0, "origin_z": 200.0, "cell": 1.0}, "floors": floors}
+        groups = {
+            "elsewhere": {"name": "Cave X", "min": [0, 0, 0], "max": [50, 50, 50]},
+            "here": {"name": "Cave Y", "min": [99, 0, 199], "max": [111, 10, 211]},
+        }
+        self.assertEqual(sotf_caves.group_of(cave, groups), "here")
+        self.assertIsNone(sotf_caves.group_of(cave, {"elsewhere": groups["elsewhere"]}))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -20,6 +20,7 @@ yet), **Deferred** (wanted, waiting on something).
 | Maps on demand | Built | A game's map downloads only when it's needed: Play, Connect, opening its map, a Download button, or the first run of a game set to connect automatically. |
 | Completion tracker | Built | Progress per collectible category with what's left, per world. |
 | Map on a second monitor | Built | An always-on, interactive map window on a chosen monitor that follows you live while you play on the main screen. |
+| 3D map | Built | A 3D toggle on the full map: tilted terrain on the surface (MapLibre terrain), and 3D models of caves and other underground areas with players, pins and the route at their real heights (three.js, loaded only when used, drawn only when something changes). The mini-map stays 2D. The 3D data is a separate download the player opts into the first time they pick 3D, so the regular map stays small. Sons of the Forest so far; any game that publishes `3d/` gets it (Valheim would need its terrain from the running world). |
 | Path history | Built | A trail of where you walked since the app started, on the map and mini-map. |
 | Death marker | Built | A pin where you last died, to recover your gear. In Sons of the Forest it moves to your dropped bag, and goes when you pick that up. In Valheim it marks your grave. Death detection is per game (Sons of the Forest and Valheim so far); the pin is shared code. |
 | Pin menu | Built | Right-click a pin, on the map or in a list, to track, edit or delete it, or mark it found. |
