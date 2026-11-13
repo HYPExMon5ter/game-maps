@@ -5,7 +5,7 @@
 **Every island of your world on one map, drawn from the running game, with the boss arenas
 and the carrier marked. Wrecks, crates and plants are remembered as you find them.**
 
-[All games](../../README.md#supported-games) · [Sons of the Forest](sons-of-the-forest.md) · [Sunkenland](sunkenland.md) · [Valheim](valheim.md)
+[All games](../../README.md#supported-games) · [Sons of the Forest](sons-of-the-forest.md) · [Sunkenland](sunkenland.md) · [Valheim](valheim.md) · [Grounded 2](grounded-2.md)
 
 <img src="../images/stranded-deep/map.png" alt="A Stranded Deep world in Game Maps, with its islands and Lusca the Great marked" width="900">
 

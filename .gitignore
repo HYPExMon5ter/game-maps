@@ -14,3 +14,7 @@ games/*/3d/
 games/*/build/
 games/*/icons/game/
 games/*/preview*.png
+
+# .NET build output of the map tools.
+tools/mapgen/*/bin/
+tools/mapgen/*/obj/

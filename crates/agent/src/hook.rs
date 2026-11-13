@@ -19,6 +19,9 @@
 //! near it for a detour. Then the tick runs from the message pump instead (see
 //! [`enable_pump_ticks`]): Unity's main thread polls `PeekMessage` every frame, and that
 //! hook lives in user32, where there's always room.
+//!
+//! Unreal games always tick from the message pump: their game thread pumps messages once
+//! at the start of each frame, outside any world or object work.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
@@ -247,6 +250,8 @@ const MAX_TICK_PANICS: usize = 10;
 
 /// Ticks from the message pump are on; see the module docs.
 static PUMP_TICKS: AtomicBool = AtomicBool::new(false);
+/// Class of the game's main window, whose thread runs the game.
+static PUMP_WINDOW_CLASS: OnceLock<&'static str> = OnceLock::new();
 /// The game's main thread (the one with its window), once found.
 static PUMP_THREAD: AtomicU32 = AtomicU32::new(0);
 static PUMP_LAST_MS: AtomicU64 = AtomicU64::new(0);
@@ -255,8 +260,12 @@ const PUMP_INTERVAL_MS: u64 = 8;
 /// How often the game's window is looked for until it's found.
 const PUMP_SEARCH_MS: u64 = 500;
 
-/// Runs the tick from the message pump, for when no frame hook could be installed.
-pub fn enable_pump_ticks() {
+/// Runs the tick from the message pump on the thread of the game's window of class
+/// `window_class`: for Unity games when no frame hook could be installed, and always for
+/// Unreal games, whose game thread pumps messages at the start of every frame, before
+/// the world ticks.
+pub fn enable_pump_ticks(window_class: &'static str) {
+    let _ = PUMP_WINDOW_CLASS.set(window_class);
     PUMP_TICKS.store(true, Ordering::SeqCst);
 }
 
@@ -265,7 +274,7 @@ unsafe extern "system" fn find_game_thread(hwnd: HWND, found: LPARAM) -> BOOL {
     let thread = GetWindowThreadProcessId(hwnd, Some(&mut pid));
     let mut class = [0u16; 32];
     let len = GetClassNameW(hwnd, &mut class).max(0) as usize;
-    if pid == GetCurrentProcessId() && IsWindowVisible(hwnd).as_bool() && String::from_utf16_lossy(&class[..len]) == "UnityWndClass" {
+    if pid == GetCurrentProcessId() && IsWindowVisible(hwnd).as_bool() && Some(&String::from_utf16_lossy(&class[..len]).as_str()) == PUMP_WINDOW_CLASS.get() {
         *(found.0 as *mut u32) = thread;
         return BOOL(0);
     }

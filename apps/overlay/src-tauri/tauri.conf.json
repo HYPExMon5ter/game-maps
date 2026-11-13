@@ -54,6 +54,7 @@
       "../../../games/sunkenland/game.json": "games/sunkenland/game.json",
       "../../../games/valheim/game.json": "games/valheim/game.json",
       "../../../games/stranded-deep/game.json": "games/stranded-deep/game.json",
+      "../../../games/grounded-2/game.json": "games/grounded-2/game.json",
       "../../../target/release/game_maps_agent.dll": "agent/game_maps_agent.dll"
     },
     "windows": {

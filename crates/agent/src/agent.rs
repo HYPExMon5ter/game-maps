@@ -8,8 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use game_maps_protocol::{AgentMessage, CameraView, GamePin, Vec3, Capabilities, Hotkey, HotkeyAction, LogLevel, SnapshotUpdate, TeleportTarget, WorldLayer, WorldSnapshot, PROTOCOL_VERSION};
-use unity_runtime::{Runtime, Unity};
+use game_maps_protocol::{AgentMessage, GamePin, Vec3, Capabilities, Hotkey, HotkeyAction, LogLevel, SnapshotUpdate, TeleportTarget, WorldLayer, WorldSnapshot, PROTOCOL_VERSION};
 use tokio::sync::mpsc;
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
@@ -17,7 +16,9 @@ use windows::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, GetForeg
 
 use crate::diff::{creatures_changed, live_changed, markers_changed, world_changed};
 use crate::hotkeys::{Hotkeys, KeyState};
-use crate::provider::{default_solid_mask, to_proto, to_unity, Cx, Provider};
+use crate::engine::Engine;
+use crate::provider::{to_unity, Provider};
+use crate::walk::World;
 
 const DEFAULT_MAX_HZ: u32 = 30;
 const HEARTBEAT: Duration = Duration::from_secs(1);
@@ -27,8 +28,6 @@ const ROUTE_CHECK_BUDGET: Duration = Duration::from_millis(3);
 /// Upper bounds on points per check/probe request (a long cave route is a few hundred).
 const MAX_CHECK_POINTS: usize = 4000;
 const MAX_PROBE_POINTS: usize = 64;
-/// Hits kept per ground probe ray.
-const PROBE_HITS: usize = 8;
 
 pub enum Command {
     SetHotkeys(Vec<Hotkey>),
@@ -48,10 +47,10 @@ pub enum Command {
     SetGameOptions(std::collections::BTreeMap<String, bool>),
 }
 
-struct MainState {
-    provider: Option<Box<dyn Provider>>,
+struct MainState<E: Engine> {
+    provider: Option<Box<dyn Provider<E>>>,
     hotkeys: Hotkeys,
-    last_frame: Option<i32>,
+    last_frame: Option<i64>,
     frame: u64,
     min_interval: Duration,
     last_sample_at: Option<Instant>,
@@ -59,16 +58,24 @@ struct MainState {
     last_sent: Option<WorldSnapshot>,
     /// Running world export: request id and start time.
     export: Option<(u32, Instant)>,
-    /// Solid layers for walk checks, on the surface and underground (resolved on first use).
-    solid_masks: Option<[i32; 2]>,
+    /// What's solid for walk checks, on the surface and underground (resolved on first use).
+    solid: Option<[E::Solid; 2]>,
     /// An app was connected on the last tick.
     app_here: bool,
 }
 
+/// The main-thread side, for whichever engine the game runs on.
+trait Ticker: Send + Sync {
+    fn tick(&self, shared: &Shared);
+}
+
+struct Main<E: Engine> {
+    engine: E,
+    state: Mutex<MainState<E>>,
+}
+
 pub struct Shared {
-    pub rt: Runtime,
-    pub unity: Unity,
-    main: Mutex<MainState>,
+    main: Box<dyn Ticker>,
     inbox: Mutex<Vec<Command>>,
     outbox: mpsc::Sender<AgentMessage>,
     pending_logs: Mutex<VecDeque<AgentMessage>>,
@@ -92,13 +99,10 @@ fn interval_for(max_hz: u32) -> Duration {
 }
 
 impl Shared {
-    pub fn new(rt: Runtime, unity: Unity, provider: Option<Box<dyn Provider>>, outbox: mpsc::Sender<AgentMessage>) -> Self {
+    pub fn new<E: Engine>(engine: E, provider: Option<Box<dyn Provider<E>>>, outbox: mpsc::Sender<AgentMessage>) -> Self {
         let game = provider.as_ref().map(|p| p.game_id());
         let capabilities = provider.as_ref().map(|p| p.capabilities()).unwrap_or(Capabilities { hotkeys: true, ..Default::default() });
-        Self {
-            rt,
-            unity,
-            main: Mutex::new(MainState {
+        let state = Mutex::new(MainState {
                 provider,
                 hotkeys: Hotkeys::default(),
                 last_frame: None,
@@ -108,9 +112,11 @@ impl Shared {
                 last_sent_at: None,
                 last_sent: None,
                 export: None,
-                solid_masks: None,
+                solid: None,
                 app_here: false,
-            }),
+            });
+        Self {
+            main: Box::new(Main { engine, state }),
             inbox: Mutex::new(Vec::new()),
             outbox,
             pending_logs: Mutex::new(VecDeque::new()),
@@ -166,40 +172,46 @@ impl Shared {
         let _ = self.outbox.try_send(msg);
     }
 
-    /// Runs `f` with the game's physics, using the solid layers for the layer the player
-    /// is in. Main thread only.
-    fn with_world<T>(&self, st: &mut MainState, cx: &Cx, f: impl FnOnce(&crate::walk::PhysicsWorld) -> T) -> Result<T, String> {
-        let physics = self.unity.physics().ok_or("this game has no physics queries")?;
-        let local = st.last_sent.as_ref().and_then(|s| s.local.as_ref()).ok_or("not in a world")?;
-        let underground = local.layer == WorldLayer::Caves;
-        let masks = match st.solid_masks {
-            Some(m) => m,
-            None => {
-                let m = match st.provider.as_mut() {
-                    Some(p) => unsafe { [p.solid_mask(cx, physics, false), p.solid_mask(cx, physics, true)] },
-                    None => unsafe { [default_solid_mask(cx, physics); 2] },
-                };
-                let layers = unsafe { physics.layer_names(cx.rt) };
-                self.log(LogLevel::Info, format!("walk checks: solid masks {:#010x}/{:#010x}, layers {layers:?}", m[0] as u32, m[1] as u32));
-                st.solid_masks = Some(m);
-                m
-            }
-        };
-        let hits = unsafe { physics.hit_buffer(cx.rt, PROBE_HITS) }.map_err(|e| e.to_string())?;
-        let world = crate::walk::PhysicsWorld { rt: cx.rt, physics, mask: masks[underground as usize], hits };
-        Ok(f(&world))
-    }
-
     /// Runs once per game frame on the main thread (from the frame hook).
     pub fn tick(&self) {
         if self.stopping.load(Ordering::Relaxed) {
             return;
         }
-        let mut st = match self.main.try_lock() {
+        self.main.tick(self);
+    }
+}
+
+impl<E: Engine> Main<E> {
+    /// Runs `f` with the game's physics, treating as solid what the provider says is solid
+    /// where the player is. Main thread only.
+    fn with_world<T>(&self, s: &Shared, st: &mut MainState<E>, cx: &E::Cx<'_>, mut f: impl FnMut(&dyn World) -> T) -> Result<T, String> {
+        let local = st.last_sent.as_ref().and_then(|s| s.local.as_ref()).ok_or("not in a world")?;
+        let underground = local.layer == WorldLayer::Caves;
+        let solid = match st.solid {
+            Some(m) => m,
+            None => {
+                let m = unsafe {
+                    match st.provider.as_mut() {
+                        Some(p) => [p.solid(cx, false)?, p.solid(cx, true)?],
+                        None => [E::default_solid(cx)?; 2],
+                    }
+                };
+                s.log(LogLevel::Info, format!("walk checks: {}", unsafe { self.engine.describe_solid(m) }));
+                st.solid = Some(m);
+                m
+            }
+        };
+        unsafe { self.engine.with_world(solid[underground as usize], &mut f) }
+    }
+}
+
+impl<E: Engine> Ticker for Main<E> {
+    fn tick(&self, s: &Shared) {
+        let mut st = match self.state.try_lock() {
             Ok(st) => st,
             // A tick panicked with the lock held (see `hook::run_tick`): carry on.
             Err(std::sync::TryLockError::Poisoned(e)) => {
-                self.main.clear_poison();
+                self.state.clear_poison();
                 e.into_inner()
             }
             Err(std::sync::TryLockError::WouldBlock) => return,
@@ -207,15 +219,15 @@ impl Shared {
 
         // The hooked method may be shared by several components (identical code
         // folding) or run several times per frame; only do work once per frame.
-        let fc = self.unity.frame_count(&self.rt).ok();
+        let fc = self.engine.frame_count();
         if fc.is_some() && fc == st.last_frame {
             return;
         }
         st.last_frame = fc;
         st.frame += 1;
 
-        let commands = std::mem::take(&mut *self.inbox.lock().unwrap());
-        let cx = Cx { rt: &self.rt, unity: &self.unity };
+        let commands = std::mem::take(&mut *s.inbox.lock().unwrap());
+        let cx = self.engine.cx();
         let st = &mut *st;
 
         for cmd in commands {
@@ -236,9 +248,9 @@ impl Shared {
                         None => Err("this game has no teleport support".into()),
                     };
                     if let Err(e) = &result {
-                        self.log(LogLevel::Warn, format!("teleport failed: {e}"));
+                        s.log(LogLevel::Warn, format!("teleport failed: {e}"));
                     }
-                    self.send(AgentMessage::TeleportResult { request_id, ok: result.is_ok(), error: result.err() });
+                    s.send(AgentMessage::TeleportResult { request_id, ok: result.is_ok(), error: result.err() });
                 }
                 Command::FindPath { request_id, to } => {
                     // The latest snapshot is at most a heartbeat old: close enough for a route.
@@ -252,11 +264,11 @@ impl Shared {
                         Ok(p) => (Some(p), None),
                         Err(e) => (None, Some(e)),
                     };
-                    self.send(AgentMessage::PathResult { request_id, path, error });
+                    s.send(AgentMessage::PathResult { request_id, path, error });
                 }
                 Command::CheckRoute { request_id, points } => {
                     let started = Instant::now();
-                    let result = self.with_world(st, &cx, |world| {
+                    let result = self.with_world(s, st, &cx, |world| {
                         let points: Vec<_> = points.iter().take(MAX_CHECK_POINTS).map(|&p| to_unity(p)).collect();
                         crate::walk::check_route(world, &points, ROUTE_CHECK_BUDGET)
                     });
@@ -264,20 +276,20 @@ impl Shared {
                         if !blocks.is_empty() {
                             let at: Vec<String> = blocks.iter().map(|b| format!("{:?} at ({:.1}, {:.1}, {:.1})", b.blocker, b.at.x, b.at.y, b.at.z)).collect();
                             let ms = started.elapsed().as_secs_f32() * 1000.0;
-                            self.log(LogLevel::Info, format!("route check: {} of {} legs in {ms:.1} ms; blocked: {}", check.checked, points.len().saturating_sub(1), at.join(", ")));
+                            s.log(LogLevel::Info, format!("route check: {} of {} legs in {ms:.1} ms; blocked: {}", check.checked, points.len().saturating_sub(1), at.join(", ")));
                         }
                     }
                     let (check, error) = split(result.map(|(check, _)| check));
-                    self.send(AgentMessage::RouteCheckResult { request_id, check, error });
+                    s.send(AgentMessage::RouteCheckResult { request_id, check, error });
                 }
                 Command::ProbeGround { request_id, points } => {
-                    let camera = unsafe { self.unity.main_camera(&self.rt) }.map(|c| c.position);
-                    let result = self.with_world(st, &cx, |world| {
+                    let camera = unsafe { self.engine.camera() }.map(|c| to_unity(c.position));
+                    let result = self.with_world(s, st, &cx, |world| {
                         let points: Vec<_> = points.iter().take(MAX_PROBE_POINTS).map(|&p| to_unity(p)).collect();
                         crate::walk::probe_ground(world, &points, camera)
                     });
                     let (points, error) = split(result);
-                    self.send(AgentMessage::GroundProbeResult { request_id, points, error });
+                    s.send(AgentMessage::GroundProbeResult { request_id, points, error });
                 }
                 Command::PlaceInfo { request_id, position } => {
                     let result = match st.provider.as_mut() {
@@ -285,7 +297,7 @@ impl Shared {
                         None => Err("this game has nothing to say about places".into()),
                     };
                     let (place, error) = split(result);
-                    self.send(AgentMessage::PlaceInfoResult { request_id, place, error });
+                    s.send(AgentMessage::PlaceInfoResult { request_id, place, error });
                 }
                 Command::CompanionOrders { request_id, companion } => {
                     let result = match st.provider.as_mut() {
@@ -293,7 +305,7 @@ impl Shared {
                         None => Err("this game has no companions".into()),
                     };
                     let (orders, error) = split(result);
-                    self.send(AgentMessage::CompanionOrdersResult { request_id, orders, error });
+                    s.send(AgentMessage::CompanionOrdersResult { request_id, orders, error });
                 }
                 Command::CompanionOrder { request_id, companion, order } => {
                     let result = match st.provider.as_mut() {
@@ -301,10 +313,10 @@ impl Shared {
                         None => Err("this game has no companions".into()),
                     };
                     match &result {
-                        Ok(()) => self.log(LogLevel::Info, format!("{companion}: order {order} given")),
-                        Err(e) => self.log(LogLevel::Warn, format!("{companion}: order {order} failed: {e}")),
+                        Ok(()) => s.log(LogLevel::Info, format!("{companion}: order {order} given")),
+                        Err(e) => s.log(LogLevel::Warn, format!("{companion}: order {order} failed: {e}")),
                     }
-                    self.send(AgentMessage::CompanionOrderResult { request_id, ok: result.is_ok(), error: result.err() });
+                    s.send(AgentMessage::CompanionOrderResult { request_id, ok: result.is_ok(), error: result.err() });
                 }
                 Command::SetGamePins(pins) => {
                     if let Some(p) = st.provider.as_mut() {
@@ -314,7 +326,7 @@ impl Shared {
                 Command::GamePing(position) => {
                     let result = st.provider.as_mut().map_or(Err("this game has no pings".to_owned()), |p| unsafe { p.game_ping(&cx, position) });
                     if let Err(e) = result {
-                        self.log(LogLevel::Warn, format!("game ping failed: {e}"));
+                        s.log(LogLevel::Warn, format!("game ping failed: {e}"));
                     }
                 }
                 Command::SetGameOptions(options) => {
@@ -329,18 +341,18 @@ impl Shared {
                     };
                     match capture {
                         Ok(capture) => {
-                            let outbox = self.outbox.clone();
+                            let outbox = s.outbox.clone();
                             crate::worldmap::save(capture, dir, move |result| {
                                 let (map, error) = split(result);
                                 let _ = outbox.blocking_send(AgentMessage::WorldMapResult { request_id, map, error });
                             });
                         }
-                        Err(e) => self.send(AgentMessage::WorldMapResult { request_id, map: None, error: Some(e) }),
+                        Err(e) => s.send(AgentMessage::WorldMapResult { request_id, map: None, error: Some(e) }),
                     }
                 }
                 Command::ExportWorld { request_id } => {
                     if st.export.is_some() {
-                        self.send(AgentMessage::ExportResult { request_id, export: None, error: Some("an export is already running".into()) });
+                        s.send(AgentMessage::ExportResult { request_id, export: None, error: Some("an export is already running".into()) });
                         continue;
                     }
                     let started = match st.provider.as_mut() {
@@ -349,7 +361,7 @@ impl Shared {
                     };
                     match started {
                         Ok(()) => st.export = Some((request_id, Instant::now())),
-                        Err(e) => self.send(AgentMessage::ExportResult { request_id, export: None, error: Some(e) }),
+                        Err(e) => s.send(AgentMessage::ExportResult { request_id, export: None, error: Some(e) }),
                     }
                 }
             }
@@ -363,24 +375,24 @@ impl Shared {
                 st.export = None;
                 match result {
                     Ok(export) => {
-                        self.log(
+                        s.log(
                             LogLevel::Info,
                             format!("world export: {} entries, {} caves in {:.1} s", export.entries.len(), export.caves.len(), started.elapsed().as_secs_f32()),
                         );
-                        self.send(AgentMessage::ExportResult { request_id, export: Some(export), error: None });
+                        s.send(AgentMessage::ExportResult { request_id, export: Some(export), error: None });
                     }
-                    Err(e) => self.send(AgentMessage::ExportResult { request_id, export: None, error: Some(e) }),
+                    Err(e) => s.send(AgentMessage::ExportResult { request_id, export: None, error: Some(e) }),
                 }
             }
         }
 
         if let Some(p) = st.provider.as_mut() {
             for note in p.take_notes() {
-                self.log(LogLevel::Info, note);
+                s.log(LogLevel::Info, note);
             }
         }
 
-        if !self.connected.load(Ordering::Relaxed) {
+        if !s.connected.load(Ordering::Relaxed) {
             if std::mem::take(&mut st.app_here) {
                 if let Some(p) = st.provider.as_mut() {
                     unsafe { p.app_left(&cx) };
@@ -412,7 +424,7 @@ impl Shared {
                         let _ = AllowSetForegroundWindow(ASFW_ANY);
                     }
                 }
-                self.send(AgentMessage::HotkeyPressed { action });
+                s.send(AgentMessage::HotkeyPressed { action });
             }
         }
 
@@ -423,23 +435,17 @@ impl Shared {
             return;
         }
         st.last_sample_at = Some(now);
-        if self.resend.load(Ordering::SeqCst) {
+        if s.resend.load(Ordering::SeqCst) {
             provider.reconnected();
         }
         let mut snap = unsafe { provider.snapshot(&cx, st.frame) };
         if let Some(zone) = unsafe { provider.next_zone_pins(&cx) } {
-            self.send(AgentMessage::ZonePins(zone));
+            s.send(AgentMessage::ZonePins(zone));
         }
         if let Some(local) = snap.local.as_mut() {
-            local.camera = unsafe { self.unity.main_camera(&self.rt) }.map(|c| CameraView {
-                position: to_proto(c.position),
-                forward: to_proto(c.rotation.forward()),
-                up: to_proto(c.rotation.up()),
-                fov_y: c.fov_y,
-                aspect: c.aspect,
-            });
+            local.camera = unsafe { self.engine.camera() };
         }
-        let resend = self.resend.swap(false, Ordering::SeqCst);
+        let resend = s.resend.swap(false, Ordering::SeqCst);
         let heartbeat = st.last_sent_at.is_none_or(|t| now - t >= HEARTBEAT);
         match st.last_sent.as_mut() {
             Some(prev) if !resend && !world_changed(prev, &snap) => {
@@ -463,14 +469,14 @@ impl Shared {
                         progress: snap.progress,
                         visited: snap.visited,
                     };
-                    if self.outbox.try_send(AgentMessage::SnapshotUpdate(Box::new(update.clone()))).is_ok() {
+                    if s.outbox.try_send(AgentMessage::SnapshotUpdate(Box::new(update.clone()))).is_ok() {
                         st.last_sent_at = Some(now);
                         update.apply(prev);
                     }
                 }
             }
             _ => {
-                if self.outbox.try_send(AgentMessage::Snapshot(Box::new(snap.clone()))).is_ok() {
+                if s.outbox.try_send(AgentMessage::Snapshot(Box::new(snap.clone()))).is_ok() {
                     st.last_sent_at = Some(now);
                     st.last_sent = Some(snap);
                 }
@@ -478,6 +484,9 @@ impl Shared {
         }
     }
 }
+
+
+
 
 fn game_has_focus() -> bool {
     unsafe {

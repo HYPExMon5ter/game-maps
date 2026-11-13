@@ -5,7 +5,7 @@
 **The whole island and everything on it, caves and bunkers included, with walking routes
 and orders for Kelvin.**
 
-[All games](../../README.md#supported-games) · [Sunkenland](sunkenland.md) · [Valheim](valheim.md) · [Stranded Deep](stranded-deep.md)
+[All games](../../README.md#supported-games) · [Sunkenland](sunkenland.md) · [Valheim](valheim.md) · [Stranded Deep](stranded-deep.md) · [Grounded 2](grounded-2.md)
 
 <img src="../images/sons-of-the-forest/map.png" alt="The whole Sons of the Forest island with its pins" width="900">
 

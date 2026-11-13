@@ -16,7 +16,7 @@ other players, and teleport. Press a key and it's there.**
 
 <sub>Real gameplay in Sons of the Forest. Click to watch the 44-second showcase on YouTube.</sub>
 
-**See it in your game:** [Sons of the Forest](docs/supported-games/sons-of-the-forest.md) · [Sunkenland](docs/supported-games/sunkenland.md) · [Valheim](docs/supported-games/valheim.md) · [Stranded Deep](docs/supported-games/stranded-deep.md)
+**See it in your game:** [Sons of the Forest](docs/supported-games/sons-of-the-forest.md) · [Sunkenland](docs/supported-games/sunkenland.md) · [Valheim](docs/supported-games/valheim.md) · [Stranded Deep](docs/supported-games/stranded-deep.md) · [Grounded 2](docs/supported-games/grounded-2.md)
 
 </div>
 
@@ -129,27 +129,31 @@ Each game has its own page with everything it can do, and screenshots.
 <td width="50%" align="center"><a href="docs/supported-games/valheim.md"><img src="docs/images/valheim/map.png" alt="Valheim in Game Maps"></a><br><b><a href="docs/supported-games/valheim.md">Valheim</a></b><br><sub>A map of your own world, boss progress, nearest biome</sub></td>
 <td width="50%" align="center"><a href="docs/supported-games/stranded-deep.md"><img src="docs/images/stranded-deep/map.png" alt="Stranded Deep in Game Maps"></a><br><b><a href="docs/supported-games/stranded-deep.md">Stranded Deep</a></b><br><sub>Every island of your world, wrecks and loot as you find them, the bosses</sub></td>
 </tr>
+<tr>
+<td width="50%" align="center"><a href="docs/supported-games/grounded-2.md"><img src="docs/images/grounded-2/map.png" alt="Grounded 2 in Game Maps"></a><br><b><a href="docs/supported-games/grounded-2.md">Grounded 2</a></b><br><sub>The park and the Abyss, every collectible and resource node</sub></td>
+<td></td>
+</tr>
 </table>
 
 Every game has the map, search and filters, live location, teleport, other players, nearby
 creatures, tracking, the mini-map, fog of war, progress, and separate data for each world.
 What's different:
 
-| | Sons of the Forest | Sunkenland | Valheim | Stranded Deep |
-|---|:---:|:---:|:---:|:---:|
-| Map comes from | Download | Download | Your world, as you load it | Your world, as you load it |
-| Underground map | ✓ | | | |
-| Walking routes through caves | ✓ | | | |
-| Companion stats and orders | ✓ | ✓ | | |
-| Your bag or grave marked | ✓ | | ✓ | |
-| Progress checklist | Key items | | Bosses | Bosses and the carrier |
-| Details for each location | | ✓ | | |
-| Nearest biome | | | ✓ | Land, shallows, open and deep sea |
-| Resources remembered as you pass | | | ✓ | ✓ |
-| Your pins on the game's own map | | ✓ | ✓ | |
-| Your pings on the game's own map | | | ✓ | |
-| Wind arrow on the mini-map | | ✓ | ✓ | |
-| Time and weather on the mini-map | ✓ | | ✓ | ✓ |
+| | Sons of the Forest | Sunkenland | Valheim | Stranded Deep | Grounded 2 |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Map comes from | Download | Download | Your world, as you load it | Your world, as you load it | Download |
+| Underground map | ✓ | | | | The Abyss |
+| Walking routes through caves | ✓ | | | | |
+| Companion stats and orders | ✓ | ✓ | | | Your buggy |
+| Your bag or grave marked | ✓ | | ✓ | | ✓ |
+| Progress checklist | Key items | | Bosses | Bosses and the carrier | |
+| Details for each location | | ✓ | | | |
+| Nearest biome | | | ✓ | Land, shallows, open and deep sea | |
+| Resource nodes | | | Remembered as you pass | Remembered as you pass | Every node, by resource |
+| Your pins on the game's own map | | ✓ | ✓ | | |
+| Your pings on the game's own map | | | ✓ | | ✓ |
+| Wind arrow on the mini-map | | ✓ | ✓ | | |
+| Time and weather on the mini-map | ✓ | | ✓ | ✓ | Time |
 
 Games with anti-cheat aren't supported. If Game Maps finds Easy Anti-Cheat or BattlEye in
 a game's folder, it won't connect to that game, since doing so could get you banned.
@@ -443,8 +447,8 @@ has player names from your sessions, then attach it to
 Game Maps is a [Tauri](https://tauri.app) app (Rust + React +
 [MapLibre](https://maplibre.org)). When a supported game starts, it loads a small
 Rust agent into the game process. The agent reads the player's position through
-Unity's scripting runtime (IL2CPP or Mono) and streams it to the app over a local
-named pipe. The map is a separate transparent window drawn over the game, so it
+Unity's scripting runtime (IL2CPP or Mono) or Unreal Engine's reflection data, and streams
+it to the app over a local named pipe. The map is a separate transparent window drawn over the game, so it
 costs the game almost nothing to render.
 
 Map tiles, icons and pins are generated from the game's own files, so they line up

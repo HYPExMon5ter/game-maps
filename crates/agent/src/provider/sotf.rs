@@ -29,7 +29,7 @@ use std::ffi::c_void;
 use std::time::{Duration, Instant};
 
 use game_maps_protocol::{Capabilities, CompanionOrderOption, CompanionStatus, Creature, Environment, GameWorld, WorldKind, LocalPlayer, Marker, MultiplayerSession, PathInfo, RemotePlayer, TeleportTarget, Vec3, WorldExport, WorldLayer, WorldSnapshot};
-use unity_runtime::{read_string, Class, Color, Field, ListLayout, ManagedObject, Method, Physics, Runtime, Vector3};
+use unity_runtime::{read_string, Class, Color, Field, ListLayout, ManagedObject, Method, Runtime, Vector3};
 
 use super::{to_proto, to_unity, Cx, Provider};
 use crate::hook::{target, HookTarget, Shape};
@@ -560,7 +560,7 @@ impl SonsOfTheForest {
     unsafe fn floor_under(&mut self, cx: &Cx, at: Vector3) -> bool {
         let Some(physics) = cx.unity.physics() else { return true };
         physics.sync_transforms(cx.rt);
-        let mask = self.solid_mask(cx, physics, true);
+        let Ok(mask) = self.solid(cx, true) else { return true };
         let down = Vector3 { x: 0.0, y: -1.0, z: 0.0 };
         physics.raycast(cx.rt, at, down, FLOOR_BELOW, mask).is_some()
     }
@@ -804,7 +804,8 @@ impl Provider for SonsOfTheForest {
         Some(Ok(export))
     }
 
-    unsafe fn solid_mask(&mut self, cx: &Cx, physics: &Physics, underground: bool) -> i32 {
+    unsafe fn solid(&mut self, cx: &Cx, underground: bool) -> Result<i32, String> {
+        let physics = cx.unity.physics().ok_or("this game has no physics queries")?;
         // The world's static geometry only: players, characters, held items and pickups
         // have layers of their own, and would block every route next to the player. In
         // caves the terrain's collider spans the cave openings overhead (the cave scan
@@ -813,7 +814,7 @@ impl Provider for SonsOfTheForest {
         if !underground {
             layers.push("Terrain");
         }
-        physics.mask_of(cx.rt, &layers)
+        Ok(physics.mask_of(cx.rt, &layers))
     }
 
     unsafe fn find_path(&mut self, cx: &Cx, from: Vec3, to: Vec3) -> Result<PathInfo, String> {

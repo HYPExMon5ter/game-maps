@@ -47,9 +47,10 @@ cd apps/overlay && bun run lint && bun run build && bun run test
 | `apps/overlay/src` | React UI: the map overlay (`App.tsx`, `map/`, `ui/`) and the launcher window (`launcher/`) |
 | `crates/agent` | The agent loaded into the game: frame hook, pipe server, per-game providers |
 | `crates/unity-runtime` | Name-based access to a Unity scripting runtime (IL2CPP or Mono) from inside the process |
+| `crates/unreal-runtime` | Name-based access to an Unreal Engine 5 game's objects, properties and functions from inside the process |
 | `crates/protocol` | Messages between the app and the agent (versioned) |
 | `games/<id>` | Per-game definition (`game.json`), pins, and generated tiles and icons |
-| `tools/mapgen` | Builds map tiles and icons from game files |
+| `tools/mapgen` | Builds map tiles and icons from game files (`grounded2-extract` is a .NET tool for Unreal games' files) |
 | `tools/pins` | Builds `pins.json` from in-game world exports |
 | `tools/mappack` | Publishes a game's map data, and lists the maps a game update left behind |
 | `tools/release.py`, `tools/version.py` | App releases (see [Releasing](releasing.md)) |
@@ -100,6 +101,28 @@ python -I tools/pins/sunkenland.py --out games/sunkenland world.json
 
 Add `--preview-only` for a quick 2048 px `preview.png`.
 
+### Grounded 2
+
+Grounded 2's files are Unreal Engine 5.7 packages, read with
+[CUE4Parse](https://github.com/FabianFG/CUE4Parse) (needs the .NET 10 SDK). They're saved
+without property names, so reading them needs the game's type mappings: run the game with
+a development build of the agent once after each game update, and it writes
+`%TEMP%\game-maps-unreal.usmap`. The packages are Oodle-compressed; point `--oodle` at any
+game's `oo2core_*_win64.dll`.
+
+```sh
+dotnet run -c Release --project tools/mapgen/grounded2-extract -- --game "D:/SteamLibrary/steamapps/common/Grounded2" --mappings "%TEMP%/game-maps-unreal.usmap" --oodle <oo2core_9_win64.dll> --out <data dir>
+.venv/Scripts/python -I tools/mapgen/grounded2.py --data <data dir> --out games/grounded-2
+```
+
+Most pins come from an in-game export: start a **new** game, wait for the first scene to
+end, then **Settings → Advanced → Export world data** (a couple of seconds with a release
+build of the agent), and:
+
+```sh
+python -I tools/pins/grounded2.py --out games/grounded-2 --data <data dir>/data.json "%LOCALAPPDATA%/com.gamemaps.overlay/exports/<export>.json"
+```
+
 ### Valheim
 
 Nothing to generate or publish: worlds come from a seed, so each map and its pins are read
@@ -121,8 +144,12 @@ the map and pins come from the running game. See [Stranded Deep](games/stranded-
    worlds, set `worldMaps` in `game.json` and implement `Provider::read_world_map` instead.
 3. Add the `game.json` to `bundle.resources` in `apps/overlay/src-tauri/tauri.conf.json`.
 4. For live location and teleport, add a provider in `crates/agent/src/provider/` and
-   register it in `provider::detect`. IL2CPP and Mono games use the same runtime API.
-   Without one, the game works as a static map.
+   register it in `provider::detect` (Unity) or `provider::detect_unreal` (Unreal Engine 5).
+   IL2CPP and Mono games use the same runtime API; Unreal games get the engine-level parts
+   (local player, camera, traces, navigation) from `crates/agent/src/unreal.rs`. A
+   development build of the agent writes every type an Unreal game has to
+   `%TEMP%\game-maps-unreal-types.txt`, which is where to look up names. Without a
+   provider, the game works as a static map.
 5. Publish its map pack and release the app. The launcher lists the game automatically.
 6. Add its page to `docs/supported-games/`, with screenshots in `docs/images/<id>/`, and
    add it to [Supported games](../README.md#supported-games) and the GitHub topics. Don't
