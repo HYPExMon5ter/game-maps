@@ -16,7 +16,7 @@ use windows::core::{w, PCSTR, PCWSTR};
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 
-use crate::backend::{cstr, Backend, Ptr};
+use crate::backend::{cstr, Backend, Ptr, WeakHandles};
 use crate::{Error, Result};
 
 macro_rules! api {
@@ -99,6 +99,7 @@ const GAME_ASSEMBLY: &str = "Assembly-CSharp";
 pub(crate) struct Mono {
     api: Api,
     domain: Ptr,
+    weak: Option<WeakHandles>,
 }
 
 // The runtime is process-global and its API is thread-safe for attached threads.
@@ -115,7 +116,7 @@ impl Mono {
             if domain.is_null() {
                 return Err(Error::DomainNotReady);
             }
-            let mono = Self { api, domain };
+            let mono = Self { api, domain, weak: WeakHandles::load(module, "mono_") };
             let ready = mono.images().iter().any(|&i| cstr((mono.api.mono_image_get_name)(i)) == GAME_ASSEMBLY);
             if !ready {
                 return Err(Error::DomainNotReady);
@@ -298,5 +299,9 @@ impl Backend for Mono {
 
     unsafe fn array_element_size(&self, array_class: Ptr) -> i32 {
         (self.api.mono_array_element_size)(array_class)
+    }
+
+    fn weak_handles(&self) -> Option<WeakHandles> {
+        self.weak
     }
 }

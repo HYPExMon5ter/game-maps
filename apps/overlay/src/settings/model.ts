@@ -99,6 +99,8 @@ export interface Settings {
   showRoute: boolean
   /** Show where you've walked this session. */
   showTrail: boolean
+  /** The full map in 3D: tilted terrain on the surface, cave and bunker models underground. */
+  map3d: boolean
   /** Keep track of the parts of the map you've been near (see `fogHideMap`, `fogHidePins`). */
   fogOfWar: boolean
   /** Fog of war: cover unexplored parts of the map (else they're only shaded). */
@@ -153,6 +155,7 @@ export const DEFAULT_SETTINGS: Settings = {
   units: 'imperial',
   showRoute: true,
   showTrail: true,
+  map3d: false,
   fogOfWar: true,
   fogHideMap: true,
   fogHidePins: true,

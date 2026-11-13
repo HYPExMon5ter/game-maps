@@ -4,7 +4,7 @@ import './setup'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { events } from '../lib/backend'
 import { logUiError } from '../lib/errors'
-import { GAME_MARKERS_CATEGORY, tileUrl, type BadgeShape, type Pin } from '../lib/game'
+import { GAME_MARKERS_CATEGORY, tileUrl } from '../lib/game'
 import { LiveMarkerFilter, markerIcon, markerName, withoutAppPings } from '../lib/markers'
 import { findMover } from '../lib/movers'
 import { resolveTracked } from '../lib/tracking'
@@ -16,15 +16,18 @@ import { CLOUD_BACKGROUND } from '../lib/clouds'
 import { drawFog } from '../lib/fogCanvas'
 import { useFogStore, usePinFog } from '../state/fog'
 import { trailLines } from '../lib/trail'
+import { MOVE_COLORS, moveRuns, trackPath } from '../lib/route'
 import { steppedZoom } from '../lib/zoom'
 import { useTrailStore } from '../state/trail'
 import { IS_MAP_WINDOW } from '../lib/view'
-import { isPinVisible } from '../lib/filters'
+import { shownPins } from '../lib/filters'
 import { EMPTY_USER_DATA, isCategoryVisible, selectAllPins, selectViewLayer, useStore } from '../state/store'
 import { badgeKey, ensureBadge } from './badges'
 import { mapHandle } from './handle'
 import { PlayerMarkers } from './players'
-import { applyPinDisplay, buildStyle, CAVES_LAYER } from './style'
+import { applyPinDisplay, buildStyle, CAVES_LAYER, insetBounds } from './style'
+import { gameAssetUrl, trueScaleExaggeration } from '../lib/map3d'
+import { START_PITCH, use3DMode, useMap3D } from '../state/view3d'
 import { useGameSetting, useSettings } from '../settings/store'
 
 export interface MapContextMenuEvent {
@@ -33,6 +36,8 @@ export interface MapContextMenuEvent {
   y: number
   /** The pin clicked on, if any. */
   pinId?: string
+  /** The exact spot, height included, when the view knows it (the 3D view). */
+  world?: Vec3
 }
 
 interface Props {
@@ -136,14 +141,19 @@ function GameMapView({ variant, onContextMenu, fitPadding = NO_PADDING }: Props)
       renderWorldCopies: false,
       attributionControl: false,
       interactive: full,
-      dragRotate: false,
-      pitchWithRotate: false,
-      touchPitch: false,
+      // Turning and tilting are for the 3D view only (see `useTerrain`); built in here
+      // because tilting with the turn can't be added later.
+      dragRotate: full,
+      pitchWithRotate: full,
+      touchPitch: full,
+      maxPitch: MAX_PITCH,
       // A fade keeps the map redrawing for its whole length after every move: at walking
       // pace the mini-map would never stop. Without one it draws only when asked to.
       fadeDuration: 0,
     })
     m.touchZoomRotate.disableRotation()
+    m.dragRotate.disable()
+    m.touchPitch.disable()
     m.keyboard.disable() // the overlay handles its own keys (M / Esc)
 
     m.on('load', () => setMap(m))
@@ -220,6 +230,7 @@ function GameMapView({ variant, onContextMenu, fitPadding = NO_PADDING }: Props)
   useTrailLine(live)
   usePlayers(live, variant)
   useMiniZoomKeys(map, variant)
+  useTerrain(map, variant)
   // MapLibre's CSS forces `position: relative` on its container, so size it from a wrapper.
   return (
     <div className="absolute inset-0">
@@ -287,16 +298,7 @@ function usePinsLayer(map: MlMap | null) {
     const categories = new Map(game.categories.map((c) => [c.id, c]))
     const rank = new Map(game.categories.map((c, i) => [c.id, i]))
     const found = new Set(user.found)
-    const visible: { pin: Pin; key: string; color: string; icon: string; shape?: BadgeShape }[] = []
-    for (const pin of pins) {
-      const cat = categories.get(pin.category)
-      if (!isPinVisible(cat, pin, user) && pin.id !== selected) continue
-      if (!showFound && found.has(pin.id) && pin.id !== selected) continue
-      if (hiddenByFog?.(pin)) continue
-      const color = pin.color ?? cat?.color ?? '#ffffff'
-      const icon = pin.icon ?? cat?.icon ?? 'builtin:pin'
-      visible.push({ pin, key: badgeKey(color, icon, cat?.shape), color, icon, shape: cat?.shape })
-    }
+    const visible = shownPins(pins, categories, user, found, { selected, showFound, hiddenByFog }).map((v) => ({ ...v, key: badgeKey(v.color, v.icon, v.shape) }))
     // Exploring re-runs this every couple of seconds, usually with the same pins showing.
     const key = [viewLayer, selected, ...visible.map(({ pin, key }) => `${pin.id}:${key}:${pin.name}:${found.has(pin.id)}:${pin.position.x},${pin.position.z}`)].join('|')
     if (drawn.current?.map === map && drawn.current.key === key) return
@@ -550,6 +552,9 @@ function useLayerShading(map: MlMap | null) {
   }, [map, underground, clouded])
 }
 
+/** A feature of the track source (MapLibre's GeoJSON types, without a direct dependency). */
+type TrackFeature = Extract<Parameters<GeoJSONSource['setData']>[0], { type: 'FeatureCollection' }>['features'][number]
+
 function useTrackLine(map: MlMap | null) {
   const gameMap = useStore((s) => s.map)
 
@@ -557,33 +562,39 @@ function useTrackLine(map: MlMap | null) {
   useEffect(() => {
     if (!map || !gameMap) return
     const source = map.getSource<GeoJSONSource>('track')
+    const coords = (points: Vec3[]) =>
+      points.map((p) => {
+        const ll = toLngLat(gameMap.projection, p)
+        return [ll.lng, ll.lat]
+      })
     // Not a possible key, so the first pass always draws.
     let last: string | null = null
     const apply = () => {
-      const { snapshot, tracked, route } = useStore.getState()
+      const { snapshot, tracked, route, game } = useStore.getState()
       const from = snapshot?.local?.position
       const to = tracked ? resolveTracked(tracked, snapshot).position : undefined
-      // The walking route when there is one, else a straight line.
-      const points = !from || !to ? [] : route && route.corners.length >= 2 ? [from, ...route.corners.slice(1), to] : [from, to]
+      const path = from && to ? trackPath(from, to, route, game?.unitsPerMeter) : null
       // Whole units: finer, and walking would rebuild the line on every snapshot.
-      const key = points.map((p) => `${Math.round(p.x)},${Math.round(p.z)}`).join('|')
+      const key = path ? `${path.walkable}|${path.moves.join()}|${path.points.map((p) => `${Math.round(p.x)},${Math.round(p.z)}`).join('|')}` : ''
       if (key === last) return
       last = key
-      if (points.length === 0) {
+      if (!path || !to) {
         source?.setData({ type: 'FeatureCollection', features: [] })
         return
       }
-      source?.setData({
-        type: 'Feature',
-        geometry: {
-          type: 'LineString',
-          coordinates: points.map((p) => {
-            const ll = toLngLat(gameMap.projection, p)
-            return [ll.lng, ll.lat]
-          }),
-        },
-        properties: {},
-      })
+      const end = path.points.length - 1
+      const features: TrackFeature[] = []
+      // A line per stretch walked, swum, climbed or ridden: each has its color.
+      for (const run of moveRuns(path))
+        features.push({
+          type: 'Feature',
+          geometry: { type: 'LineString', coordinates: coords(path.points.slice(run.from, run.to + 1)) },
+          properties: { walkable: true, color: MOVE_COLORS[run.move] },
+        })
+      if (path.walkable < end)
+        features.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: coords(path.points.slice(path.walkable)) }, properties: { walkable: false } })
+      features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: coords([to])[0] }, properties: {} })
+      source?.setData({ type: 'FeatureCollection', features })
     }
     apply()
     return useStore.subscribe((s, prev) => {
@@ -683,4 +694,62 @@ function useMiniZoomKeys(map: MlMap | null, variant: 'full' | 'mini') {
     })
     return () => void unlisten.then((f) => f())
   }, [map, gameMap, variant])
+}
+
+const DEM_SOURCE = 'terrain'
+/** Steepest tilt of the 3D surface view (degrees from looking straight down). */
+const MAX_PITCH = 72
+/** How far the true-scale height factor may drift before the terrain is updated. */
+const EXAGGERATION_SLACK = 0.02
+
+/**
+ * 3D surface view: the map draped over the terrain at true scale, and free to turn and
+ * tilt (right-drag). Pins, players and routes stay on the ground. Off again, the map
+ * goes back to flat and north up.
+ */
+function useTerrain(map: MlMap | null, variant: 'full' | 'mini') {
+  const mode = use3DMode()
+  const data = useMap3D()
+  const game = useStore((s) => s.game)
+  const gameMap = useStore((s) => s.map)
+  const terrain = variant === 'full' && mode === 'surface' ? data?.terrain : undefined
+  useEffect(() => {
+    if (!map || !game || !gameMap) return
+    if (terrain) {
+      if (!map.getSource(DEM_SOURCE)) {
+        map.addSource(DEM_SOURCE, {
+          type: 'raster-dem',
+          tiles: [gameAssetUrl(game.id, terrain.url)],
+          tileSize: terrain.tileSize,
+          minzoom: terrain.minNativeZoom,
+          maxzoom: terrain.maxNativeZoom,
+          encoding: 'mapbox',
+          bounds: insetBounds(mapBounds(gameMap.projection)),
+        })
+      }
+      // MapLibre scales heights by the latitude in the middle of the view, which changes
+      // across the map's Mercator tile: kept at true scale wherever the view settles.
+      let exaggeration = 0
+      const applyScale = () => {
+        const next = trueScaleExaggeration(gameMap.projection, map.getCenter().lat)
+        if (Math.abs(next / exaggeration - 1) < EXAGGERATION_SLACK) return
+        exaggeration = next
+        map.setTerrain({ source: DEM_SOURCE, exaggeration })
+      }
+      applyScale()
+      map.on('moveend', applyScale)
+      map.dragRotate.enable()
+      map.touchPitch.enable()
+      map.touchZoomRotate.enableRotation()
+      if (map.getPitch() < 5) map.easeTo({ pitch: START_PITCH, duration: 500 })
+      return () => {
+        map.off('moveend', applyScale)
+      }
+    }
+    if (map.getTerrain()) map.setTerrain(null)
+    map.dragRotate.disable()
+    map.touchPitch.disable()
+    map.touchZoomRotate.disableRotation()
+    if (map.getPitch() || map.getBearing()) map.easeTo({ pitch: 0, bearing: 0, duration: 400 })
+  }, [map, game, gameMap, terrain])
 }

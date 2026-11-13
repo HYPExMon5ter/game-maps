@@ -452,7 +452,56 @@ impl Runtime {
     pub fn method_pointer(&self, method: &Method) -> *const c_void {
         unsafe { self.backend.method_code(method.ptr) }
     }
+
+    /// A reference to `obj` to keep across frames (see [`WeakRef`]). `None` for null, or if
+    /// the runtime has no weak handles.
+    ///
+    /// # Safety
+    /// `obj` must be null or a live managed object. Attached thread only.
+    pub unsafe fn weak_ref(&self, obj: *mut ManagedObject) -> Option<WeakRef> {
+        if obj.is_null() {
+            return None;
+        }
+        let handles = self.backend.weak_handles()?;
+        let handle = (handles.new)(obj as Ptr, 0);
+        (handle != 0).then_some(WeakRef { handle, handles })
+    }
 }
+
+/// A managed object kept across frames without keeping it alive. A raw pointer to an
+/// object the garbage collector has freed points at reused memory, and reading it can crash
+/// the game; this reads as null instead. A Unity object that's only been destroyed still
+/// reads, and `Unity::is_alive` tells.
+pub struct WeakRef {
+    handle: u32,
+    handles: backend::WeakHandles,
+}
+
+impl WeakRef {
+    /// The object, or null once it's been collected.
+    ///
+    /// # Safety
+    /// Attached thread only. The pointer is only good until the garbage collector next runs:
+    /// use it right away, not across frames.
+    pub unsafe fn get(&self) -> *mut ManagedObject {
+        (self.handles.target)(self.handle) as *mut ManagedObject
+    }
+}
+
+impl Drop for WeakRef {
+    fn drop(&mut self) {
+        unsafe { (self.handles.free)(self.handle) };
+    }
+}
+
+impl std::fmt::Debug for WeakRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "WeakRef({})", self.handle)
+    }
+}
+
+// Handles are plain numbers into the runtime's thread-safe handle table.
+unsafe impl Send for WeakRef {}
 
 /// Keeps a non-game thread attached to the runtime.
 pub struct ThreadGuard<'a> {

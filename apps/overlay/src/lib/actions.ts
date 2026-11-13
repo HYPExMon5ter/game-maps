@@ -1,9 +1,11 @@
 // User actions shared across components.
 
-import { mapHandle } from '../map/handle'
+import { mapHandle, view3dHandle } from '../map/handle'
 import { isCategoryVisible, selectAllPins, useStore } from '../state/store'
 import { isPinVisible } from './filters'
 import { backend } from './backend'
+import { load3d } from './map3d'
+import { terrainHeight } from './terrain'
 import type { Pin } from './game'
 import { LABEL_ZOOM } from '../map/style'
 import { nearestUnfound } from './nearest'
@@ -59,12 +61,40 @@ export function teleportToMapPoint(ll: LngLat) {
   return runTeleport(() => backend.teleport({ kind: 'position', position: pos, snap_to_ground: true }), 'map location')
 }
 
+/** Teleports to an exact spot, height included (picked in the 3D view). */
+export function teleportToWorld(position: Vec3, layer: WorldLayer) {
+  const { game } = useStore.getState()
+  const up = projection().up
+  const lifted = { ...position, [up]: position[up] + PIN_CLEARANCE_METERS * (game?.unitsPerMeter ?? 1) }
+  return runTeleport(() => backend.teleport({ kind: 'position', position: lifted, snap_to_ground: false, layer }), 'that spot')
+}
+
+/**
+ * Tracks a spot picked on the map, so the route and compass lead there. `world` is the
+ * exact spot when the view knows it (3D); a point on the 2D map goes on the ground,
+ * or at the player's height underground.
+ */
+export async function navigateTo(ll: LngLat, world: Vec3 | undefined, layer: WorldLayer) {
+  const s = useStore.getState()
+  const p = projection()
+  let position = world
+  if (!position) {
+    position = toWorld(p, ll, 0)
+    const local = s.snapshot?.local
+    const terrain = s.game && s.map ? (await load3d(s.game.id, s.map.id))?.terrain : undefined
+    const ground = layer === 'surface' && terrain && s.game ? await terrainHeight(s.game.id, terrain, p, position) : null
+    position[p.up] = ground ?? (local ? local.position[p.up] : 0)
+  }
+  useStore.getState().setTracked({ kind: 'point', name: 'Marked spot', position, layer })
+}
+
 /** Teleports next to a live entity (player, companion, golf cart, ...). */
 export function teleportToPlayer(id: string, name: string) {
   return runTeleport(() => backend.teleport({ kind: 'player', id }), name)
 }
 
 export function flyToPin(pin: Pin) {
+  if (view3dHandle.current) return view3dHandle.current.show(pin.position)
   const map = mapHandle.current
   if (!map) return
   const ll = toLngLat(projection(), pin.position)
@@ -72,8 +102,9 @@ export function flyToPin(pin: Pin) {
 }
 
 export function centerOnPlayer() {
-  const map = mapHandle.current
   const local = useStore.getState().snapshot?.local
+  if (view3dHandle.current && local) return view3dHandle.current.show(local.position)
+  const map = mapHandle.current
   if (!map || !local) return
   const ll = toLngLat(projection(), local.position)
   map.flyTo({ center: [ll.lng, ll.lat], zoom: Math.max(map.getZoom(), 4), speed: 2 })
@@ -83,8 +114,9 @@ export function findPin(id: string): Pin | undefined {
   return selectAllPins(useStore.getState()).find((p) => p.id === id)
 }
 
-export function newCustomPinAt(ll: LngLat): Pin {
-  const pos = toWorld(projection(), ll, 0)
+/** A new custom pin at a map point, or at an exact spot when the view knows its height. */
+export function newCustomPinAt(ll: LngLat, world?: Vec3): Pin {
+  const pos = world ?? toWorld(projection(), ll, 0)
   return {
     id: `custom-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
     category: 'custom',
@@ -92,7 +124,7 @@ export function newCustomPinAt(ll: LngLat): Pin {
     position: pos,
     layer: useStore.getState().viewLayerOverride ?? (useStore.getState().snapshot?.local?.layer === 'caves' ? 'caves' : 'surface'),
     custom: true,
-    snapToGround: true,
+    snapToGround: !world,
   }
 }
 

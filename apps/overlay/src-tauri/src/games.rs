@@ -10,6 +10,8 @@ use std::path::{Component, Path, PathBuf};
 use game_maps_protocol::{Hotkey, HotkeyAction};
 use serde::{Deserialize, Serialize};
 
+use crate::mappacks::EXTRAS;
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GameEntry {
@@ -92,7 +94,8 @@ pub fn steam_build(exe: &Path, app_id: u32) -> Option<String> {
 pub struct AssetRoots<'a> {
     /// Game definitions bundled with the app (and, in development, all map data).
     pub games: &'a Path,
-    /// Installed map packs (`<packs>/<game id>/...`).
+    /// Installed map packs (`<packs>/<game id>/...`, optional parts in
+    /// `<packs>/extras/<part>/<game id>/<part>/...`).
     pub packs: &'a Path,
     /// Maps made from the running game (`<worlds>/<game id>/<world id>/...`).
     pub worlds: &'a Path,
@@ -110,7 +113,17 @@ pub fn resolve_asset(path: &str, roots: &AssetRoots) -> Vec<PathBuf> {
     }
     match root {
         // A downloaded map pack wins over bundled/development data.
-        "games" => vec![roots.packs.join(rel), roots.games.join(rel)],
+        "games" => {
+            let mut found = vec![roots.packs.join(rel)];
+            // An optional part (`<id>/3d/...`) has a folder of its own.
+            if let Some(Component::Normal(folder)) = rel.components().nth(1) {
+                if let Some(part) = EXTRAS.iter().find(|e| folder == **e) {
+                    found.push(roots.packs.join("extras").join(part).join(rel));
+                }
+            }
+            found.push(roots.games.join(rel));
+            found
+        }
         "worlds" => vec![roots.worlds.join(rel)],
         "user" => vec![roots.user.join(rel)],
         _ => Vec::new(),
@@ -142,6 +155,10 @@ mod tests {
         );
         assert_eq!(resolve_asset("user/icons/a.png", &roots), vec![u.join("icons/a.png")]);
         assert_eq!(resolve_asset("worlds/valheim/world-1/pins.json", &roots), vec![w.join("valheim/world-1/pins.json")]);
+        assert_eq!(
+            resolve_asset("games/sotf/3d/index.json", &roots),
+            vec![p.join("sotf/3d/index.json"), p.join("extras/3d/sotf/3d/index.json"), g.join("sotf/3d/index.json")]
+        );
         assert!(resolve_asset("games/../secret", &roots).is_empty());
         assert!(resolve_asset("other/x", &roots).is_empty());
         assert!(resolve_asset("games/C:/x", &roots).is_empty());
@@ -180,7 +197,12 @@ mod tests {
 
     #[test]
     fn every_category_is_in_one_group() {
-        for text in [include_str!("../../../../games/valheim/game.json"), include_str!("../../../../games/sunkenland/game.json"), include_str!("../../../../games/sons-of-the-forest/game.json")] {
+        for text in [
+            include_str!("../../../../games/valheim/game.json"),
+            include_str!("../../../../games/sunkenland/game.json"),
+            include_str!("../../../../games/sons-of-the-forest/game.json"),
+            include_str!("../../../../games/stranded-deep/game.json"),
+        ] {
             let game: serde_json::Value = serde_json::from_str(text).unwrap();
             let ids: Vec<&str> = game["categories"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap()).collect();
             let grouped: Vec<&str> = game["groups"].as_array().unwrap().iter().flat_map(|g| g["categories"].as_array().unwrap()).map(|c| c.as_str().unwrap()).collect();
@@ -223,5 +245,16 @@ mod tests {
         assert_eq!(game.process, "Sunkenland.exe");
         assert_eq!(game.steam_app_id, Some(2080690));
         assert!(game.live_features);
+    }
+
+    #[test]
+    fn parses_stranded_deep_game_json() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../games");
+        let games = load_registry(&path);
+        let game = games.iter().find(|g| g.id == "stranded-deep").expect("stranded deep registered");
+        // Not Stranded_Deep_x64.exe: that's the launcher that picks the graphics API.
+        assert_eq!(game.process, "Stranded_Deep.exe");
+        assert_eq!(game.steam_app_id, Some(313120));
+        assert!(game.live_features && game.world_maps);
     }
 }

@@ -454,6 +454,13 @@ async fn install_map_pack(app: AppHandle, packs: State<'_, MapPacks>, game_id: S
     packs.install(&app, &game_id).await
 }
 
+/// Downloads an optional part of a game's map (`"3d"`), which the player asked for.
+#[tauri::command]
+async fn install_map_extra(app: AppHandle, packs: State<'_, MapPacks>, game_id: String, extra: String) -> Result<(), String> {
+    packs.refresh(&app).await?;
+    packs.install_extra(&app, &game_id, &extra).await
+}
+
 #[tauri::command]
 fn get_update_state(updates: State<'_, Updates>) -> UpdateState {
     updates.state()
@@ -689,6 +696,7 @@ pub fn run() {
             get_setup_checks,
             get_map_packs,
             install_map_pack,
+            install_map_extra,
             get_update_state,
             check_for_updates,
             install_update,

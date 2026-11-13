@@ -6,7 +6,7 @@ use windows::core::{w, PCSTR};
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 
-use crate::backend::{cstr, Backend, Ptr};
+use crate::backend::{cstr, Backend, Ptr, WeakHandles};
 use crate::{Error, Result};
 
 macro_rules! api {
@@ -75,6 +75,7 @@ api! {
 pub(crate) struct Il2Cpp {
     api: Api,
     domain: Ptr,
+    weak: Option<WeakHandles>,
 }
 
 // The runtime is process-global and its API is thread-safe for attached threads.
@@ -95,7 +96,7 @@ impl Il2Cpp {
                 return Err(Error::DomainNotReady);
             }
             // Assemblies register during startup: the game's own is what the agent needs.
-            let il2cpp = Self { api, domain };
+            let il2cpp = Self { api, domain, weak: WeakHandles::load(module, "il2cpp_") };
             let ready = il2cpp.images().iter().any(|&i| cstr((il2cpp.api.il2cpp_image_get_name)(i)).starts_with(GAME_ASSEMBLY));
             if !ready {
                 return Err(Error::DomainNotReady);
@@ -261,5 +262,9 @@ impl Backend for Il2Cpp {
 
     unsafe fn array_element_size(&self, array_class: Ptr) -> i32 {
         (self.api.il2cpp_array_element_size)(array_class)
+    }
+
+    fn weak_handles(&self) -> Option<WeakHandles> {
+        self.weak
     }
 }

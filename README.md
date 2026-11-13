@@ -16,7 +16,7 @@ other players, and teleport. Press a key and it's there.**
 
 <sub>Real gameplay in Sons of the Forest. Click to watch the 44-second showcase on YouTube.</sub>
 
-**See it in your game:** [Sons of the Forest](docs/supported-games/sons-of-the-forest.md) · [Sunkenland](docs/supported-games/sunkenland.md) · [Valheim](docs/supported-games/valheim.md) · [Grounded 2](docs/supported-games/grounded-2.md)
+**See it in your game:** [Sons of the Forest](docs/supported-games/sons-of-the-forest.md) · [Sunkenland](docs/supported-games/sunkenland.md) · [Valheim](docs/supported-games/valheim.md) · [Stranded Deep](docs/supported-games/stranded-deep.md) · [Grounded 2](docs/supported-games/grounded-2.md)
 
 </div>
 
@@ -51,13 +51,15 @@ other players, and teleport. Press a key and it's there.**
 - **What's on an island** in Sunkenland: click a location for its level, how much of it
   you've scavenged, and the loot, plants and minerals the game lists for it.
 - **Places you've been, marked**: caves and bunkers in Sons of the Forest, dungeons in
-  Valheim and discovered locations in Sunkenland are marked found by themselves.
+  Valheim, discovered locations in Sunkenland and the islands you've landed on in Stranded
+  Deep are marked found by themselves.
 - **Your pins on the game's own map** in Valheim and Sunkenland, so friends without Game
   Maps see them too.
 - **Your bag, marked**: when you die in Sons of the Forest, a pin goes where your gear
   dropped, and it's gone once you pick it up. In Valheim, it marks your grave.
 - **Nearest biome** in Valheim: click a biome to track the closest one, and hover the map
-  to see what's under the cursor.
+  to see what's under the cursor. In Stranded Deep, the nearest land or shallows when
+  you're lost at sea.
 - **Collectibles are marked found** as you walk up to them.
 - **Custom pins** with your own names, colors and icons. Right-click any pin to track,
   edit or delete it.
@@ -93,6 +95,10 @@ other players, and teleport. Press a key and it's there.**
 <td width="50%"><img src="docs/images/sons-of-the-forest/fog-of-war.png" alt="Clouds clearing where the player has been"><br><sub>Fog of war: clouds clear where you've been</sub></td>
 </tr>
 <tr>
+<td><img src="docs/images/sons-of-the-forest/cave-3d.png" alt="Cave D in 3D, with a route that climbs two ropes to the tunnel above"><br><sub>Caves in 3D; routes swim, dive, climb ropes and ride ziplines</sub></td>
+<td><img src="docs/images/sons-of-the-forest/surface-3d.png" alt="The island tilted in 3D"><br><sub>Tilt the island to see its hills and valleys</sub></td>
+</tr>
+<tr>
 <td><img src="docs/images/sons-of-the-forest/hud.png" alt="An in-world marker, mini-map and walking route over the game"><br><sub>A marker in the world, and the route on your mini-map</sub></td>
 <td><img src="docs/images/sons-of-the-forest/pin-details.png" alt="The Rebreather's details with Tracking, Teleport and Mark found"><br><sub>Every pin says what's there; track it, teleport to it or mark it found</sub></td>
 </tr>
@@ -116,10 +122,16 @@ Each game has its own page with everything it can do, and screenshots.
 
 <table>
 <tr>
-<td width="25%" align="center"><a href="docs/supported-games/sons-of-the-forest.md"><img src="docs/images/sons-of-the-forest/map.png" alt="Sons of the Forest in Game Maps"></a><br><b><a href="docs/supported-games/sons-of-the-forest.md">Sons of the Forest</a></b><br><sub>Caves and bunkers, walking routes, Kelvin's orders</sub></td>
-<td width="25%" align="center"><a href="docs/supported-games/sunkenland.md"><img src="docs/images/sunkenland/map.png" alt="Sunkenland in Game Maps"></a><br><b><a href="docs/supported-games/sunkenland.md">Sunkenland</a></b><br><sub>Island details, crew orders, shared map marks</sub></td>
-<td width="25%" align="center"><a href="docs/supported-games/valheim.md"><img src="docs/images/valheim/map.png" alt="Valheim in Game Maps"></a><br><b><a href="docs/supported-games/valheim.md">Valheim</a></b><br><sub>A map of your own world, boss progress, nearest biome</sub></td>
-<td width="25%" align="center"><a href="docs/supported-games/grounded-2.md"><img src="docs/images/grounded-2/map.png" alt="Grounded 2 in Game Maps"></a><br><b><a href="docs/supported-games/grounded-2.md">Grounded 2</a></b><br><sub>The park and the Abyss, every collectible and resource node</sub></td>
+<td width="50%" align="center"><a href="docs/supported-games/sons-of-the-forest.md"><img src="docs/images/sons-of-the-forest/map.png" alt="Sons of the Forest in Game Maps"></a><br><b><a href="docs/supported-games/sons-of-the-forest.md">Sons of the Forest</a></b><br><sub>Caves and bunkers, walking routes, Kelvin's orders</sub></td>
+<td width="50%" align="center"><a href="docs/supported-games/sunkenland.md"><img src="docs/images/sunkenland/map.png" alt="Sunkenland in Game Maps"></a><br><b><a href="docs/supported-games/sunkenland.md">Sunkenland</a></b><br><sub>Island details, crew orders, shared map marks</sub></td>
+</tr>
+<tr>
+<td width="50%" align="center"><a href="docs/supported-games/valheim.md"><img src="docs/images/valheim/map.png" alt="Valheim in Game Maps"></a><br><b><a href="docs/supported-games/valheim.md">Valheim</a></b><br><sub>A map of your own world, boss progress, nearest biome</sub></td>
+<td width="50%" align="center"><a href="docs/supported-games/stranded-deep.md"><img src="docs/images/stranded-deep/map.png" alt="Stranded Deep in Game Maps"></a><br><b><a href="docs/supported-games/stranded-deep.md">Stranded Deep</a></b><br><sub>Every island of your world, wrecks and loot as you find them, the bosses</sub></td>
+</tr>
+<tr>
+<td width="50%" align="center"><a href="docs/supported-games/grounded-2.md"><img src="docs/images/grounded-2/map.png" alt="Grounded 2 in Game Maps"></a><br><b><a href="docs/supported-games/grounded-2.md">Grounded 2</a></b><br><sub>The park and the Abyss, every collectible and resource node</sub></td>
+<td></td>
 </tr>
 </table>
 
@@ -127,21 +139,21 @@ Every game has the map, search and filters, live location, teleport, other playe
 creatures, tracking, the mini-map, fog of war, progress, and separate data for each world.
 What's different:
 
-| | Sons of the Forest | Sunkenland | Valheim | Grounded 2 |
-|---|:---:|:---:|:---:|:---:|
-| Map comes from | Download | Download | Your world, as you load it | Download |
-| Underground map | ✓ | | | The Abyss |
-| Walking routes through caves | ✓ | | | |
-| Companion stats and orders | ✓ | ✓ | | Your buggy |
-| Your bag or grave marked | ✓ | | ✓ | ✓ |
-| Progress checklist | Key items | | Bosses | |
-| Details for each location | | ✓ | | |
-| Nearest biome | | | ✓ | |
-| Resource nodes, by resource | | | Remembered as you pass | ✓ |
-| Your pins on the game's own map | | ✓ | ✓ | |
-| Your pings on the game's own map | | | ✓ | ✓ |
-| Wind arrow on the mini-map | | ✓ | ✓ | |
-| Time and weather on the mini-map | ✓ | | ✓ | Time |
+| | Sons of the Forest | Sunkenland | Valheim | Stranded Deep | Grounded 2 |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Map comes from | Download | Download | Your world, as you load it | Your world, as you load it | Download |
+| Underground map | ✓ | | | | The Abyss |
+| Walking routes through caves | ✓ | | | | |
+| Companion stats and orders | ✓ | ✓ | | | Your buggy |
+| Your bag or grave marked | ✓ | | ✓ | | ✓ |
+| Progress checklist | Key items | | Bosses | Bosses and the carrier | |
+| Details for each location | | ✓ | | | |
+| Nearest biome | | | ✓ | Land, shallows, open and deep sea | |
+| Resource nodes | | | Remembered as you pass | Remembered as you pass | Every node, by resource |
+| Your pins on the game's own map | | ✓ | ✓ | | |
+| Your pings on the game's own map | | | ✓ | | ✓ |
+| Wind arrow on the mini-map | | ✓ | ✓ | | |
+| Time and weather on the mini-map | ✓ | | ✓ | ✓ | Time |
 
 Games with anti-cheat aren't supported. If Game Maps finds Easy Anti-Cheat or BattlEye in
 a game's folder, it won't connect to that game, since doing so could get you banned.

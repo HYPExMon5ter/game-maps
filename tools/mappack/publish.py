@@ -17,6 +17,11 @@ Packs are built reproducibly, so a game whose map data hasn't changed is skipped
 Each pack records the Steam build it was made from, so the app can tell players when the
 game has moved on, and its pin counts: a generator that silently lost a category after a
 game update stops the publish instead of reaching players.
+
+A map's optional parts (EXTRAS: `3d/`, the 3D view's data) are left out of its pack and
+published as packs of their own (`<game>-<part>-<version>.zip`, listed under the game's
+`extras` in maps.json). The app downloads one only when the player asks for it, so the
+map stays small for everyone else.
 """
 from __future__ import annotations
 
@@ -37,29 +42,36 @@ RELEASE_TAG = "maps"
 MANIFEST = "maps.json"
 # Shipped with the app, or only used during development.
 EXCLUDE = {"game.json", "preview.png", "preview-caves.png"}
+# Generator inputs that one tools/mapgen step leaves for another.
+EXCLUDE_DIRS = ("build/",)
+# Optional parts of a map: folders published as packs of their own (see the docstring).
+EXTRAS = ("3d",)
 # Already compressed; storing them avoids wasted CPU for no gain.
 STORED_EXTENSIONS = {".webp", ".png", ".jpg", ".jpeg"}
 # Fixed entry timestamp, so identical files always produce an identical zip.
 ZIP_DATE = (1980, 1, 1, 0, 0, 0)
 
 
-def pack_files(game_dir: str) -> list[tuple[str, str]]:
-    """(absolute path, archive name) for every file that belongs in the pack."""
+def pack_files(game_dir: str, extra: str | None = None) -> list[tuple[str, str]]:
+    """(absolute path, archive name) for every file that belongs in the map's pack, or
+    in the pack of one of its optional parts."""
     files = []
     for dirpath, _, names in os.walk(game_dir):
         for name in names:
             path = os.path.join(dirpath, name)
             rel = os.path.relpath(path, game_dir).replace(os.sep, "/")
-            if rel in EXCLUDE:
+            if rel in EXCLUDE or rel.startswith(EXCLUDE_DIRS):
                 continue
-            files.append((path, rel))
+            part = next((e for e in EXTRAS if rel.startswith(e + "/")), None)
+            if part == extra:
+                files.append((path, rel))
     files.sort(key=lambda f: f[1])
     return files
 
 
-def build_pack(game_dir: str, out_path: str) -> dict:
-    files = pack_files(game_dir)
-    if not any(rel.startswith("tiles/") for _, rel in files):
+def build_pack(game_dir: str, out_path: str, extra: str | None = None) -> dict:
+    files = pack_files(game_dir, extra)
+    if extra is None and not any(rel.startswith("tiles/") for _, rel in files):
         raise SystemExit(f"{game_dir} has no tiles/; generate them with tools/mapgen first")
     with zipfile.ZipFile(out_path, "w") as zf:
         for path, rel in files:
@@ -146,6 +158,17 @@ def prune_old_packs(repo: str, game: str, keep: set[str]) -> None:
             print(f"  removed old pack {name}")
 
 
+def published(repo: str, zip_path: str, info: dict) -> dict:
+    """Uploads a pack; returns its manifest fields."""
+    gh("release", "upload", RELEASE_TAG, zip_path, "--repo", repo, "--clobber")
+    name = os.path.basename(zip_path)
+    return {"url": f"https://github.com/{repo}/releases/download/{RELEASE_TAG}/{name}", "sha256": info["sha256"], "size": info["size"]}
+
+
+def zip_name(entry: dict | None) -> set[str]:
+    return {entry["url"].rsplit("/", 1)[-1]} if entry else set()
+
+
 def all_games() -> list[str]:
     return sorted(d for d in os.listdir(GAMES_DIR) if os.path.isfile(os.path.join(GAMES_DIR, d, "game.json")))
 
@@ -175,38 +198,57 @@ def main() -> None:
     version = dt.datetime.now(dt.timezone.utc).strftime("%Y.%m.%d.%H%M%S")
 
     for game in games:
-        zip_name = f"{game}-{version}.zip"
-        zip_path = os.path.join(out_dir, zip_name)
-        info = build_pack(os.path.join(GAMES_DIR, game), zip_path)
+        game_dir = os.path.join(GAMES_DIR, game)
+        zip_path = os.path.join(out_dir, f"{game}-{version}.zip")
+        info = build_pack(game_dir, zip_path)
         print(f"{game}: {info['files']} files, {info['size'] / 1e6:.1f} MB")
+        extras = {}
+        for extra in EXTRAS:
+            if pack_files(game_dir, extra):
+                path = os.path.join(out_dir, f"{game}-{extra}-{version}.zip")
+                extras[extra] = (path, build_pack(game_dir, path, extra))
+                print(f"  {extra}: {extras[extra][1]['files']} files, {extras[extra][1]['size'] / 1e6:.1f} MB")
         if manifest is None:
-            print(f"  built {zip_path}")
+            for path in [zip_path] + [p for p, _ in extras.values()]:
+                print(f"  built {path}")
             continue
         current = manifest.setdefault("packs", {}).get(game)
-        counts = pin_counts(os.path.join(GAMES_DIR, game))
+        counts = pin_counts(game_dir)
         lost = lost_pins((current or {}).get("pinCounts", {}), counts)
         if lost and not args.force:
-            os.remove(zip_path)
             raise SystemExit(f"{game}: pins went missing, check the generators (--force to publish anyway):\n  " + "\n  ".join(lost))
-        if current and current.get("sha256") == info["sha256"] and not args.force:
-            print("  unchanged since the last publish, skipped")
-            os.remove(zip_path)
+        # Upload each pack before the manifest that points to it.
+        entry = dict(current or {})
+        changed = False
+        if not current or current.get("sha256") != info["sha256"] or args.force:
+            entry.update(version=version, **published(args.repo, zip_path, info), gameBuild=game_build(game_dir), pinCounts=counts)
+            changed = True
+            print(f"  map: published version {version}")
+        else:
+            print("  map: unchanged since the last publish, skipped")
+        old_extras = (current or {}).get("extras", {})
+        entry["extras"] = {}
+        for extra, (path, extra_info) in extras.items():
+            old = old_extras.get(extra)
+            if old and old.get("sha256") == extra_info["sha256"] and not args.force:
+                entry["extras"][extra] = old
+                print(f"  {extra}: unchanged since the last publish, skipped")
+                continue
+            entry["extras"][extra] = {"version": version, **published(args.repo, path, extra_info)}
+            changed = True
+            print(f"  {extra}: published version {version}")
+        if not entry["extras"]:
+            del entry["extras"]
+        changed |= set(entry.get("extras", {})) != set(old_extras)
+        if not changed:
             continue
-        # Upload the pack before the manifest that points to it.
-        gh("release", "upload", RELEASE_TAG, zip_path, "--repo", args.repo, "--clobber")
-        manifest["packs"][game] = {
-            "version": version,
-            "url": f"https://github.com/{args.repo}/releases/download/{RELEASE_TAG}/{zip_name}",
-            "sha256": info["sha256"],
-            "size": info["size"],
-            "gameBuild": game_build(os.path.join(GAMES_DIR, game)),
-            "pinCounts": counts,
-        }
+        manifest["packs"][game] = entry
         upload_manifest(args.repo, manifest)
-        keep = {zip_name} | ({current["url"].rsplit("/", 1)[-1]} if current else set())
+        # The ones replaced last are kept, so apps that were mid-download can finish.
+        keep = zip_name(entry) | zip_name(current)
+        for extra in set(entry.get("extras", {})) | set(old_extras):
+            keep |= zip_name(entry.get("extras", {}).get(extra)) | zip_name(old_extras.get(extra))
         prune_old_packs(args.repo, game, keep)
-        print(f"  published version {version}")
-
 
 if __name__ == "__main__":
     try:

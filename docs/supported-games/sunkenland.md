@@ -5,7 +5,7 @@
 **The whole drowned world from above, with what's on each island, your crew's orders, and
 marks everyone in the world can see.**
 
-[All games](../../README.md#supported-games) · [Sons of the Forest](sons-of-the-forest.md) · [Valheim](valheim.md) · [Grounded 2](grounded-2.md)
+[All games](../../README.md#supported-games) · [Sons of the Forest](sons-of-the-forest.md) · [Valheim](valheim.md) · [Stranded Deep](stranded-deep.md) · [Grounded 2](grounded-2.md)
 
 <img src="../images/sunkenland/map.png" alt="The Sunkenland map showing only iron ore" width="900">
 

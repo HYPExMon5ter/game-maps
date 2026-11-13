@@ -3,6 +3,7 @@
 
 mod grounded2;
 mod sotf;
+mod stranded_deep;
 mod sunkenland;
 mod valheim;
 
@@ -57,6 +58,13 @@ pub trait Provider<E: Engine = UnityEngine>: Send {
     unsafe fn begin_export(&mut self, _cx: &E::Cx<'_>) -> Result<(), String> {
         Err("world export is not supported for this game".into())
     }
+
+    /// Work that carries on over frames after a command (a teleport waiting for the
+    /// ground to load). Called every frame.
+    ///
+    /// # Safety
+    /// Must run on the game's main thread.
+    unsafe fn every_frame(&mut self, _cx: &E::Cx<'_>) {}
 
     /// Advances a running export; `Some` once it has finished. Called every frame.
     ///
@@ -167,6 +175,7 @@ pub fn detect(rt: &Runtime) -> Option<Box<dyn Provider<UnityEngine>>> {
         .map(|p| Box::new(p) as Box<dyn Provider>)
         .or_else(|| sunkenland::Sunkenland::detect(rt).map(|p| Box::new(p) as Box<dyn Provider>))
         .or_else(|| valheim::Valheim::detect(rt).map(|p| Box::new(p) as Box<dyn Provider>))
+        .or_else(|| stranded_deep::StrandedDeep::detect(rt).map(|p| Box::new(p) as Box<dyn Provider>))
 }
 
 /// Picks the provider for the running Unreal game, if one exists.

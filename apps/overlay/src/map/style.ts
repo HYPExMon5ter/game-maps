@@ -119,7 +119,26 @@ export function buildStyle(game: GameDefinition, map: GameMap, assetOrigin: stri
         id: 'track-line',
         type: 'line',
         source: 'track',
-        paint: { 'line-color': '#ffe08a', 'line-width': 2.5, 'line-dasharray': [2, 1.5], 'line-opacity': 0.9 },
+        filter: ['==', ['get', 'walkable'], true],
+        // Colored by how each stretch is travelled (`MOVE_COLORS`).
+        paint: { 'line-color': ['coalesce', ['get', 'color'], '#ffe08a'], 'line-width': 2.5, 'line-dasharray': [2, 1.5], 'line-opacity': 0.9 },
+      },
+      {
+        // The rest of the way where there's no walking route: a straight, faint line.
+        id: 'track-rest',
+        type: 'line',
+        source: 'track',
+        filter: ['==', ['get', 'walkable'], false],
+        layout: { 'line-cap': 'round' },
+        paint: { 'line-color': '#ffe08a', 'line-width': 2, 'line-dasharray': [0.1, 2.2], 'line-opacity': 0.55 },
+      },
+      {
+        // What's tracked, ringed (a spot picked on the map has no pin of its own).
+        id: 'track-target',
+        type: 'circle',
+        source: 'track',
+        filter: ['==', ['geometry-type'], 'Point'],
+        paint: { 'circle-radius': 9, 'circle-color': 'rgba(255,224,138,0.18)', 'circle-stroke-color': '#ffe08a', 'circle-stroke-width': 2 },
       },
       {
         // Every pin as a small dot, under the badges: where decluttering hides a badge,
@@ -246,7 +265,7 @@ export function buildStyle(game: GameDefinition, map: GameMap, assetOrigin: stri
 }
 
 /** Shrinks bounds slightly so MapLibre doesn't request neighbor tiles that only touch the edge. */
-function insetBounds([w, s, e, n]: [number, number, number, number]): [number, number, number, number] {
+export function insetBounds([w, s, e, n]: [number, number, number, number]): [number, number, number, number] {
   const dx = (e - w) * 1e-4
   const dy = (n - s) * 1e-4
   return [w + dx, s + dy, e - dx, n - dy]

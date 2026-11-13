@@ -5,7 +5,7 @@
 **Brookhollow Park and the Abyss on one map, with every landmark, optical disk, raw
 science and resource node on it, and you, your friends and the bugs around you live.**
 
-[All games](../../README.md#supported-games) · [Sons of the Forest](sons-of-the-forest.md) · [Sunkenland](sunkenland.md) · [Valheim](valheim.md)
+[All games](../../README.md#supported-games) · [Sons of the Forest](sons-of-the-forest.md) · [Sunkenland](sunkenland.md) · [Valheim](valheim.md) · [Stranded Deep](stranded-deep.md)
 
 <img src="../images/grounded-2/map.png" alt="Brookhollow Park in Game Maps, with pins over the game's own map art" width="900">
 

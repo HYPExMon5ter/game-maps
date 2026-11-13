@@ -20,6 +20,7 @@ yet), **Deferred** (wanted, waiting on something).
 | Maps on demand | Built | A game's map downloads only when it's needed: Play, Connect, opening its map, a Download button, or the first run of a game set to connect automatically. |
 | Completion tracker | Built | Progress per collectible category with what's left, per world. |
 | Map on a second monitor | Built | An always-on, interactive map window on a chosen monitor that follows you live while you play on the main screen. |
+| 3D map | Built | A 3D toggle on the full map: tilted terrain on the surface (MapLibre terrain), and 3D models of caves and other underground areas with players, pins and the route at their real heights (three.js, loaded only when used, drawn only when something changes). The mini-map stays 2D. The 3D data is a separate download the player opts into the first time they pick 3D, so the regular map stays small. Sons of the Forest so far; any game that publishes `3d/` gets it (Valheim would need its terrain from the running world). |
 | Path history | Built | A trail of where you walked since the app started, on the map and mini-map. |
 | Death marker | Built | A pin where you last died, to recover your gear. In Sons of the Forest it moves to your dropped bag, and goes when you pick that up. In Valheim it marks your grave. Death detection is per game (Sons of the Forest and Valheim so far); the pin is shared code. |
 | Pin menu | Built | Right-click a pin, on the map or in a list, to track, edit or delete it, or mark it found. |
@@ -146,6 +147,22 @@ yet), **Deferred** (wanted, waiting on something).
 | Island details | Built | A location's pin shows its level, how much is scavenged, and its key finds, scarce loot, plants and minerals, as the game's map panel does. Read only when the pin is opened (under 50 ms, while the map is open), so it costs nothing while playing. |
 | Fuel range ring | Deferred | Left out for now: the fuel level is easy to read, but range needs real burn rates measured on a boat, and a wrong ring could strand someone. |
 | In-game pins and pings | Built | Your pins become map marks everyone in the world can see, up to the game's limit, with names cut to its 8 characters. The game has no ping. Not tested with a second player yet. |
+
+## Stranded Deep
+
+| Feature | Status | Notes |
+|---|---|---|
+| Map from the running game | Built | Every zone's terrain is in memory from the start, so the whole world is drawn on the first load (about 10 ms of reading). |
+| Islands, arenas and the carrier | Built | All 49 zones pinned, islands by their names in the game. Islands landed on are marked found, from before Game Maps too. |
+| Remembered things | Built | Wrecks, shelters, loot, salvage, plants, clay and stone, animal dens, and the player's rafts and buildings, read from loaded zones a few dozen objects at a time (60–170 µs a step). |
+| Creatures and bosses | Built | From the game's own lists and the spawners the zones hold, about 45 µs a read; bosses are searched for only in their arenas. Passive wildlife counts as harmless. |
+| Story checklist | Built | The three bosses and the carrier, ticked once visited. |
+| Bosses beaten | Deferred | No record of a beaten boss was found: the arenas save only their position, so the checklist goes by visits. Worth another look by beating one in a test world. |
+| Teleport out of a boss fight | Deferred | Refused: the game only ends a fight when it sees the player swim away inside the arena, so a teleport would leave it running. |
+| Wind on the mini-map | Deferred | Left out: the game has a wind direction, but sails push the raft forward whatever it is, so an arrow would mislead. |
+| Second player | Built | Players from `PlayerRegistry` and the session from Photon Bolt; tested with a fake friend, not a second player yet. |
+| In-game pins and pings | Deferred | Not possible: the game has no map or ping of its own. |
+| Loot left in containers | Idea | Hide crates and lockers that have been emptied. Needs their storage read. |
 
 ## Grounded 2
 
