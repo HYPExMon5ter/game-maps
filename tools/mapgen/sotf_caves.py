@@ -326,6 +326,9 @@ def load_floor_scans(game_dir: str) -> list[dict]:
 
 # A collision floor this close to one the game found (decimeters) is the same floor.
 SAME_FLOOR_DM = 5
+# Floors kept per cell in the cave grids. The game's scan keeps three, but a stairwell in
+# Bunker Residential stacks four flights, and with three the lowest one fell out.
+NAV_LAYERS = 4
 
 
 def fill_from_collision(scan: dict, collision: list[dict]) -> tuple[dict, int]:
@@ -333,8 +336,10 @@ def fill_from_collision(scan: dict, collision: list[dict]) -> tuple[dict, int]:
     floor within it (the game caps a scan's size), with the floors that scan has and the
     game's doesn't added (see `mesh3d.pick_floors`: the game keeps a few floors per
     cell, and the tops of rock between stacked tunnels can crowd a lower tunnel out; the
-    game's scan also starts lower near cave entrances). Also how many were added."""
-    layers, cell = scan["layers"], scan["cell"]
+    game's scan also starts lower near cave entrances), keeping `NAV_LAYERS` floors per
+    cell. Also how many were added."""
+    scanned, cell = scan["layers"], scan["cell"]
+    layers = max(scanned, NAV_LAYERS)
     h, w = scan["height"], scan["width"]
     ox, oz = scan["origin_x"], scan["origin_z"]
 
@@ -356,8 +361,8 @@ def fill_from_collision(scan: dict, collision: list[dict]) -> tuple[dict, int]:
     OX, OZ = ox - grow_w * cell, oz - grow_s * cell
     floors = np.full((layers, H, W), NONE, np.int16)
     room = np.full((layers, H, W), NONE, np.int16)
-    floors[:, grow_s : grow_s + h, grow_w : grow_w + w] = np.frombuffer(base64.b64decode(scan["floors"]), "<i2").reshape(layers, h, w)
-    room[:, grow_s : grow_s + h, grow_w : grow_w + w] = np.frombuffer(base64.b64decode(scan["clearance"]), "<i2").reshape(layers, h, w)
+    floors[:scanned, grow_s : grow_s + h, grow_w : grow_w + w] = np.frombuffer(base64.b64decode(scan["floors"]), "<i2").reshape(scanned, h, w)
+    room[:scanned, grow_s : grow_s + h, grow_w : grow_w + w] = np.frombuffer(base64.b64decode(scan["clearance"]), "<i2").reshape(scanned, h, w)
     # The collision scan's cell under each cell center.
     cc = np.floor((OX + (np.arange(W) + 0.5) * cell - best["origin_x"]) / best["cell"]).astype(np.int64)
     rr = np.floor((OZ + (np.arange(H) + 0.5) * cell - best["origin_z"]) / best["cell"]).astype(np.int64)
@@ -380,7 +385,7 @@ def fill_from_collision(scan: dict, collision: list[dict]) -> tuple[dict, int]:
     survived = (has[:, None] & (floors[:, None] == picked_floors[None])).any(axis=1)
     added = int((picked_floors != NONE).sum() - survived.sum())
     encode = lambda a: base64.b64encode(a.astype("<i2").tobytes()).decode()  # noqa: E731
-    grown = {**scan, "origin_x": OX, "origin_z": OZ, "width": W, "height": H, "floors": encode(picked_floors), "clearance": encode(picked_room)}
+    grown = {**scan, "origin_x": OX, "origin_z": OZ, "width": W, "height": H, "layers": layers, "floors": encode(picked_floors), "clearance": encode(picked_room)}
     return grown, added
 
 

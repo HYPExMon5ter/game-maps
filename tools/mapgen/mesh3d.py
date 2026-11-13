@@ -251,6 +251,9 @@ CANDIDATES = 8
 MIN_ROOM_DM = 16
 # Headroom as far as it's measured (decimeters): nothing above at all.
 OPEN_DM = 120
+# Room (decimeters) to stand up in. A floor with less (crouching room) is often the
+# landing under a flight of stairs, kept after floors with more (see `pick_floors`).
+STAND_DM = 20
 
 
 def pick_floors(floors: np.ndarray, clearance: np.ndarray, layers: int, min_room_dm: int = MIN_ROOM_DM) -> tuple[np.ndarray, np.ndarray]:
@@ -260,7 +263,9 @@ def pick_floors(floors: np.ndarray, clearance: np.ndarray, layers: int, min_room
     just under it, with nothing facing down between).
 
     First come floors with room to stand and a ceiling over them: inside a cave there's
-    always one. Then those with nothing over them at all, which underground are mostly
+    always one. Those with room to stand up come before those with only crouching room
+    (in a stairwell the slab under the next flight up has about 1.6 m, and would crowd
+    out the flight below it). Then those with nothing over them at all, which underground are mostly
     the outsides of rocks buried in the ground (there's no collision inside solid
     ground to stop a ray), and big chambers. Then the rest: tops of rock between stacked
     tunnels, which would otherwise crowd a lower tunnel out. Highest first within each.
@@ -273,7 +278,8 @@ def pick_floors(floors: np.ndarray, clearance: np.ndarray, layers: int, min_room
     gap[1:] = np.where(has[:-1] & has[1:], f[:-1] - f[1:], gap[1:])
     clearance = np.where(has, np.minimum(clearance, gap), clearance).astype(clearance.dtype)
     roomy = clearance >= min_room_dm
-    rank = np.where(has, roomy * 100000 + (roomy & (clearance < OPEN_DM)) * 100000 + f, -(10**9))
+    roofed = roomy & (clearance < OPEN_DM)
+    rank = np.where(has, roomy * 100000 + roofed * 100000 + (roofed & (clearance >= STAND_DM)) * 100000 + f, -(10**9))
     order = np.argsort(-rank, axis=0, kind="stable")[:layers]
     f, c = np.take_along_axis(floors, order, 0), np.take_along_axis(clearance, order, 0)
     order = np.argsort(-np.where(f != NO_FLOOR, f.astype(np.int64), -(10**9)), axis=0, kind="stable")

@@ -1,4 +1,5 @@
 """Tests for the cave grids: python -I -m unittest discover -s tools/mapgen"""
+import base64
 import os
 import sys
 import unittest
@@ -122,6 +123,23 @@ class Links(unittest.TestCase):
         floors = np.zeros((1, 3, 3), np.int16)  # all at 0 m: nothing near a rope top at 20 m
         rope = {"top": [1.5, 21.0, 1.5], "bottom": [1.5, 1.0, 1.5]}
         self.assertEqual(sotf_caves.links(floors, self.scan, {"ropes": [rope], "ziplines": []}), [])
+
+
+class FillFromCollision(unittest.TestCase):
+    def test_a_stairwell_keeps_all_four_flights(self):
+        # The game found three floors in a 1-cell scan; the collision has a fourth below.
+        def encode(a):
+            return base64.b64encode(np.asarray(a, "<i2").tobytes()).decode()
+
+        scan = {"area": 1, "origin_x": 0.0, "origin_z": 0.0, "cell": 1.0, "width": 1, "height": 1, "layers": 3,
+                "floors": encode([2132, 2058, 1984]), "clearance": encode([55, 55, 55])}
+        flights = np.array([2132, 2058, 1984, 1910], np.int16).reshape(4, 1, 1)
+        collision = [{"origin_x": 0.0, "origin_z": 0.0, "cell": 1.0, "width": 1, "height": 1,
+                      "floors": flights, "clearance": np.full((4, 1, 1), 55, np.int16)}]
+        grown, added = sotf_caves.fill_from_collision(scan, collision)
+        floors = np.frombuffer(base64.b64decode(grown["floors"]), "<i2")
+        self.assertEqual((grown["layers"], added), (4, 1))
+        self.assertEqual(floors.tolist(), [2132, 2058, 1984, 1910])
 
 
 if __name__ == "__main__":

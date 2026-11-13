@@ -167,6 +167,14 @@ class PickFloors(unittest.TestCase):
         self.assertEqual(f[:, 0, 0].tolist(), [50, 45, 0])
         self.assertEqual(r[:, 0, 0].tolist(), [30, 5, 40])
 
+    def test_stair_flights_come_before_the_landing_slabs_over_them(self):
+        # Bunker Residential's stairwell: flights with 5.5 m over them, and the slabs
+        # under the next flight up with 1.6 m.
+        floors = np.array([[[2076]], [[2058]], [[2002]], [[1984]], [[1928]]], np.int16)
+        room = np.array([[[55]], [[16]], [[55]], [[16]], [[55]]], np.int16)
+        f, _ = mesh3d.pick_floors(floors, room, 3)
+        self.assertEqual(f[:, 0, 0].tolist(), [2076, 2002, 1928])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -56,6 +56,9 @@ ZIPLINE = "ZipLineController"
 ZIPLINE_ENDS = ("AnchorA", "AnchorB")
 # The in-game floor scan starts this far under the terrain (`cave_scan.rs`).
 SCAN_BELOW_GROUND = 0.3
+# Floors per cell in the collision scan: as many as the cave grids keep
+# (`sotf_caves.NAV_LAYERS`).
+SCAN_LAYERS = 4
 # Copies placed in a scene are numbered: "ClimbingRopeRock (3)".
 COPY_NUMBER = re.compile(r" \(\d+\)$")
 # Parts of a cave that the game turns on once it's opened up (Cave H's entrance): what's
@@ -160,7 +163,7 @@ def write_floor_scan(g: Group, p: np.ndarray, f: np.ndarray, terrain: dict, buil
     the scan, only what's under the terrain counts (not the rocks at an entrance), and
     the terrain stops headroom."""
     t0 = time.time()
-    scan = mesh3d.floor_scan(p[f].astype(np.float32), ground=lambda x, z: ground_height(terrain, x, z), below_ground=SCAN_BELOW_GROUND)
+    scan = mesh3d.floor_scan(p[f].astype(np.float32), layers=SCAN_LAYERS, ground=lambda x, z: ground_height(terrain, x, z), below_ground=SCAN_BELOW_GROUND)
     os.makedirs(build_dir, exist_ok=True)
     np.savez_compressed(os.path.join(build_dir, f"floors-{g.id}.npz"), **scan)
     found = int((scan["floors"] != mesh3d.NO_FLOOR).sum())
