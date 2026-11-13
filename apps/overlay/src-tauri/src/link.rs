@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use game_maps_protocol::{
     PlaceInfo,
     decode_line, encode_line, pipe_name, AgentMessage, AppMessage, Capabilities, CompanionOrderOption, Hotkey, HotkeyAction, LogLevel, TeleportTarget,
-    GamePin, GroundPoint, PathInfo, RouteCheck, Vec3, WorldExport, WorldLayer, WorldMap, WorldSnapshot, PROTOCOL_VERSION,
+    GamePin, GameWorld, GroundPoint, PathInfo, RouteCheck, Vec3, WorldExport, WorldKind, WorldLayer, WorldMap, WorldSnapshot, PROTOCOL_VERSION,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -84,6 +84,28 @@ fn ui_wants_update(app: &AppHandle, inner: &mut Inner) -> bool {
     wanted
 }
 
+/// The save of someone else's game the player joined.
+struct JoinedWorld {
+    pid: u32,
+    session: String,
+    world: GameWorld,
+}
+
+/// Sons of the Forest only gives a client its save id around joining, so an agent attached
+/// later reports the same world as unsaved, and the map would drop the player's pins and
+/// found items for an empty world. The same game process in the same multiplayer session
+/// is still that save.
+fn keep_joined_world(joined: &mut Option<JoinedWorld>, pid: u32, snapshot: &mut WorldSnapshot) {
+    let (Some(world), Some(session)) = (&snapshot.world, &snapshot.session) else { return };
+    if !world.id.starts_with("unsaved:") {
+        if world.kind == WorldKind::Joined {
+            *joined = Some(JoinedWorld { pid, session: session.id.clone(), world: world.clone() });
+        }
+    } else if let Some(known) = joined.as_ref().filter(|j| j.pid == pid && j.session == session.id) {
+        snapshot.world = Some(known.world.clone());
+    }
+}
+
 /// Wait before the next attempt after `failures` failed ones: 5 s, doubling up to a minute.
 fn retry_delay(failures: u32) -> Duration {
     Duration::from_secs(5u64.saturating_mul(1u64 << failures.min(10))).min(MAX_RETRY_DELAY)
@@ -136,6 +158,8 @@ struct Inner {
     last_message: Option<Instant>,
     /// The world last reported, for telling when the player is in another one.
     world_id: Option<String>,
+    /// Outlives the agent connection (see `keep_joined_world`).
+    joined_world: Option<JoinedWorld>,
     /// A whole snapshot was held back from the UI, so it can't take updates yet.
     ui_behind: bool,
     /// The last route found: every window showing the map asks for it.
@@ -239,6 +263,7 @@ impl AgentLink {
                 hidden_sent_at: None,
                 last_message: None,
                 world_id: None,
+                joined_world: None,
                 ui_behind: false,
                 route: None,
             }),
@@ -814,8 +839,9 @@ impl AgentLink {
                 log::info!("agent {agent_version} attached (game={agent_game:?}, caps={capabilities:?})");
                 self.set_status(app, LinkStatus { state, game_id: Some(game.id.clone()), pid: Some(pid), capabilities: Some(capabilities), message });
             }
-            AgentMessage::Snapshot(snap) => {
+            AgentMessage::Snapshot(mut snap) => {
                 let mut inner = self.inner.lock().unwrap();
+                keep_joined_world(&mut inner.joined_world, pid, &mut snap);
                 if let Some(world) = snap.world.as_ref().filter(|w| Some(&w.id) != inner.world_id.as_ref()) {
                     // "Teleport back" has nowhere to go in another world.
                     inner.world_id = Some(world.id.clone());
@@ -892,5 +918,47 @@ impl AgentLink {
                 let _ = app.emit("agent-log", AgentLog { level, message });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use game_maps_protocol::MultiplayerSession;
+
+    use super::*;
+
+    fn snapshot(world: &str, kind: WorldKind, session: Option<&str>) -> WorldSnapshot {
+        WorldSnapshot {
+            world: Some(GameWorld { id: world.into(), name: None, kind }),
+            session: session.map(|id| MultiplayerSession { id: id.into(), player_name: None }),
+            ..Default::default()
+        }
+    }
+
+    fn world_after(joined: &mut Option<JoinedWorld>, pid: u32, mut snap: WorldSnapshot) -> String {
+        keep_joined_world(joined, pid, &mut snap);
+        snap.world.unwrap().id
+    }
+
+    #[test]
+    fn reconnecting_in_the_same_session_keeps_the_joined_save() {
+        let mut joined = None;
+        assert_eq!(world_after(&mut joined, 1, snapshot("client:7", WorldKind::Joined, Some("lobby:1"))), "client:7");
+        assert_eq!(world_after(&mut joined, 1, snapshot("unsaved:1-1", WorldKind::Joined, Some("lobby:1"))), "client:7");
+    }
+
+    #[test]
+    fn another_session_or_process_is_not_that_save() {
+        let mut joined = None;
+        world_after(&mut joined, 1, snapshot("client:7", WorldKind::Joined, Some("lobby:1")));
+        assert_eq!(world_after(&mut joined, 1, snapshot("unsaved:1-2", WorldKind::Joined, Some("lobby:2"))), "unsaved:1-2");
+        assert_eq!(world_after(&mut joined, 2, snapshot("unsaved:2-1", WorldKind::Joined, Some("lobby:1"))), "unsaved:2-1");
+    }
+
+    #[test]
+    fn only_joined_saves_are_remembered() {
+        let mut joined = None;
+        world_after(&mut joined, 1, snapshot("mp:7", WorldKind::Hosted, Some("lobby:1")));
+        assert_eq!(world_after(&mut joined, 1, snapshot("unsaved:1-1", WorldKind::Hosted, Some("lobby:1"))), "unsaved:1-1");
     }
 }
