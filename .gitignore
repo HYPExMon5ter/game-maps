@@ -10,6 +10,7 @@ apps/overlay/src-tauri/gen/
 # Generated from the user's game install by tools/mapgen (game-derived assets).
 games/*/tiles/
 games/*/nav/
+games/*/3d/
 games/*/build/
 games/*/icons/game/
 games/*/preview*.png

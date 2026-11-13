@@ -95,6 +95,10 @@ other players, and teleport. Press a key and it's there.**
 <td width="50%"><img src="docs/images/sons-of-the-forest/fog-of-war.png" alt="Clouds clearing where the player has been"><br><sub>Fog of war: clouds clear where you've been</sub></td>
 </tr>
 <tr>
+<td><img src="docs/images/sons-of-the-forest/cave-3d.png" alt="Cave D in 3D, with a route that climbs two ropes to the tunnel above"><br><sub>Caves in 3D; routes swim, dive, climb ropes and ride ziplines</sub></td>
+<td><img src="docs/images/sons-of-the-forest/surface-3d.png" alt="The island tilted in 3D"><br><sub>Tilt the island to see its hills and valleys</sub></td>
+</tr>
+<tr>
 <td><img src="docs/images/sons-of-the-forest/hud.png" alt="An in-world marker, mini-map and walking route over the game"><br><sub>A marker in the world, and the route on your mini-map</sub></td>
 <td><img src="docs/images/sons-of-the-forest/pin-details.png" alt="The Rebreather's details with Tracking, Teleport and Mark found"><br><sub>Every pin says what's there; track it, teleport to it or mark it found</sub></td>
 </tr>

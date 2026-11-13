@@ -11,6 +11,7 @@ import { useSyncStore } from '../lib/sync/sync'
 import { CONNECTION_LABELS, connectionOf } from '../lib/together'
 import { useCanTeleport } from '../lib/teleport'
 import { selectViewLayer, useStore } from '../state/store'
+import { use3DDownload, useMap3D, useView3D } from '../state/view3d'
 import { IconButton } from './controls'
 import { WorldMenu } from './WorldMenu'
 import { LiveActions } from './LiveActions'
@@ -133,6 +134,19 @@ export function TopBar({ onSettings, settingsOpen }: { onSettings: () => void; s
   const backSteps = useStore((s) => s.backSteps)
   const backKey = useSettings((s) => s.app?.back_key ?? null)
   const canTeleport = useCanTeleport()
+  const data3d = useMap3D()
+  const download3d = use3DDownload()
+  // Offered once there's 3D data to show or to download.
+  const has3d = data3d !== null || download3d.state === 'available' || download3d.state === 'downloading'
+  const map3d = useSettings((s) => s.ui.map3d)
+  const setUi = useSettings((s) => s.setUi)
+  const setOffer = useView3D((s) => s.setOffer)
+  // 3D without the data asks before downloading it (see `Download3D`).
+  const pick3d = (on: boolean) => {
+    if (on && data3d === null && download3d.state === 'available') return setOffer(true)
+    setOffer(false)
+    setUi({ map3d: on })
+  }
 
   return (
     <header className="glass flex h-12 items-center gap-1 rounded-2xl px-2">
@@ -148,6 +162,22 @@ export function TopBar({ onSettings, settingsOpen }: { onSettings: () => void; s
               onClick={() => setViewLayer(override === l ? null : l)}
             >
               {LAYER_LABELS[l]}
+            </button>
+          ))}
+        </div>
+      )}
+      {has3d && (
+        <div className="mr-1 flex items-center rounded-lg bg-black/30 p-0.5 text-[12px]" role="radiogroup" aria-label="Map view">
+          {([false, true] as const).map((on) => (
+            <button
+              key={String(on)}
+              role="radio"
+              aria-checked={map3d === on}
+              title={on ? 'Tilt the terrain; see caves and bunkers as 3D models' : 'The flat map'}
+              className={`rounded-md px-2 py-1 ${map3d === on ? 'bg-white/15 text-ink' : 'text-ink-dim hover:text-ink'}`}
+              onClick={() => pick3d(on)}
+            >
+              {on ? '3D' : '2D'}
             </button>
           ))}
         </div>

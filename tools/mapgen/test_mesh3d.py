@@ -1,4 +1,5 @@
-"""Tests for the shared 3D geometry: python -I -m unittest discover -s tools/mapgen"""
+"""Tests for the 3D map data: python -I -m unittest discover -s tools/mapgen"""
+import json
 import os
 import sys
 import tempfile
@@ -69,6 +70,16 @@ class MeshFiles(unittest.TestCase):
             entry = mesh3d.write_mesh(os.path.join(d, "m.bin"), p, f)
         self.assertEqual(entry, {"min": [0.0, 0.0, 0.0], "max": [4.0, 5.0, 6.0], "triangles": 1})
 
+    def test_index_updates_keep_other_fields(self):
+        with tempfile.TemporaryDirectory() as d:
+            mesh3d.update_index(d, "surface", terrain={"url": "t"})
+            mesh3d.update_index(d, "surface", meshes=[{"id": "a"}])
+            mesh3d.update_index(d, "surface", terrain=None)
+            with open(os.path.join(d, "3d", "index.json")) as f:
+                index = json.load(f)
+        self.assertEqual(index, {"version": 1, "maps": {"surface": {"meshes": [{"id": "a"}]}}})
+
+
 class Normals(unittest.TestCase):
     def test_smooth_normals_follow_the_front_faces(self):
         # Two triangles folded along x, both facing up-ish.
@@ -99,6 +110,24 @@ class Weld(unittest.TestCase):
         q, g = mesh3d.weld(p, f)
         self.assertEqual(len(q), 3)
         self.assertEqual(len(g), 1)
+
+
+class Elevation(unittest.TestCase):
+    def test_terrain_rgb_encoding(self):
+        rgb = mesh3d.encode_dem(np.array([[0.0, 123.4, -19.0]]))
+        decoded = -10000 + (rgb[..., 0].astype(int) * 65536 + rgb[..., 1].astype(int) * 256 + rgb[..., 2]) / 10
+        self.assertTrue(np.allclose(decoded, [[0.0, 123.4, -19.0]], atol=0.05))
+
+    def test_tiles_cover_the_map_tile_at_each_zoom(self):
+        h = np.linspace(0, 100, 64 * 64, dtype=np.float32).reshape(64, 64)
+        with tempfile.TemporaryDirectory() as d:
+            lo, hi = mesh3d.write_dem_tiles(h, d, 3, 3, 3, 5)
+            names = sorted(os.path.relpath(os.path.join(r, n), d).replace(os.sep, "/") for r, _, ns in os.walk(d) for n in ns)
+        self.assertEqual((lo, hi), (3, 5))
+        self.assertIn("3/3/3.webp", names)
+        self.assertIn("4/6/7.webp", names)
+        self.assertIn("5/15/15.webp", names)
+        self.assertEqual(len(names), 1 + 4 + 16)
 
 
 def quad(x0, z0, x1, z1, y, up=True):

@@ -1,7 +1,20 @@
-"""3D geometry shared by every game's map tools: box colliders as triangles, floor
-scans of collision, and a compact mesh file format.
+"""3D map data shared by every game: compact meshes for the overlay's 3D view, box
+colliders as triangles, floor scans of collision and terrain elevation tiles.
 
-Positions are game world units (Unity: x east, y up, z north).
+A game's 3D data lives in `games/<id>/3d/`. `index.json` lists, per map id, the terrain
+elevation tiles (for tilting the surface map) and the meshes (caves, bunkers, ...):
+
+    {"version": 1, "maps": {"surface": {
+        "terrain": {"url": "3d/dem/{z}/{x}/{y}.webp", "tileSize": 256, "minNativeZoom": 3,
+                    "maxNativeZoom": 5, "minHeight": -19.0, "maxHeight": 733.9},
+        "meshes": [{"id": "cave-a", "name": "Cave A", "file": "3d/cave-a.bin",
+                    "min": [x, y, z], "max": [x, y, z], "triangles": 41000,
+                    "water": "3d/cave-a-water.bin"}]}}}
+
+`water` (optional) is the area's water surfaces, in the same mesh format.
+
+Paths are relative to the game folder. Positions are game world units (Unity: x east,
+y up, z north).
 
 Mesh files (`.bin`, little-endian):
     0   "GM3D"
@@ -24,10 +37,13 @@ differ a lot, so box corners stay sharp.
 """
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import struct
 
 import numpy as np
+from PIL import Image
 
 MAGIC = b"GM3D"
 VERSION = 2
@@ -413,3 +429,57 @@ def floor_scan(tris: np.ndarray, cell: float = 1.0, layers: int = 3, floor_norma
         "origin_x": ox, "origin_z": oz, "cell": cell, "width": width, "height": height, "layers": layers,
         "floors": floors.reshape(layers, height, width), "clearance": room.reshape(layers, height, width),
     }
+
+
+# --- terrain elevation tiles -------------------------------------------------------
+
+DEM_TILE = 256
+
+
+def encode_dem(heights: np.ndarray) -> np.ndarray:
+    """Heights (meters) as Mapbox Terrain-RGB: height = -10000 + (R*65536 + G*256 + B) / 10."""
+    v = np.clip(np.round((heights.astype(np.float64) + 10000.0) * 10.0), 0, 2**24 - 1).astype(np.uint32)
+    rgb = np.stack([(v >> 16) & 255, (v >> 8) & 255, v & 255], axis=-1).astype(np.uint8)
+    return rgb
+
+
+def write_dem_tiles(heights: np.ndarray, out_dir: str, tile_zoom: int, tile_x: int, tile_y: int, max_zoom: int) -> tuple[int, int]:
+    """Writes Terrain-RGB tiles (lossless WebP) for a square heightmap covering one Web
+    Mercator tile, `heights[row, col]` with row 0 at the north edge. Writes to
+    `out_dir` (replaced). Returns (min_zoom, max_zoom) in absolute zooms."""
+    if os.path.isdir(out_dir):
+        shutil.rmtree(out_dir)
+    src = Image.fromarray(heights.astype(np.float32), mode="F")
+    for z in range(max_zoom - tile_zoom + 1):
+        n = 2**z
+        # Pixel centers line up with tile edges at the map's corners; bilinear is right
+        # for elevation (no ringing, unlike Lanczos).
+        level = np.asarray(src.resize((n * DEM_TILE, n * DEM_TILE), Image.BILINEAR), dtype=np.float32)
+        rgb = encode_dem(level)
+        abs_z = z + tile_zoom
+        for x in range(n):
+            col = os.path.join(out_dir, str(abs_z), str(tile_x * n + x))
+            os.makedirs(col, exist_ok=True)
+            for y in range(n):
+                tile = rgb[y * DEM_TILE : (y + 1) * DEM_TILE, x * DEM_TILE : (x + 1) * DEM_TILE]
+                Image.fromarray(tile, "RGB").save(os.path.join(col, f"{tile_y * n + y}.webp"), "WEBP", lossless=True, quality=100, method=6)
+    return tile_zoom, max_zoom
+
+
+def update_index(game_dir: str, map_id: str, **fields) -> None:
+    """Sets fields of a map's entry in `3d/index.json`, keeping the rest: the terrain and
+    the meshes can come from different tools."""
+    path = os.path.join(game_dir, "3d", "index.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    index = {"version": 1, "maps": {}}
+    if os.path.exists(path):
+        with open(path) as f:
+            index = json.load(f)
+    entry = index["maps"].setdefault(map_id, {})
+    for key, value in fields.items():
+        if value is None:
+            entry.pop(key, None)
+        else:
+            entry[key] = value
+    with open(path, "w") as f:
+        json.dump(index, f, indent=1)

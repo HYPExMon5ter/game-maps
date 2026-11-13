@@ -13,7 +13,9 @@ import { logUiError } from './lib/errors'
 import { loadGame } from './lib/game'
 import { matchesHotkey } from './lib/keys'
 import { steppedZoom } from './lib/zoom'
-import { mapHandle } from './map/handle'
+import { mapHandle, view3dHandle } from './map/handle'
+import { reset3d } from './lib/map3d'
+import { useView3D } from './state/view3d'
 import { acceptLatestRequest, announce, useSync, useSyncMirror } from './lib/sync/sync'
 import { startPersisting } from './state/persist'
 import { useTrail } from './state/trail'
@@ -71,6 +73,12 @@ function useBackendSync(windowed: boolean) {
         if (useStore.getState().game?.id !== gameId) return
         if (useStore.getState().mode === 'open' && !windowed) reloadWhenClosed = true
         else window.location.reload()
+      }),
+      // The 3D data arrived (asked for, or updated): shown right away, no reload.
+      events.mapExtraInstalled(({ game_id }) => {
+        if (useStore.getState().game?.id !== game_id) return
+        reset3d()
+        useView3D.getState().reloadData()
       }),
     ]
     const stopPersist = startPersisting()
@@ -369,7 +377,10 @@ function useOverlayKeys() {
       }
       const steps = zoomKeySteps(e)
       const map = mapHandle.current
-      if (steps && map) {
+      if (steps && view3dHandle.current) {
+        e.preventDefault()
+        view3dHandle.current.zoom(steps)
+      } else if (steps && map) {
         e.preventDefault()
         // Held keys repeat faster than an animation finishes; jump instead.
         map.easeTo({ zoom: steppedZoom(map.getZoom(), steps, map.getMinZoom(), map.getMaxZoom()), duration: e.repeat ? 0 : 120 })

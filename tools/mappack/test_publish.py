@@ -44,6 +44,22 @@ class BuildPackTest(unittest.TestCase):
             third = publish.build_pack(game, os.path.join(tmp, "3.zip"))
             self.assertNotEqual(first["sha256"], third["sha256"])
 
+    def test_optional_parts_get_packs_of_their_own(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game = os.path.join(tmp, "game")
+            for rel in ["pins.json", "tiles/a.webp", "3d/index.json", "3d/cave-a.bin", "nav/caves.json"]:
+                os.makedirs(os.path.dirname(os.path.join(game, rel)), exist_ok=True)
+                with open(os.path.join(game, rel), "wb") as f:
+                    f.write(b"x")
+            map_zip, extra_zip = os.path.join(tmp, "map.zip"), os.path.join(tmp, "3d.zip")
+            publish.build_pack(game, map_zip)
+            publish.build_pack(game, extra_zip, "3d")
+            with zipfile.ZipFile(map_zip) as zf:
+                self.assertEqual(sorted(zf.namelist()), ["nav/caves.json", "pins.json", "tiles/a.webp"])
+            with zipfile.ZipFile(extra_zip) as zf:
+                self.assertEqual(sorted(zf.namelist()), ["3d/cave-a.bin", "3d/index.json"])
+            self.assertEqual(publish.pack_files(os.path.join(tmp, "nothing"), "3d"), [])
+
     def test_requires_tiles(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(SystemExit):

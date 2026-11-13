@@ -37,7 +37,7 @@ describe('gameView', () => {
 
 describe('packView', () => {
   const remote = { version: '2', url: '', sha256: '', size: 13 * 1024 * 1024 }
-  const pack = (p: Partial<PackStatus>): PackStatus => ({ game_id: 'sotf', installed: null, available: null, downloading: null, error: null, ...p })
+  const pack = (p: Partial<PackStatus>): PackStatus => ({ game_id: 'sotf', installed: null, available: null, downloading: null, error: null, extras: {}, ...p })
 
   it('offers a download before the first install', () => {
     expect(packView(pack({ available: remote }))).toMatchObject({ action: 'Download now' })
