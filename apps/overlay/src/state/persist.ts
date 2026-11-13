@@ -163,8 +163,17 @@ interface Changed {
   from: string
   gameId: string
   worldId: string
-  user?: GameUserData
+  /**
+   * Only what changed: both windows change the user data on their own (pins reached are
+   * marked found in each), so sending all of it would undo the other window's last change.
+   */
+  user?: Partial<GameUserData>
   tracked?: TrackTarget | null
+}
+
+function changedFields(next: GameUserData, prev: GameUserData): Partial<GameUserData> {
+  const keys = Object.keys(next) as (keyof GameUserData)[]
+  return Object.fromEntries(keys.filter((k) => next[k] !== prev[k]).map((k) => [k, next[k]]))
 }
 
 /**
@@ -174,19 +183,20 @@ interface Changed {
  */
 export function startPersisting(): () => void {
   const self = getCurrentWebviewWindow().label
-  // Changes from the other window are saved there already.
+  // Changes from the other window aren't sent back. They're saved again here, merged with
+  // this window's, so a save from the other window's older copy can't be the last word.
   let applyingRemote = false
   const unlisten = listen<Changed>(CHANGED, ({ payload: c }) => {
     const s = useStore.getState()
     if (c.from === self || s.game?.id !== c.gameId || s.world.id !== c.worldId) return
     applyingRemote = true
-    if (c.user) useStore.setState({ user: c.user })
+    if (c.user) useStore.setState({ user: { ...s.user, ...c.user } })
     if (c.tracked !== undefined) s.setTracked(c.tracked)
     applyingRemote = false
   })
   const unsubscribe = useStore.subscribe((state, prev) => {
     // Loading another game or world replaces everything at once; nothing to save.
-    if (applyingRemote || !state.game || state.game !== prev.game || state.world !== prev.world) return
+    if (!state.game || state.game !== prev.game || state.world !== prev.world) return
     const gameId = state.game.id
     const worldId = state.world.id
     const changed: Changed = { from: self, gameId, worldId }
@@ -197,14 +207,14 @@ export function startPersisting(): () => void {
           Promise.all([s.set(keys.prefs(gameId), { hiddenCategories, shownCategories, filterSets, only, openGroups }), s.set(keys.data(gameId, worldId), { customPins, found, notes, timers })]),
         ),
       )
-      changed.user = state.user
+      changed.user = changedFields(state.user, prev.user)
     }
     if (state.tracked !== prev.tracked) changed.tracked = state.tracked
     if (SESSION_KEYS.some((k) => state[k] !== prev[k])) {
       const session = selectSession(state)
       saving(getStore().then((s) => s.set(keys.session(gameId, worldId), session)))
     }
-    if (changed.user || changed.tracked !== undefined) void emit(CHANGED, changed)
+    if (!applyingRemote && (changed.user || changed.tracked !== undefined)) void emit(CHANGED, changed)
   })
   return () => {
     unsubscribe()
