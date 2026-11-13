@@ -187,7 +187,7 @@ Cave GA reported the player indoors and marked the cave found.
   terrain; ceilings included; nothing above the terrain), to `build/floors-<id>.npz`.
 - `sotf_caves.py` grows each scan to that collision's extent and adds the floors it has
   that the game's scan doesn't.
-- Both scans keep three floors per cell. Keeping the highest three cut caves apart
+- Both scans kept three floors per cell (four now, below). Keeping the highest three cut caves apart
   (found 2026-11-10): where tunnels stack, the outer tops of rocks buried in the ground
   (one-sided collision: nothing inside solid ground stops a ray, so they look like
   floors open to the sky) and the tops of rock between tunnels took the slots, and
@@ -202,11 +202,26 @@ Cave GA reported the player indoors and marked the cave found.
   room to stand at the same height (within 0.5 m), where the gap has a ceiling over it
   at about their headroom: solid rock between two tunnels has none (collision faces
   into the tunnels), so it isn't bridged.
-- Since then: Caves A, G and H are each one piece. Cave D is three (the main cave; the
-  long south-west tunnel, 159 to 303 m, meeting it under a stack of tunnels near
-  (201, 160, -675); a straight shaft up to 340 m), Cave F two (a lower area 9 m under
-  (1333, 72, 670)), and a few in Bunker Residential. Bunker C's buried roof is a piece
-  of its own, which nobody walks on. Not checked in game yet.
+- Bunker stairs are box colliders with a negative height (`7.5 x -0.2 x 2.6`). Unity
+  takes a box's size as its absolute value; read as is, the box came out inside out, its
+  top facing down, and no flight of stairs was a floor (fixed 2026-11-12).
+- The cave grids keep four floors per cell (`NAV_LAYERS`; the in-game scan keeps three).
+  Bunker Residential's stairwells stack four flights, and Cave D's main entrance joins
+  the rest of the cave by two ropes, one above the other at (206, 164..212, -676): with
+  three floors, a rope end's floor fell out and the rope linked nothing. Where a cell
+  has more floors than it keeps, those with room to stand (2 m) come before those with
+  only crouching room (the slab under the next flight up has 1.6 m).
+- Checked in game (2026-11-12): a route from Cave D's main cave to Artifact Piece D
+  climbs both ropes, and the walk check passes it. The two tunnels that cross near
+  (201, 160, -675) don't join there: between them is a 2 m hole down to the tunnel at
+  142 m (a teleport onto the narrow ledge at 159 m dropped the player through it).
+- Pieces routes still can't join (2026-11-12), none with a pin in it except one: Cave
+  D's straight tube from (-28, 341, -648) down to (272, 232, -504), deep under the
+  mountain and unlit, which a player slides down (it's steeper than they can stand on),
+  and a few small pieces near it; Bunker Residential's entrance and exit rooms, whose
+  tunnels to the bunker aren't in its collision files (they're in the game, the
+  in-game scan has part of them); Bunker C's buried roof; and Bunker Entertainment's
+  32 m² ledge with the Hang Glider Launcher blueprint.
 - Cave routes that can't reach their target (it's under water, or up a climb) go to the
   nearest walkable spot instead, marked incomplete; the map draws the rest of the way as
   a faint dotted line.
