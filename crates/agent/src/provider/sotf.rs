@@ -63,6 +63,17 @@ const UNDERGROUND_DEPTH: f32 = 4.0;
 /// Margin around the objects known to be in a cave, used as its scan bounds when the
 /// cave's extents aren't colliders.
 const CAVE_BOUNDS_MARGIN: f32 = 40.0;
+/// A cave's collision loads a few frames after it's switched on. A teleport into one
+/// holds the player at the spot until there's floor under it, for at most this long.
+const CAVE_LOAD_WAIT: Duration = Duration::from_secs(5);
+/// How far under a teleport's destination to look for that floor.
+const FLOOR_BELOW: f32 = 4.0;
+
+/// A teleport into a cave whose floor hasn't loaded yet.
+struct PendingLanding {
+    dest: Vector3,
+    until: Instant,
+}
 
 /// A world export in progress: entities are collected at once, caves over many frames.
 struct ExportJob {
@@ -109,6 +120,7 @@ pub struct SonsOfTheForest {
     chat_open: Option<Field>,
     caves: Option<caves::Caves>,
     export_job: Option<ExportJob>,
+    landing: Option<PendingLanding>,
     gps: Option<gps::GpsMarkers>,
     creatures: Option<creatures::Creatures>,
     session_members: Option<session::Session>,
@@ -264,6 +276,7 @@ impl SonsOfTheForest {
             chat_open,
             caves,
             export_job: None,
+            landing: None,
             gps,
             creatures,
             session_members,
@@ -531,6 +544,26 @@ impl SonsOfTheForest {
         let base = cx.unity.position(cx.rt, origin).ok()?;
         Some(base.y + h)
     }
+
+    /// Puts the player at `dest` with the game's own teleport.
+    unsafe fn move_player(&self, cx: &Cx, dest: &mut Vector3) -> Result<(), String> {
+        let method = self.local.teleport.as_ref().ok_or("teleport is not available in this game version")?;
+        let instance = if method.is_static { std::ptr::null_mut() } else { self.local_instance(cx) };
+        if !method.is_static && instance.is_null() {
+            return Err("player instance unavailable".into());
+        }
+        let mut args = [dest as *mut Vector3 as *mut c_void];
+        cx.rt.invoke(method, instance, &mut args).map(|_| ()).map_err(|e| e.to_string())
+    }
+
+    /// Whether there's solid ground within `FLOOR_BELOW` under a spot underground.
+    unsafe fn floor_under(&mut self, cx: &Cx, at: Vector3) -> bool {
+        let Some(physics) = cx.unity.physics() else { return true };
+        physics.sync_transforms(cx.rt);
+        let mask = self.solid_mask(cx, physics, true);
+        let down = Vector3 { x: 0.0, y: -1.0, z: 0.0 };
+        physics.raycast(cx.rt, at, down, FLOOR_BELOW, mask).is_some()
+    }
 }
 
 impl Provider for SonsOfTheForest {
@@ -649,7 +682,9 @@ impl Provider for SonsOfTheForest {
     }
 
     unsafe fn teleport(&mut self, cx: &Cx, target: &TeleportTarget) -> Result<(), String> {
-        let method = self.local.teleport.clone().ok_or("teleport is not available in this game version")?;
+        if self.local.teleport.is_none() {
+            return Err("teleport is not available in this game version".into());
+        }
         if !cx.unity.is_alive(self.local_transform(cx)) {
             return Err("not in a world".into());
         }
@@ -680,13 +715,10 @@ impl Provider for SonsOfTheForest {
         if !(dest.x.is_finite() && dest.y.is_finite() && dest.z.is_finite()) {
             return Err("invalid destination".into());
         }
-        let instance = if method.is_static { std::ptr::null_mut() } else { self.local_instance(cx) };
-        if !method.is_static && instance.is_null() {
-            return Err("player instance unavailable".into());
-        }
         if self.export_job.is_some() {
             return Err("a world export is scanning caves; try again when it finishes".into());
         }
+        let mut entering_cave = false;
         if let Some(caves) = &self.caves {
             let systems = caves.systems(cx.rt, cx.unity);
             // A cave's extents reach past its entrances and up through the ground above it:
@@ -694,9 +726,29 @@ impl Provider for SonsOfTheForest {
             // puts the game in cave mode out on the surface.
             let target = if underground { caves.containing(cx.rt, &systems, dest) } else { None };
             caves.activate(cx.rt, &systems, target)?;
+            entering_cave = target.is_some();
         }
-        let mut args = [&mut dest as *mut Vector3 as *mut c_void];
-        cx.rt.invoke(&method, instance, &mut args).map(|_| ()).map_err(|e| e.to_string())
+        self.landing = None;
+        self.move_player(cx, &mut dest)?;
+        // Without floor under it yet, the player would fall through the cave: hold them
+        // there until it loads (see `every_frame`).
+        if entering_cave && !self.floor_under(cx, dest) {
+            self.landing = Some(PendingLanding { dest, until: Instant::now() + CAVE_LOAD_WAIT });
+        }
+        Ok(())
+    }
+
+    unsafe fn every_frame(&mut self, cx: &Cx) {
+        let Some((mut dest, until)) = self.landing.as_ref().map(|l| (l.dest, l.until)) else { return };
+        let (landed, expired) = (self.floor_under(cx, dest), Instant::now() >= until);
+        // Once more where there's floor, so the player stops at rest on it; until then,
+        // back to the spot before they fall.
+        if self.move_player(cx, &mut dest).is_err() || landed || expired {
+            self.landing = None;
+            if expired && !landed {
+                self.notes.push("teleport: the cave's floor didn't load in time".into());
+            }
+        }
     }
 
     unsafe fn begin_export(&mut self, cx: &Cx) -> Result<(), String> {

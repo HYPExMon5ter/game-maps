@@ -16,6 +16,7 @@ import { CLOUD_BACKGROUND } from '../lib/clouds'
 import { drawFog } from '../lib/fogCanvas'
 import { useFogStore, usePinFog } from '../state/fog'
 import { trailLines } from '../lib/trail'
+import { MOVE_COLORS, moveRuns, trackPath } from '../lib/route'
 import { steppedZoom } from '../lib/zoom'
 import { useTrailStore } from '../state/trail'
 import { IS_MAP_WINDOW } from '../lib/view'
@@ -550,6 +551,9 @@ function useLayerShading(map: MlMap | null) {
   }, [map, underground, clouded])
 }
 
+/** A feature of the track source (MapLibre's GeoJSON types, without a direct dependency). */
+type TrackFeature = Extract<Parameters<GeoJSONSource['setData']>[0], { type: 'FeatureCollection' }>['features'][number]
+
 function useTrackLine(map: MlMap | null) {
   const gameMap = useStore((s) => s.map)
 
@@ -557,33 +561,39 @@ function useTrackLine(map: MlMap | null) {
   useEffect(() => {
     if (!map || !gameMap) return
     const source = map.getSource<GeoJSONSource>('track')
+    const coords = (points: Vec3[]) =>
+      points.map((p) => {
+        const ll = toLngLat(gameMap.projection, p)
+        return [ll.lng, ll.lat]
+      })
     // Not a possible key, so the first pass always draws.
     let last: string | null = null
     const apply = () => {
-      const { snapshot, tracked, route } = useStore.getState()
+      const { snapshot, tracked, route, game } = useStore.getState()
       const from = snapshot?.local?.position
       const to = tracked ? resolveTracked(tracked, snapshot).position : undefined
-      // The walking route when there is one, else a straight line.
-      const points = !from || !to ? [] : route && route.corners.length >= 2 ? [from, ...route.corners.slice(1), to] : [from, to]
+      const path = from && to ? trackPath(from, to, route, game?.unitsPerMeter) : null
       // Whole units: finer, and walking would rebuild the line on every snapshot.
-      const key = points.map((p) => `${Math.round(p.x)},${Math.round(p.z)}`).join('|')
+      const key = path ? `${path.walkable}|${path.moves.join()}|${path.points.map((p) => `${Math.round(p.x)},${Math.round(p.z)}`).join('|')}` : ''
       if (key === last) return
       last = key
-      if (points.length === 0) {
+      if (!path || !to) {
         source?.setData({ type: 'FeatureCollection', features: [] })
         return
       }
-      source?.setData({
-        type: 'Feature',
-        geometry: {
-          type: 'LineString',
-          coordinates: points.map((p) => {
-            const ll = toLngLat(gameMap.projection, p)
-            return [ll.lng, ll.lat]
-          }),
-        },
-        properties: {},
-      })
+      const end = path.points.length - 1
+      const features: TrackFeature[] = []
+      // A line per stretch walked, swum, climbed or ridden: each has its color.
+      for (const run of moveRuns(path))
+        features.push({
+          type: 'Feature',
+          geometry: { type: 'LineString', coordinates: coords(path.points.slice(run.from, run.to + 1)) },
+          properties: { walkable: true, color: MOVE_COLORS[run.move] },
+        })
+      if (path.walkable < end)
+        features.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: coords(path.points.slice(path.walkable)) }, properties: { walkable: false } })
+      features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: coords([to])[0] }, properties: {} })
+      source?.setData({ type: 'FeatureCollection', features })
     }
     apply()
     return useStore.subscribe((s, prev) => {

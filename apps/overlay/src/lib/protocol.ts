@@ -28,12 +28,20 @@ export interface LocalPlayer {
   camera?: CameraView | null
 }
 
-/** A walking route from the game's navigation mesh. */
+/** A walking route from the game's navigation mesh (or the app's cave grids). */
 export interface PathInfo {
   corners: Vec3[]
   /** False when the destination can't be reached; the route ends as close as it gets. */
   complete: boolean
+  /**
+   * How each leg between corners is travelled. Not from the game (its routes are all
+   * walked): the app's own cave routes add it.
+   */
+  moves?: RouteMove[]
 }
+
+/** How a leg of a route is travelled. */
+export type RouteMove = 'walk' | 'swim' | 'dive' | 'rope' | 'zipline'
 
 /** Which legs of a route can't be walked right now (see `backend.checkRoute`). */
 export interface RouteCheck {

@@ -120,6 +120,120 @@ Cave GA reported the player indoors and marked the cave found.
 - The map follows the player underground using `IsInCaves` or a position more than
   4 m below the terrain.
 
+## Cave water
+
+- Water in caves and bunkers is on the Water layer (4) of their scenes: flat surface
+  meshes (`Lake Polygon`, `_LakeCave<x>LOD0_`, Cave D's `LakeAGroupNoFreeze`, stream
+  surfaces; lower levels of detail are `...LOD1_`, `...LOD2_`) and volumes
+  (`_LakeCave<x>Zone_`, `WaterZone`, `SwimVolume`). `sotf_3d.py` keeps the surfaces'
+  upward faces within each cave's collision bounds as `build/water-<id>.bin`.
+- The cave scan's floor rays skip the Water layer, so lake beds are scanned. `sotf_caves.py`
+  rasterizes the surfaces onto each cave grid: a floor up to 40 m under a surface with
+  open water above it becomes a swim node at the surface's height (wading depth, under
+  0.4 m, is walked as it is), marked in `nav/cave-<area>-water.bin` (a bit per node).
+  Routes cross water at the surface and may drop into it from any height.
+- Jumping into water added about 11% more reachable floor to Cave B, little elsewhere.
+  What cut caves into parts was ropes and underwater passages (below).
+
+## Ropes, ziplines and dives
+
+- Climbing ropes are `ClimbingRopeRock` objects (numbered copies: `ClimbingRopeRock (3)`)
+  in the cave scenes and some in the Addressables cave bundles, with `TriggerTop` and
+  `TriggerBottom` grab points. Ziplines are `ZipLineController` with `AnchorA` and
+  `AnchorB`. Off ones are left out, except under a part the game turns on once a cave
+  is opened (`CaveHExternalOpened`). 19 ropes and 2 ziplines in all (2026-11-10).
+- `sotf_3d.py` writes them, and the water volumes as triangles, to `build/` (by cave;
+  not in the map pack). `sotf_caves.py` snaps each rope end to the nearest floor within
+  5 m across and 3 m up or down (a ledge's edge often has no floor in the scan), and
+  lists the node pairs as `links` in `caves.json`. All 19 ropes link.
+- Verified in game (2026-11-10): hold E at a rope's bottom to grab it (a tap doesn't),
+  then W climbs about 1.2 m/s; it lets go on the ledge at the top. A zipline only offers
+  its prompt (a tap of E) at the high end: there's none at the low end, and the rope is
+  out of reach from the floor there. The ride stops about 1.5 m short of the low anchor
+  and drops the rider onto the floor under that spot, which is where the link lands
+  (Cave B's: the game put the player within 0.1 m of it).
+- Dives: floors inside a water volume, with the water at least 1.7 m over them and rock
+  in between (else they're open water, swum at the top), marked in
+  `nav/cave-<area>-dive.bin`. A volume whose column has only its top face reaches down to
+  its lowest point. Underwater, routes swim up and down freely; a meter under water
+  costs the same as one walked, plus 2 m for going under (so routes don't bob in and
+  out). Teleporting to a dive node in Cave F put the player under water.
+- On 150 random trips per cave, ropes, ziplines and dives made 24 more routable in
+  Cave B, 34 in Cave F and 19 in Cave G. Searches average under 10 ms, 76 ms at worst,
+  in the worker.
+- The in-game walk check skips climbed, ridden and swum legs: it walks the floor and
+  would call them blocked.
+
+## Cave collision
+
+- `sotf_3d.py` reads each cave's collision from the game files. Caves A–G each have a
+  collision prefab in Addressables, `caves_assets_cave<x>_*.bundle`, with parts named
+  `CaveCollision<Kind><Letter>` (Floor, Walls, Ceiling, Rocks, Flowstone, Cliffs) already
+  in world coordinates. Cave D nests
+  its halves twice (`CaveDCollisionAddressable/CaveDCollisionAAddressable` and
+  `CaveDCollisionAAddressable` at the root), so parts are deduplicated by mesh and matrix.
+- The cave and bunker scenes add their static colliders on layer 22 (`BasicCollider`),
+  minus their `*External*` roots (set dressing around the entrances). Bunkers are mostly
+  box colliders, Cave H has no prefab and is only scene colliders, and the Luxury
+  bunker's scene (`BunkerLuxury`, level 26) also holds Cave E. Their meshes live in
+  sharedassets 7, 11, 15 and 20 and resources.assets.
+
+## Filling the cave scans from collision
+
+- The in-game scan caps a cave at 1200 cells a side (Cave D is 1642 m across: its east
+  end was cut off) and found almost nothing in parts of `CaveD_Expansion`. `sotf_3d.py`
+  scans each cave's full collision offline the same way (`mesh3d.floor_scan`: surfaces
+  facing up are floors; headroom up to the first surface above facing down, or the
+  terrain; ceilings included; nothing above the terrain), to `build/floors-<id>.npz`.
+- `sotf_caves.py` grows each scan to that collision's extent and adds the floors it has
+  that the game's scan doesn't.
+- Both scans kept three floors per cell (four now, below). Keeping the highest three cut caves apart
+  (found 2026-11-10): where tunnels stack, the outer tops of rocks buried in the ground
+  (one-sided collision: nothing inside solid ground stops a ray, so they look like
+  floors open to the sky) and the tops of rock between tunnels took the slots, and
+  dropped the tunnel under them. Cave D was eight big pieces routes couldn't join,
+  Cave G three, Cave H four. Now the offline scan looks at eight surfaces per cell and
+  keeps (`mesh3d.pick_floors`) floors with room to stand and a ceiling first, then
+  floors open above, then the rest; the room over a floor stops at the next floor above
+  it too. The in-game scan still keeps its highest three; the merge applies the same
+  rule to both.
+- Collision is made of pieces, and rays fall through the slits where two meet, which a
+  player walks over. The offline scan bridges gaps of up to 2 cells between floors with
+  room to stand at the same height (within 0.5 m), where the gap has a ceiling over it
+  at about their headroom: solid rock between two tunnels has none (collision faces
+  into the tunnels), so it isn't bridged.
+- Bunker stairs are box colliders with a negative height (`7.5 x -0.2 x 2.6`). Unity
+  takes a box's size as its absolute value; read as is, the box came out inside out, its
+  top facing down, and no flight of stairs was a floor (fixed 2026-11-12).
+- The cave grids keep four floors per cell (`NAV_LAYERS`; the in-game scan keeps three).
+  Bunker Residential's stairwells stack four flights, and Cave D's main entrance joins
+  the rest of the cave by two ropes, one above the other at (206, 164..212, -676): with
+  three floors, a rope end's floor fell out and the rope linked nothing. Where a cell
+  has more floors than it keeps, those with room to stand (2 m) come before those with
+  only crouching room (the slab under the next flight up has 1.6 m).
+- Checked in game (2026-11-12): a route from Cave D's main cave to Artifact Piece D
+  climbs both ropes, and the walk check passes it. The two tunnels that cross near
+  (201, 160, -675) don't join there: between them is a 2 m hole down to the tunnel at
+  142 m (a teleport onto the narrow ledge at 159 m dropped the player through it).
+- Pieces routes still can't join (2026-11-12), none with a pin in it except one: Cave
+  D's straight tube from (-28, 341, -648) down to (272, 232, -504), deep under the
+  mountain and unlit, which a player slides down (it's steeper than they can stand on),
+  and a few small pieces near it; Bunker Residential's entrance and exit rooms, whose
+  tunnels to the bunker aren't in its collision files (they're in the game, the
+  in-game scan has part of them); Bunker C's buried roof; and Bunker Entertainment's
+  32 m² ledge with the Hang Glider Launcher blueprint.
+- Cave routes that can't reach their target (it's under water, or up a climb) go to the
+  nearest walkable spot instead, marked incomplete; the map draws the rest of the way as
+  a faint dotted line.
+
+## Teleports into caves
+
+- A cave's collision streams in a few frames after the game switches it on, so a
+  teleport straight into one could land before its floor and fall through (it killed
+  the player once, from the surface into Cave F). The agent now holds the player at the
+  spot each frame until there's floor within 4 m under it (up to 5 s), then sets them
+  down once more.
+
 ## Stability (verified 2026-11-02)
 
 - Alt-tab with the map open closes it, leaving focus in the other app. The pinned

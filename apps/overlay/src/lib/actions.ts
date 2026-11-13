@@ -59,6 +59,17 @@ export function teleportToMapPoint(ll: LngLat) {
   return runTeleport(() => backend.teleport({ kind: 'position', position: pos, snap_to_ground: true }), 'map location')
 }
 
+/** Tracks a spot picked on the map, so the route and compass lead there. It's taken at
+ * the player's height: the map doesn't know the ground's. */
+export function navigateTo(ll: LngLat, layer: WorldLayer) {
+  const s = useStore.getState()
+  const p = projection()
+  const position = toWorld(p, ll, 0)
+  const local = s.snapshot?.local
+  position[p.up] = local ? local.position[p.up] : 0
+  s.setTracked({ kind: 'point', name: 'Marked spot', position, layer })
+}
+
 /** Teleports next to a live entity (player, companion, golf cart, ...). */
 export function teleportToPlayer(id: string, name: string) {
   return runTeleport(() => backend.teleport({ kind: 'player', id }), name)

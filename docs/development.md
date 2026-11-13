@@ -68,6 +68,8 @@ python -m venv .venv
 
 # Tiles and icons from the game files
 .venv/Scripts/python -I tools/mapgen/sotf.py --game "D:/SteamLibrary/steamapps/common/Sons Of The Forest" --out games/sons-of-the-forest
+# The caves' collision, water, ropes and ziplines (build/, about 2 minutes)
+.venv/Scripts/python -I tools/mapgen/sotf_3d.py --game "D:/SteamLibrary/steamapps/common/Sons Of The Forest" --out games/sons-of-the-forest
 ```
 
 Pins and cave layouts come from an in-game export. Start a **new** game (so nothing
@@ -75,6 +77,7 @@ has been picked up yet), open **Settings → Advanced → Export world data** (a
 
 ```sh
 python -I tools/pins/sotf.py --out games/sons-of-the-forest "%LOCALAPPDATA%/com.gamemaps.overlay/exports/<export>.json"
+# After sotf_3d.py: the cave grids and the cave layer (about 2 minutes)
 .venv/Scripts/python -I tools/mapgen/sotf_caves.py --out games/sons-of-the-forest "%LOCALAPPDATA%/com.gamemaps.overlay/exports/<export>.json"
 ```
 

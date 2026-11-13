@@ -60,6 +60,13 @@ pub trait Provider: Send {
         Err("world export is not supported for this game".into())
     }
 
+    /// Work that carries on over frames after a command (a teleport waiting for the
+    /// ground to load). Called every frame.
+    ///
+    /// # Safety
+    /// Must run on the game's main thread.
+    unsafe fn every_frame(&mut self, _cx: &Cx) {}
+
     /// Advances a running export; `Some` once it has finished. Called every frame.
     ///
     /// # Safety

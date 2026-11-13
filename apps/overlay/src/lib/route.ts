@@ -2,7 +2,7 @@
 // breadcrumbs drawn along them.
 
 import type { Category, Pin } from './game'
-import type { Vec3 } from './protocol'
+import type { PathInfo, RouteMove, Vec3 } from './protocol'
 
 /**
  * Where to route to for `target`: the target itself, or, for an underground target
@@ -97,4 +97,78 @@ export function breadcrumbs(corners: Vec3[], player: Vec3, ahead: number, step: 
     })
   }
   return out
+}
+
+/** The line drawn to the tracked target, and how much of it can be walked. */
+export interface TrackPath {
+  /** From the player, along the route's corners, to the target. */
+  points: Vec3[]
+  /** How many legs from the start follow the walking route; the rest is a straight line. */
+  walkable: number
+  /** How each leg is travelled (the straight rest counts as walked). */
+  moves: RouteMove[]
+}
+
+/** A route whose end is this close to the target (world units) reaches it. */
+const REACHES = 3
+
+/**
+ * The line to draw from the player to the target: the walking route where there is
+ * one, ending in a straight line where it stops short (an entrance on the way to an
+ * underground target, a spot it can't walk to) or when there's no route at all.
+ */
+export function trackPath(from: Vec3, to: Vec3, route: PathInfo | null, unitsPerMeter = 1): TrackPath {
+  if (!route || route.corners.length < 2) return { points: [from, to], walkable: 0, moves: ['walk'] }
+  const points = [from, ...route.corners.slice(1), to]
+  const last = route.corners[route.corners.length - 1]
+  const reaches = route.complete && dist(last, to) <= REACHES * unitsPerMeter
+  const moves = route.moves?.length === route.corners.length - 1 ? route.moves : route.corners.slice(1).map((): RouteMove => 'walk')
+  return { points, walkable: reaches ? points.length - 1 : points.length - 2, moves: [...moves, 'walk'] }
+}
+
+/** The route line's color for each way of going: water blue, ropes and ziplines orange. */
+export const MOVE_COLORS: Record<RouteMove, string> = {
+  walk: '#ffe08a',
+  swim: '#7cc8ff',
+  dive: '#4f8dff',
+  rope: '#ff9d4d',
+  zipline: '#ff9d4d',
+}
+
+/** The legs of `path` that follow its route, in runs travelled the same way. */
+export function moveRuns(path: TrackPath): { move: RouteMove; from: number; to: number }[] {
+  const runs: { move: RouteMove; from: number; to: number }[] = []
+  for (let i = 0; i < path.walkable; i++) {
+    const last = runs[runs.length - 1]
+    if (last && last.move === path.moves[i]) last.to = i + 1
+    else runs.push({ move: path.moves[i], from: i, to: i + 1 })
+  }
+  return runs
+}
+
+/** Something on the way that isn't walking: a climb, a ride, a swim. */
+export interface RouteStep {
+  move: Exclude<RouteMove, 'walk'>
+  /** How far along the route it starts, how long it is and how much it climbs (world units). */
+  at: number
+  length: number
+  rise: number
+}
+
+/** The next climb, ride or swim along the route, if there's one before it ends. */
+export function nextStep(path: TrackPath): RouteStep | null {
+  const first = path.moves.findIndex((m, i) => m !== 'walk' && i < path.walkable)
+  if (first < 0) return null
+  const move = path.moves[first] as RouteStep['move']
+  let last = first
+  while (last + 1 < path.walkable && path.moves[last + 1] === move) last++
+  const at = pathLength(path.points, first)
+  return { move, at, length: pathLength(path.points, last + 1) - at, rise: path.points[last + 1].y - path.points[first].y }
+}
+
+/** Length of a polyline's first `legs` legs (all by default), heights included. */
+export function pathLength(points: Vec3[], legs = points.length - 1): number {
+  let total = 0
+  for (let i = 1; i <= Math.min(legs, points.length - 1); i++) total += dist(points[i - 1], points[i])
+  return total
 }
