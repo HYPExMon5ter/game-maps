@@ -129,10 +129,10 @@ function useRoute() {
           const dest = inCave(target)
             ? target
             : nearestEntrance(local.position, selectAllPins(s), game.categories, (pin) => inCave(pin.position))?.position
-          const corners = dest ? await caveRoute(game.id, cave, local.position, dest, backend.checkRoute) : null
+          const route = dest ? await caveRoute(game.id, cave, local.position, dest, backend.checkRoute) : null
           if (cancelled) return
-          if (corners) {
-            setRoute({ corners, complete: true })
+          if (route) {
+            setRoute(route)
             return
           }
         }

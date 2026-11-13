@@ -355,6 +355,9 @@ impl Shared {
             }
         }
 
+        if let Some(p) = st.provider.as_mut() {
+            unsafe { p.every_frame(&cx) };
+        }
         if let (Some((request_id, started)), Some(p)) = (st.export, st.provider.as_mut()) {
             if let Some(result) = unsafe { p.poll_export(&cx) } {
                 st.export = None;

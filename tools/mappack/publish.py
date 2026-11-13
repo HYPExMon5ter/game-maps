@@ -37,6 +37,8 @@ RELEASE_TAG = "maps"
 MANIFEST = "maps.json"
 # Shipped with the app, or only used during development.
 EXCLUDE = {"game.json", "preview.png", "preview-caves.png"}
+# Generator inputs that one tools/mapgen step leaves for another.
+EXCLUDE_DIRS = ("build/",)
 # Already compressed; storing them avoids wasted CPU for no gain.
 STORED_EXTENSIONS = {".webp", ".png", ".jpg", ".jpeg"}
 # Fixed entry timestamp, so identical files always produce an identical zip.
@@ -50,7 +52,7 @@ def pack_files(game_dir: str) -> list[tuple[str, str]]:
         for name in names:
             path = os.path.join(dirpath, name)
             rel = os.path.relpath(path, game_dir).replace(os.sep, "/")
-            if rel in EXCLUDE:
+            if rel in EXCLUDE or rel.startswith(EXCLUDE_DIRS):
                 continue
             files.append((path, rel))
     files.sort(key=lambda f: f[1])

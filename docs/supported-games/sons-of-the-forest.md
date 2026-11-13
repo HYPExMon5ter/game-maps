@@ -45,9 +45,25 @@ them.
 
 Track something and a waypoint shows in the world, with a walking route on the map and
 mini-map. Routes go through caves too, and use the game's own pathfinding, so blocked
-passages are avoided.
+passages are avoided. In caves they climb the ropes, ride the ziplines (downhill, the
+only way the game lets you), swim across lakes and pools, dive through flooded passages
+and jump down into water, whichever is the simplest way, whatever gear you carry.
+Hold E to grab a rope; tap E at the top of a zipline.
+
+- Right-click anywhere and pick **Navigate here** to route to that spot.
+- The route line is blue where you swim or dive and orange on ropes and ziplines. The
+  compass says what's next ("Climb up the rope in 12 m", "Dive 15 m underwater").
+- The compass says how far it is by the route when that's longer than as the crow flies.
+- Where a route can't go all the way (a climb it doesn't know), the rest is a
+  faint dotted line, and the compass says the route ends short. From the surface, a
+  route to something underground leads to the cave's entrance.
+- Water shows on the underground map.
 
 <img src="../images/sons-of-the-forest/hud.png" alt="An in-world marker, mini-map and walking route over the game" width="900">
+
+<img src="../images/sons-of-the-forest/cave-route-2d.png" alt="A route through Cave F on the underground map, blue where it dives" width="900">
+
+<img src="../images/sons-of-the-forest/rope-hint.png" alt="In a cave, the compass saying to climb up the rope in 11 ft" width="900">
 
 ## Kelvin
 

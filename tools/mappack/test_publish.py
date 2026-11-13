@@ -12,7 +12,8 @@ class BuildPackTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             game = os.path.join(tmp, "game")
             os.makedirs(os.path.join(game, "tiles", "3", "3"))
-            for rel in ["game.json", "pins.json", "preview.png", "tiles/3/3/3.webp"]:
+            os.makedirs(os.path.join(game, "build"))
+            for rel in ["game.json", "pins.json", "preview.png", "tiles/3/3/3.webp", "build/traversal.json"]:
                 with open(os.path.join(game, rel), "wb") as f:
                     f.write(b"x")
             out = os.path.join(tmp, "pack.zip")

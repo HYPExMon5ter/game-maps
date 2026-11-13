@@ -4,7 +4,7 @@
 import type { CaveInfo, CaveRequest, CaveResponse } from './caveNav.worker'
 import { ASSET_BASE } from './game'
 import { contains, walkableRoute, type GridRoute, type LegCheck } from './gridRoute'
-import type { Vec3 } from './protocol'
+import type { PathInfo, Vec3 } from './protocol'
 
 const indexes = new Map<string, Promise<CaveInfo[]>>()
 
@@ -28,7 +28,7 @@ function navBase(gameId: string) {
 /** The cave whose grid covers a point (smallest first: caves can sit inside others' bounds). */
 export function caveAt(caves: CaveInfo[], p: Vec3, margin = 2): CaveInfo | undefined {
   return caves
-    .filter((c) => contains({ ...c, floors: new Int16Array(0) }, p.x, p.z, margin))
+    .filter((c) => contains(c, p.x, p.z, margin))
     .sort((a, b) => a.width * a.height - b.width * b.height)[0]
 }
 
@@ -65,15 +65,18 @@ const blockedNodes = new Map<string, Map<number, number>>()
 const BLOCK_TTL_MS = 45_000
 
 /**
- * Walking route inside `cave` (its corners), checked against the game world as it is
- * now with `check`: blocked spots are routed around. Null when there's no way through.
+ * Walking route inside `cave`, checked against the game world as it is now with
+ * `check`: blocked spots are routed around. When the goal can't be walked to, the route
+ * ends at the nearest spot that can (`complete: false`). Null when there's no way at all.
  */
-export async function caveRoute(gameId: string, cave: CaveInfo, from: Vec3, to: Vec3, check: LegCheck): Promise<Vec3[] | null> {
+export async function caveRoute(gameId: string, cave: CaveInfo, from: Vec3, to: Vec3, check: LegCheck): Promise<PathInfo | null> {
   const key = `${gameId}/${cave.file}`
   let blocked = blockedNodes.get(key)
   if (!blocked) blockedNodes.set(key, (blocked = new Map()))
   const now = Date.now()
   for (const [node, at] of blocked) if (now - at > BLOCK_TTL_MS) blocked.delete(node)
   const route = await walkableRoute((avoid) => gridRoute(gameId, cave, from, to, avoid), check, blocked)
-  return route?.corners ?? null
+  // A route that doesn't get anywhere is no route.
+  if (!route || route.nodes.length < 2) return null
+  return { corners: route.corners, complete: route.complete, moves: route.cornerMoves }
 }

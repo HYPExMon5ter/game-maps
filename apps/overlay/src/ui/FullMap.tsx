@@ -1,6 +1,6 @@
 import { Check, Copy, Footprints, Info, MapPinPlus, Navigation, Pencil, Radio, Trash2, Zap } from 'lucide-react'
 import { Activity, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { findPin, newCustomPinAt, teleportToMapPoint } from '../lib/actions'
+import { findPin, navigateTo, newCustomPinAt, teleportToMapPoint } from '../lib/actions'
 import { backend } from '../lib/backend'
 import type { GameMap, Pin } from '../lib/game'
 import type { CompanionStatus, Vec3 } from '../lib/protocol'
@@ -81,6 +81,11 @@ function ContextMenu({
       ) : (
         <button className={item} onClick={() => (onAddPin(newCustomPinAt(at.lngLat)), onClose())}>
           <MapPinPlus className="size-4" /> Add pin here
+        </button>
+      )}
+      {!pin && (
+        <button className={item} onClick={() => (navigateTo(at.lngLat, layer), onClose())}>
+          <Navigation className="size-4" /> Navigate here
         </button>
       )}
       {teleportOffered && (
