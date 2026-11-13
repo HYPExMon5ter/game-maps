@@ -93,6 +93,9 @@ player and the world in Valheim).
   field that changed type is lost instead of misread.
 - `Runtime::new_object` refuses a class with no parameterless constructor, because the
   runtime would abort the game. Structs have none: `Runtime::new_value` makes those.
+- A managed object kept from one frame to the next is a `WeakRef` (a weak GC handle), not
+  a raw pointer: once the garbage collector frees an object, a raw pointer to it reads
+  reused memory and can crash the game, where a weak reference reads as null.
 - Method signatures that matter are checked (`Minimap.AddPin` by its parameters), and
   anything that can only fail while the game is loading says so (`WORLD_MAP_NOT_READY`), so
   only that gets retried.

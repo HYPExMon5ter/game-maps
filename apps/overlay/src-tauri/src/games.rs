@@ -180,7 +180,12 @@ mod tests {
 
     #[test]
     fn every_category_is_in_one_group() {
-        for text in [include_str!("../../../../games/valheim/game.json"), include_str!("../../../../games/sunkenland/game.json"), include_str!("../../../../games/sons-of-the-forest/game.json")] {
+        for text in [
+            include_str!("../../../../games/valheim/game.json"),
+            include_str!("../../../../games/sunkenland/game.json"),
+            include_str!("../../../../games/sons-of-the-forest/game.json"),
+            include_str!("../../../../games/stranded-deep/game.json"),
+        ] {
             let game: serde_json::Value = serde_json::from_str(text).unwrap();
             let ids: Vec<&str> = game["categories"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap()).collect();
             let grouped: Vec<&str> = game["groups"].as_array().unwrap().iter().flat_map(|g| g["categories"].as_array().unwrap()).map(|c| c.as_str().unwrap()).collect();
@@ -213,5 +218,16 @@ mod tests {
         assert_eq!(game.process, "Sunkenland.exe");
         assert_eq!(game.steam_app_id, Some(2080690));
         assert!(game.live_features);
+    }
+
+    #[test]
+    fn parses_stranded_deep_game_json() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../games");
+        let games = load_registry(&path);
+        let game = games.iter().find(|g| g.id == "stranded-deep").expect("stranded deep registered");
+        // Not Stranded_Deep_x64.exe: that's the launcher that picks the graphics API.
+        assert_eq!(game.process, "Stranded_Deep.exe");
+        assert_eq!(game.steam_app_id, Some(313120));
+        assert!(game.live_features && game.world_maps);
     }
 }

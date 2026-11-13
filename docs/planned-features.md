@@ -147,6 +147,22 @@ yet), **Deferred** (wanted, waiting on something).
 | Fuel range ring | Deferred | Left out for now: the fuel level is easy to read, but range needs real burn rates measured on a boat, and a wrong ring could strand someone. |
 | In-game pins and pings | Built | Your pins become map marks everyone in the world can see, up to the game's limit, with names cut to its 8 characters. The game has no ping. Not tested with a second player yet. |
 
+## Stranded Deep
+
+| Feature | Status | Notes |
+|---|---|---|
+| Map from the running game | Built | Every zone's terrain is in memory from the start, so the whole world is drawn on the first load (about 10 ms of reading). |
+| Islands, arenas and the carrier | Built | All 49 zones pinned, islands by their names in the game. Islands landed on are marked found, from before Game Maps too. |
+| Remembered things | Built | Wrecks, shelters, loot, salvage, plants, clay and stone, animal dens, and the player's rafts and buildings, read from loaded zones a few dozen objects at a time (60–170 µs a step). |
+| Creatures and bosses | Built | From the game's own lists and the spawners the zones hold, about 45 µs a read; bosses are searched for only in their arenas. Passive wildlife counts as harmless. |
+| Story checklist | Built | The three bosses and the carrier, ticked once visited. |
+| Bosses beaten | Deferred | No record of a beaten boss was found: the arenas save only their position, so the checklist goes by visits. Worth another look by beating one in a test world. |
+| Teleport out of a boss fight | Deferred | Refused: the game only ends a fight when it sees the player swim away inside the arena, so a teleport would leave it running. |
+| Wind on the mini-map | Deferred | Left out: the game has a wind direction, but sails push the raft forward whatever it is, so an arrow would mislead. |
+| Second player | Built | Players from `PlayerRegistry` and the session from Photon Bolt; tested with a fake friend, not a second player yet. |
+| In-game pins and pings | Deferred | Not possible: the game has no map or ping of its own. |
+| Loot left in containers | Idea | Hide crates and lockers that have been emptied. Needs their storage read. |
+
 ## Other games
 
 Ranked by players, how much of Game Maps already applies, and whether the owner has
