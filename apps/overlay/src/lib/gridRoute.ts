@@ -303,6 +303,9 @@ export type LegCheck = (points: Vec3[]) => Promise<{ blocked: number[]; checked:
 
 /** How many times a route is searched again around newly found blocks. */
 const MAX_REROUTES = 8
+/** Walked legs this close (world units) to a rope's or zipline's end aren't checked. */
+const LINK_CLEARANCE = 3
+const isLink = (move: RouteMove | undefined) => move === 'rope' || move === 'zipline'
 
 /**
  * A route whose every walked leg `check` confirms can be walked. Each blocked leg's far node
@@ -322,6 +325,11 @@ export async function walkableRoute(
     route = await find(new Set(blocked.keys()))
     if (!route) return null
     const goal = route.nodes[route.nodes.length - 1]
+    // Where ropes and ziplines start and end: the grid puts them on the nearest floor,
+    // and the walk check there meets the rock the rope hangs from, or the ledge it climbs.
+    const moves = route.moves
+    const linkEnds = route.points.filter((_, i) => isLink(moves[i]) || isLink(moves[i - 1]))
+    const nearLink = (p: Vec3) => linkEnds.some((e) => Math.hypot(p.x - e.x, p.y - e.y, p.z - e.z) <= LINK_CLEARANCE)
     const found: number[] = []
     try {
       // Long routes take several checks: each covers what fits in a frame's budget.
@@ -331,6 +339,7 @@ export async function walkableRoute(
         for (const leg of result.blocked) {
           // The check walks each leg; a climb, ride or swim isn't walked.
           if (route.moves[from + leg] !== 'walk') continue
+          if (nearLink(route.points[from + leg]) || nearLink(route.points[from + leg + 1])) continue
           const node = route.nodes[from + leg + 1]
           if (node !== goal) found.push(node)
         }

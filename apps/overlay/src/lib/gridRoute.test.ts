@@ -161,13 +161,14 @@ describe('walkableRoute', () => {
     expect(route!.points).toHaveLength(7)
   })
 
-  it('does not walk-check climbs, rides or swims', async () => {
-    const g = grid(['..99'])
-    const rope = new GridSearch({ ...g, links: [{ from: 1, to: 2, kind: 'rope' }] })
+  it('does not walk-check climbs, rides or swims, or walks next to a rope', async () => {
+    const g = grid(['......99'])
+    const rope = new GridSearch({ ...g, links: [{ from: 5, to: 6, kind: 'rope' }] })
     const everyLeg: LegCheck = (points) => Promise.resolve({ blocked: points.slice(1).map((_, i) => i), checked: points.length - 1 })
     const blocked = new Map<number, number>()
-    await walkableRoute((b) => Promise.resolve(rope.route(at(0, 0), at(3, 0, 9), b)), everyLeg, blocked)
-    // The first leg (walked) and the rope's top end aren't the same node.
+    await walkableRoute((b) => Promise.resolve(rope.route(at(0, 0), at(7, 0, 9), b)), everyLeg, blocked)
+    // Only legs with both ends more than 3 m from the rope's bottom (cell 5) are
+    // walk-checked: the first one.
     expect([...blocked.keys()]).toEqual([1])
   })
 
