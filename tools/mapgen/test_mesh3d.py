@@ -31,6 +31,13 @@ class Boxes(unittest.TestCase):
         mids = p[f].mean(axis=1)
         self.assertTrue((np.einsum("ij,ij->i", face_normals(p, f), mids) > 0).all())
 
+    def test_a_negative_size_is_the_same_box(self):
+        # A stair ramp in Sons of the Forest's bunkers: 7.5 x -0.2 x 2.6.
+        p, f = mesh3d.box_triangles((0, 0, 0), (7.5, -0.2, 2.6), np.eye(4))
+        mids = p[f].mean(axis=1)
+        self.assertTrue((np.einsum("ij,ij->i", face_normals(p, f), mids) > 0).all())
+        self.assertTrue(np.allclose(p.max(axis=0), (3.75, 0.1, 1.3)))
+
     def test_leaving_out_the_top_drops_the_upward_face(self):
         p, f = mesh3d.box_triangles((0, 0, 0), (1, 1, 1), np.eye(4), top=False)
         self.assertEqual(len(f), 10)

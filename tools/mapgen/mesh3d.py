@@ -53,8 +53,10 @@ _CUBE_FACES = [
 
 def box_triangles(center, size, matrix: np.ndarray, top: bool = True) -> tuple[np.ndarray, np.ndarray]:
     """A box collider as world-space triangles: (8, 3) positions and (n, 3) faces.
-    `top=False` leaves out the face whose normal points most upward in world space."""
-    local = _CUBE * np.asarray(size, dtype=np.float64) + np.asarray(center, dtype=np.float64)
+    `top=False` leaves out the face whose normal points most upward in world space.
+    A negative size is a box the size of its absolute value, as in Unity (Sons of the
+    Forest's bunker stairs are such boxes): taken as is, it would turn the box inside out."""
+    local = _CUBE * np.abs(np.asarray(size, dtype=np.float64)) + np.asarray(center, dtype=np.float64)
     world = local @ matrix[:3, :3].T + matrix[:3, 3]
     faces = []
     up_face = None
