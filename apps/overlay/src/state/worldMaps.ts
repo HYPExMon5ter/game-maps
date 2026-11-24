@@ -39,7 +39,10 @@ async function showWorldMap({ game_id: gameId, world_id: worldId, tiles, explore
   const key = keys.fog(gameId, worldId)
   if (!(await waitFor(() => useFogStore.getState().key === key && !!useFogStore.getState().fog))) return
   const res = await fetch(`${worldMapBase(gameId, worldId)}/explored.bin`)
-  if (res.ok) mergeGameExplored(new Uint8Array(await res.arrayBuffer()))
+  if (!res.ok) return
+  const bits = new Uint8Array(await res.arrayBuffer())
+  // The map may have moved on to another world while this was read.
+  if (useFogStore.getState().key === key) mergeGameExplored(bits)
 }
 
 /** Shows a world's map when it's ready. Only the overlay (`record`) saves what's explored. */

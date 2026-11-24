@@ -151,12 +151,17 @@ impl AppSettings {
         self.hook_modes.clear();
     }
 
-    /// Hotkeys sent to the agent for `game`: its map key plus the zoom keys.
-    pub fn hotkeys(&self, game: &GameEntry) -> Vec<Hotkey> {
-        let mut keys = match self.map_hotkeys.get(&game.id) {
+    /// `game`'s own keys: the player's map key, or the game's defaults.
+    fn game_keys(&self, game: &GameEntry) -> Vec<Hotkey> {
+        match self.map_hotkeys.get(&game.id) {
             Some(h) => vec![h.clone()],
             None => game.hotkeys(),
-        };
+        }
+    }
+
+    /// Hotkeys sent to the agent for `game`: its map key plus the zoom keys.
+    pub fn hotkeys(&self, game: &GameEntry) -> Vec<Hotkey> {
+        let mut keys = self.game_keys(game);
         keys.extend(self.zoom_keys.bindings().cloned());
         keys.extend(self.back_key.clone());
         keys.extend(self.action_keys.bindings().cloned());
@@ -186,6 +191,11 @@ impl SettingsState {
 
 pub fn get(app: &AppHandle) -> AppSettings {
     app.state::<SettingsState>().0.lock().unwrap().clone()
+}
+
+/// The key that opens `game`'s map. For what asks many times a second: nothing else is copied.
+pub fn map_hotkey(app: &AppHandle, game: &GameEntry) -> Option<Hotkey> {
+    app.state::<SettingsState>().0.lock().unwrap().game_keys(game).into_iter().find(|h| h.action == HotkeyAction::ToggleMap)
 }
 
 /// Applies `change` and saves the result.

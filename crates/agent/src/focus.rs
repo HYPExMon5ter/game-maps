@@ -23,7 +23,7 @@
 //! pipe, so neither guard ever affects the game when the app isn't running.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use game_maps_protocol::Hotkey;
@@ -152,10 +152,20 @@ pub fn unity_keycode(vk: u16) -> Option<u32> {
     })
 }
 
-/// The hidden hotkey, if the app is connected and the hotkey's modifiers are held.
+/// The game is taking text (chat, a sign, a save's name), as its provider last saw.
+static TYPING: AtomicBool = AtomicBool::new(false);
+
+/// Says whether the game is taking text: the hotkey is then a letter to type, and isn't
+/// kept from the game.
+pub fn set_typing(typing: bool) {
+    TYPING.store(typing, Ordering::Relaxed);
+}
+
+/// The hidden hotkey, if the app is connected, the game isn't taking text and the hotkey's
+/// modifiers are held.
 fn active_hidden_key() -> Option<u64> {
     let packed = HIDDEN_KEY.load(Ordering::Relaxed);
-    if packed & HAS_KEY == 0 || APP_PID.load(Ordering::Relaxed) == 0 {
+    if packed & HAS_KEY == 0 || APP_PID.load(Ordering::Relaxed) == 0 || TYPING.load(Ordering::Relaxed) {
         return None;
     }
     let held = |vk: u16| (unsafe { GetAsyncKeyState(vk as i32) } as u16 & 0x8000) != 0;
@@ -185,8 +195,6 @@ fn is_hidden_vk(vk: u32) -> bool {
 static PEEK_W: AtomicUsize = AtomicUsize::new(0);
 static PEEK_A: AtomicUsize = AtomicUsize::new(0);
 static GET_W: AtomicUsize = AtomicUsize::new(0);
-/// Threads inside the `GetMessage` detours.
-static IN_GET_MESSAGE: AtomicUsize = AtomicUsize::new(0);
 static GET_A: AtomicUsize = AtomicUsize::new(0);
 static RAW_DATA: AtomicUsize = AtomicUsize::new(0);
 static RAW_BUFFER: AtomicUsize = AtomicUsize::new(0);
@@ -208,6 +216,7 @@ unsafe fn filter_message(msg: *mut MSG) {
 }
 
 unsafe extern "system" fn peek_message_w(msg: *mut MSG, hwnd: HWND, min: u32, max: u32, remove: u32) -> BOOL {
+    let _inside = Inside::enter();
     crate::hook::pump_tick();
     let original: PeekMessageFn = std::mem::transmute(PEEK_W.load(Ordering::Relaxed));
     let r = original(msg, hwnd, min, max, remove);
@@ -218,6 +227,7 @@ unsafe extern "system" fn peek_message_w(msg: *mut MSG, hwnd: HWND, min: u32, ma
 }
 
 unsafe extern "system" fn peek_message_a(msg: *mut MSG, hwnd: HWND, min: u32, max: u32, remove: u32) -> BOOL {
+    let _inside = Inside::enter();
     crate::hook::pump_tick();
     let original: PeekMessageFn = std::mem::transmute(PEEK_A.load(Ordering::Relaxed));
     let r = original(msg, hwnd, min, max, remove);
@@ -228,24 +238,22 @@ unsafe extern "system" fn peek_message_a(msg: *mut MSG, hwnd: HWND, min: u32, ma
 }
 
 unsafe extern "system" fn get_message_w(msg: *mut MSG, hwnd: HWND, min: u32, max: u32) -> BOOL {
+    let _inside = Inside::enter();
     let original: GetMessageFn = std::mem::transmute(GET_W.load(Ordering::Relaxed));
-    IN_GET_MESSAGE.fetch_add(1, Ordering::SeqCst);
     let r = original(msg, hwnd, min, max);
     if r.0 > 0 {
         filter_message(msg);
     }
-    IN_GET_MESSAGE.fetch_sub(1, Ordering::SeqCst);
     r
 }
 
 unsafe extern "system" fn get_message_a(msg: *mut MSG, hwnd: HWND, min: u32, max: u32) -> BOOL {
+    let _inside = Inside::enter();
     let original: GetMessageFn = std::mem::transmute(GET_A.load(Ordering::Relaxed));
-    IN_GET_MESSAGE.fetch_add(1, Ordering::SeqCst);
     let r = original(msg, hwnd, min, max);
     if r.0 > 0 {
         filter_message(msg);
     }
-    IN_GET_MESSAGE.fetch_sub(1, Ordering::SeqCst);
     r
 }
 
@@ -271,6 +279,7 @@ unsafe fn filter_raw(raw: *mut RAWINPUT, in_front: bool) {
 }
 
 unsafe extern "system" fn get_raw_input_data(input: HRAWINPUT, command: u32, data: *mut c_void, size: *mut u32, header_size: u32) -> u32 {
+    let _inside = Inside::enter();
     let original: GetRawInputDataFn = std::mem::transmute(RAW_DATA.load(Ordering::Relaxed));
     let r = original(input, command, data, size, header_size);
     if command == RID_INPUT.0 && !data.is_null() && r != u32::MAX && r as usize >= std::mem::size_of::<RAWINPUTHEADER>() {
@@ -280,6 +289,7 @@ unsafe extern "system" fn get_raw_input_data(input: HRAWINPUT, command: u32, dat
 }
 
 unsafe extern "system" fn get_raw_input_buffer(data: *mut RAWINPUT, size: *mut u32, header_size: u32) -> u32 {
+    let _inside = Inside::enter();
     let original: GetRawInputBufferFn = std::mem::transmute(RAW_BUFFER.load(Ordering::Relaxed));
     let count = original(data, size, header_size);
     if !data.is_null() && count != u32::MAX {
@@ -326,6 +336,7 @@ fn is_minimize(cmd: SHOW_WINDOW_CMD) -> bool {
 }
 
 unsafe extern "system" fn show_window(hwnd: HWND, cmd: SHOW_WINDOW_CMD) -> BOOL {
+    let _inside = Inside::enter();
     if is_minimize(cmd) && window_pid(hwnd) == GetCurrentProcessId() && app_in_front() {
         // `ShowWindow` returns whether the window was visible before; it still is.
         return BOOL(1);
@@ -384,6 +395,7 @@ macro_rules! input_detours {
     ($($slot:literal => $key:ident, $b1:ident, $f1:ident, $b0:ident;)*) => {
         $(
             unsafe extern "C" fn $key(keycode: usize) -> bool {
+                let _inside = Inside::enter();
                 if app_in_front() || is_hidden_key(keycode) {
                     return false;
                 }
@@ -391,6 +403,7 @@ macro_rules! input_detours {
                 original(keycode)
             }
             unsafe extern "C" fn $b1(arg: usize) -> bool {
+                let _inside = Inside::enter();
                 if app_in_front() {
                     return false;
                 }
@@ -398,6 +411,7 @@ macro_rules! input_detours {
                 original(arg)
             }
             unsafe extern "C" fn $f1(arg: usize) -> f32 {
+                let _inside = Inside::enter();
                 if app_in_front() {
                     return 0.0;
                 }
@@ -405,6 +419,7 @@ macro_rules! input_detours {
                 original(arg)
             }
             unsafe extern "C" fn $b0() -> bool {
+                let _inside = Inside::enter();
                 if app_in_front() {
                     return false;
                 }
@@ -464,18 +479,39 @@ pub fn install_input_guard(rt: &Runtime) -> usize {
 }
 
 /// Stops every guard hook (before the agent unloads); see `hook::remove` for freeing them.
-pub fn disable() {
+/// False if one couldn't be stopped: it can still be entered.
+pub fn disable() -> bool {
+    let mut stopped = true;
     for target in HOOKED.lock().unwrap().drain(..) {
-        unsafe {
-            let _ = MinHook::disable_hook(target as *mut c_void);
-        }
+        stopped &= unsafe { MinHook::disable_hook(target as *mut c_void) }.is_ok();
+    }
+    stopped
+}
+
+/// Threads inside one of this module's detours right now.
+static INSIDE: AtomicUsize = AtomicUsize::new(0);
+
+/// Held by a detour for as long as a thread is in it.
+struct Inside;
+
+impl Inside {
+    fn enter() -> Self {
+        INSIDE.fetch_add(1, Ordering::SeqCst);
+        Self
     }
 }
 
-/// Whether a game thread is blocked in `GetMessage` with this module on its stack: it
-/// returns here whenever a message comes, so the module has to stay mapped.
-pub fn thread_in_get_message() -> bool {
-    IN_GET_MESSAGE.load(Ordering::SeqCst) != 0
+impl Drop for Inside {
+    fn drop(&mut self) {
+        INSIDE.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Whether a game thread is inside one of the detours, with this module on its stack: it
+/// returns here sooner or later (a thread waiting in `GetMessage`, whenever a message
+/// comes), so the module and the way back to the original have to stay.
+pub fn thread_inside() -> bool {
+    INSIDE.load(Ordering::SeqCst) != 0
 }
 
 #[cfg(test)]

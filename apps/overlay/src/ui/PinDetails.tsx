@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { findPin, teleportToPin } from '../lib/actions'
 import { compassReading, formatDistance } from '../lib/compass'
 import { LAYER_LABELS, type Pin } from '../lib/game'
+import { foundSet } from '../lib/lookup'
 import { readyPeers, shareTrack, targetOfPin, useSyncStore } from '../lib/sync/sync'
 import { formatRemaining } from '../lib/timers'
 import { useCanTeleport, useTeleportOffered } from '../lib/teleport'
@@ -86,7 +87,7 @@ export function PinDetails({ onEdit }: { onEdit: (pin: Pin) => void }) {
   const map = useStore((s) => s.map)
   // Re-render when pins change (edits, found state).
   useStore((s) => s.user)
-  const found = useStore((s) => (id ? s.user.found.includes(id) : false))
+  const found = useStore((s) => (id ? foundSet(s.user.found).has(id) : false))
   const tracked = useStore((s) => s.tracked)
   const units = useSettings((s) => s.ui.units)
   const local = useStore((s) => s.snapshot?.local ?? null)
@@ -104,7 +105,7 @@ export function PinDetails({ onEdit }: { onEdit: (pin: Pin) => void }) {
   const reading = local ? compassReading(map.projection, local, pin.position, game.unitsPerMeter) : null
 
   return (
-    <div className="glass pointer-events-auto w-[340px] rounded-2xl p-4">
+    <div className="glass pointer-events-auto w-[340px] max-w-full rounded-2xl p-4">
       <div className="flex items-start gap-3">
         <CategoryIcon gameId={game.id} category={category} icon={pin.icon} color={pin.color} size={36} />
         <div className="min-w-0 flex-1">

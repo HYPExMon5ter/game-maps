@@ -176,6 +176,13 @@ export const backend = {
   checkForUpdates: () => invoke<void>('check_for_updates'),
   installUpdate: () => invoke<void>('install_update'),
   openLogsFolder: () => invoke<void>('open_logs_folder'),
+  /** A world's explored areas as saved (see `lib/fog`); empty when it has none. */
+  loadFog: async (gameId: string, worldId: string) => new Uint8Array(await invoke<ArrayBuffer>('load_fog', { game: gameId, world: worldId })),
+  saveFog: (gameId: string, worldId: string, file: Uint8Array<ArrayBuffer>) =>
+    invoke<void>('save_fog', file, { headers: { game: encodeURIComponent(gameId), world: encodeURIComponent(worldId) } }),
+  deleteFog: (gameId: string, worldId: string) => invoke<void>('delete_fog', { game: gameId, world: worldId }),
+  /** Forgets the explored areas of every new game of `gameId` that was never saved. */
+  deleteUnsavedFog: (gameId: string) => invoke<void>('delete_unsaved_fog', { game: gameId }),
 }
 
 /** A pin for the game's own map. */

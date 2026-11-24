@@ -127,17 +127,35 @@ def gh(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(["gh", *args], check=check, capture_output=True, text=True)
 
 
+def parse_manifest(text: str) -> dict:
+    """maps.json as published. Anything else stops the run: publishing on top of a manifest
+    that couldn't be read would drop every other game from it."""
+    try:
+        manifest = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"the published {MANIFEST} is not valid JSON ({e}); nothing was uploaded")
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("packs"), dict):
+        raise SystemExit(f"the published {MANIFEST} has no list of packs; nothing was uploaded")
+    return manifest
+
+
 def fetch_manifest(repo: str) -> dict:
-    """Current maps.json, creating the `maps` release on first use."""
-    if gh("release", "view", RELEASE_TAG, "--repo", repo, check=False).returncode != 0:
+    """Current maps.json, creating the `maps` release on first use. Empty only when there
+    is none yet: a manifest that's there but can't be fetched stops the run."""
+    assets = gh("release", "view", RELEASE_TAG, "--repo", repo, "--json", "assets", "--jq", ".assets[].name", check=False)
+    if assets.returncode != 0:
+        if "release not found" not in assets.stderr.lower():
+            raise SystemExit(f"could not look up the '{RELEASE_TAG}' release on {repo}: {assets.stderr.strip()}")
         print(f"creating release '{RELEASE_TAG}' on {repo}")
         gh("release", "create", RELEASE_TAG, "--repo", repo, "--prerelease", "--title", "Map data",
            "--notes", "Map data downloaded automatically by the Game Maps app. Managed by tools/mappack/publish.py.")
         return {"packs": {}}
-    res = gh("release", "download", RELEASE_TAG, "--repo", repo, "--pattern", MANIFEST, "--output", "-", check=False)
-    if res.returncode != 0 or not res.stdout.strip():
+    if MANIFEST not in assets.stdout.split():
         return {"packs": {}}
-    return json.loads(res.stdout)
+    res = gh("release", "download", RELEASE_TAG, "--repo", repo, "--pattern", MANIFEST, "--output", "-", check=False)
+    if res.returncode != 0:
+        raise SystemExit(f"could not download the published {MANIFEST}: {res.stderr.strip()}; nothing was uploaded")
+    return parse_manifest(res.stdout)
 
 
 def upload_manifest(repo: str, manifest: dict) -> None:
@@ -212,7 +230,7 @@ def main() -> None:
             for path in [zip_path] + [p for p, _ in extras.values()]:
                 print(f"  built {path}")
             continue
-        current = manifest.setdefault("packs", {}).get(game)
+        current = manifest["packs"].get(game)
         counts = pin_counts(game_dir)
         lost = lost_pins((current or {}).get("pinCounts", {}), counts)
         if lost and not args.force:

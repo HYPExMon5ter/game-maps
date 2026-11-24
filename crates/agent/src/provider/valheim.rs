@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::time::{Duration, Instant};
 
-use game_maps_protocol::{Wind, ZonePins, WORLD_MAP_NOT_READY, Capabilities, Creature, CreatureKind, Environment, GamePin, GameWorld, LocalPlayer, Marker, MarkerKind, MultiplayerSession, PathInfo, RemotePlayer, TeleportTarget, Vec3, WorldKind, WorldLayer, WorldPin, WorldSnapshot};
+use game_maps_protocol::{Wind, ZonePins, WORLD_MAP_NOT_READY, WORLD_MAP_OTHER_WORLD,Capabilities, Creature, CreatureKind, Environment, GamePin, GameWorld, LocalPlayer, Marker, MarkerKind, MultiplayerSession, PathInfo, RemotePlayer, TeleportTarget, Vec3, WorldKind, WorldLayer, WorldPin, WorldSnapshot};
 use unity_runtime::{read_object_array, read_string, read_value_array, Class, Field, ListLayout, ManagedArray, ManagedObject, Method, Quaternion, Runtime, Vector3};
 
 use super::{to_proto, to_unity, Cx, Provider};
@@ -535,6 +535,11 @@ impl Valheim {
         Some(LocalPlayer { position, forward, layer: WorldLayer::Surface, camera: None })
     }
 
+    /// The id of the world that's loaded right now (see [`Valheim::read_world`]).
+    unsafe fn live_world_id(&self, cx: &Cx) -> Option<String> {
+        self.read_world(cx, std::ptr::null_mut()).map(|(world, _)| world.id)
+    }
+
     /// The world that's loaded, and the session that goes with it.
     unsafe fn read_world(&self, cx: &Cx, player: *mut ManagedObject) -> Option<(GameWorld, Option<MultiplayerSession>)> {
         if let Some(field) = self.net.game {
@@ -933,8 +938,9 @@ unsafe fn copy_collection(rt: &Runtime, collection: *mut ManagedObject, element:
 /// # Safety
 /// `icons` must be null or that dictionary.
 unsafe fn read_icons(rt: &Runtime, icons: *mut ManagedObject) -> Result<Vec<(String, Vector3)>, String> {
+    // Not there isn't the same as empty: with none read, the ones read before still stand.
     if icons.is_null() {
-        return Ok(Vec::new());
+        return Err("the location icons aren't there yet".into());
     }
     let class = rt.class_of(icons).ok_or("no location icons")?;
     let collection = |getter: &str| -> Result<*mut ManagedObject, String> {
@@ -995,6 +1001,12 @@ impl Provider for Valheim {
             return None;
         }
         let net = self.net(cx)?;
+        // What's read is filed under the world the app was last told of. The game may be
+        // in another by now, which snapshots only catch up with every so often: nothing is
+        // read until they have.
+        if self.live_world_id(cx) != self.game_world.as_ref().map(|w| w.id.clone()) {
+            return None;
+        }
         let wishbone = self.wearing_wishbone(player);
         self.scanner.as_mut()?.next(cx, net, around, wishbone)
     }
@@ -1167,9 +1179,15 @@ impl Provider for Valheim {
         Err("Valheim has no routes across its world".into())
     }
 
-    unsafe fn read_world_map(&mut self, cx: &Cx, terrain: bool) -> Result<WorldMapCapture, String> {
+    unsafe fn read_world_map(&mut self, cx: &Cx, world: &str, terrain: bool) -> Result<WorldMapCapture, String> {
+        // Which world it is comes first, read now (what snapshots report is a moment old):
+        // another one will never have this one's map, however long the app asks.
+        let loaded = self.live_world_id(cx);
+        if loaded.as_deref().is_some_and(|id| id != world) {
+            return Err(WORLD_MAP_OTHER_WORLD.into());
+        }
         // Until the player has spawned, a new world may still be placing its locations.
-        if !self.spawned || !self.map_ready(cx) {
+        if loaded.is_none() || !self.spawned || !self.map_ready(cx) {
             return Err(WORLD_MAP_NOT_READY.into());
         }
         let m = self.minimap.as_ref().ok_or("the map is unavailable in this game version")?;
@@ -1215,10 +1233,8 @@ impl Provider for Valheim {
             None
         };
         let started = Instant::now();
-        let pins = self.read_locations(cx).unwrap_or_else(|e| {
-            crate::filelog::write(&format!("locations unavailable: {e}"));
-            Vec::new()
-        });
+        // Without them the map still works, with the locations read before.
+        let pins = self.read_locations(cx).map_err(|e| crate::filelog::write(&format!("locations unavailable: {e}"))).ok();
         self.notes.push(format!("Valheim locations read in {:?}", started.elapsed()));
         Ok(WorldMapCapture { size: (size * terrain::UPSCALE) as u32, pins, explored, terrain: draw })
     }

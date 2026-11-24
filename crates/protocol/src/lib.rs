@@ -13,10 +13,13 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 /// Bumped on any incompatible change. Both sides refuse to talk across versions.
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
 /// Error of `ReadWorldMap` while the game is still building the map: worth asking again.
 pub const WORLD_MAP_NOT_READY: &str = "the game hasn't built its map yet";
+/// Error of `ReadWorldMap` when the game is in another world than the one asked for: that
+/// world's map can't be read any more.
+pub const WORLD_MAP_OTHER_WORLD: &str = "the game has loaded another world";
 
 /// Name of the pipe an agent serves for a given game process id.
 pub fn pipe_name(pid: u32) -> String {
@@ -511,7 +514,9 @@ pub struct ZonePins {
 pub struct WorldMap {
     /// Pixels per side of `terrain.rgb` (8-bit RGB, row 0 is the map's north edge).
     pub size: u32,
-    pub pins: Vec<WorldPin>,
+    /// The world's places; `None` when they couldn't be read this time (the ones read
+    /// before still stand).
+    pub pins: Option<Vec<WorldPin>>,
 }
 
 /// A pin the player placed in the app, to show on the game's own map.
@@ -593,9 +598,10 @@ pub enum AppMessage {
     PlaceInfo { request_id: u32, position: Vec3 },
     /// Tells `companion` to do `order` (an id from `CompanionOrders`).
     CompanionOrder { request_id: u32, companion: String, order: String },
-    /// Reads the loaded world's map into `dir`: where it's explored, always, and the
-    /// terrain if `terrain` is set (it's the same every time, so it's read once).
-    ReadWorldMap { request_id: u32, dir: String, terrain: bool },
+    /// Reads the map of `world` (its `GameWorld::id`, as the agent reported it) into `dir`,
+    /// if that's still the loaded world: where it's explored, always, and the terrain if
+    /// `terrain` is set (it's the same every time, so it's read once).
+    ReadWorldMap { request_id: u32, dir: String, world: String, terrain: bool },
     /// The player's pins in this world, all of them: the game's map is brought in line.
     SetGamePins { pins: Vec<GamePin> },
     /// Pings `position` the way the game does, for everyone in the world.

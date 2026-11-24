@@ -1,10 +1,12 @@
 import { Check, Copy, Footprints, Info, MapPinPlus, Navigation, Pencil, Radio, Trash2, Zap } from 'lucide-react'
-import { Activity, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { Activity, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject } from 'react'
 import { findPin, navigateTo, newCustomPinAt, teleportToMapPoint, teleportToWorld } from '../lib/actions'
 import { backend } from '../lib/backend'
 import type { GameMap, Pin } from '../lib/game'
 import type { CompanionStatus, Vec3 } from '../lib/protocol'
-import { fitRect, MIN_MAP_PANEL, toPixels } from '../lib/layout'
+import { fitRect, HANDLES, minMapPanel, moveRect, resizeRect, toFractions, toPixels, type Handle, type Rect, type Size } from '../lib/layout'
+import { foundSet } from '../lib/lookup'
+import { toastMs } from '../lib/toast'
 import { toLngLat, toWorld } from '../lib/projection'
 import { readyPeers, sendPing, useSyncStore } from '../lib/sync/sync'
 import { useUiScale, useWindowSize } from '../lib/uiScale'
@@ -26,6 +28,8 @@ import { PinEditor } from './PinEditor'
 import { SettingsPanel } from './SettingsPanel'
 import { Sidebar } from './Sidebar'
 import { SyncRequests } from './SyncRequests'
+import { applyRect, trackDrag } from './dragRect'
+import { useDismiss } from './useDismiss'
 import { LinkProblem, TopBar } from './TopBar'
 import { useSettings } from '../settings/store'
 import { IS_MAP_WINDOW } from '../lib/view'
@@ -65,19 +69,26 @@ function ContextMenu({
   const world = at.world ?? (map ? toWorld(map.projection, at.lngLat) : null)
   const item = 'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] hover:bg-panel-raised disabled:opacity-40'
   const pin = at.pinId ? findPin(at.pinId) : undefined
-  // Up from the bottom of the map when it wouldn't fit there.
+  // Back inside the map when it wouldn't fit below or to the right of the click: the
+  // map's panel cuts off what sticks out.
   const ref = useRef<HTMLDivElement>(null)
-  const [lift, setLift] = useState(0)
+  const [shift, setShift] = useState({ x: 0, y: 0 })
   useLayoutEffect(() => {
     const el = ref.current
     const parent = el?.offsetParent
-    if (el && parent) setLift(Math.max(0, el.getBoundingClientRect().height + at.y + 8 - parent.getBoundingClientRect().height))
+    if (!el || !parent) return
+    const menu = el.getBoundingClientRect()
+    const area = parent.getBoundingClientRect()
+    const x = Math.max(0, menu.width + at.x + 8 - area.width)
+    const y = Math.max(0, menu.height + at.y + 8 - area.height)
+    setShift((s) => (s.x === x && s.y === y ? s : { x, y }))
   }, [at, pin])
+  useDismiss(true, ref, onClose)
   return (
     <div
       ref={ref}
       className="glass pointer-events-auto absolute z-20 w-[200px] rounded-xl p-1"
-      style={{ left: at.x / scale, top: (at.y - lift) / scale }}
+      style={{ left: Math.max(0, at.x - shift.x) / scale, top: Math.max(0, at.y - shift.y) / scale }}
       onMouseDown={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.preventDefault()}
     >
@@ -129,7 +140,7 @@ function ContextMenu({
 /** What can be done with a pin, on the menu for it. */
 function PinMenuItems({ pin, item, onEdit, onClose }: { pin: Pin; item: string; onEdit: (pin: Pin) => void; onClose: () => void }) {
   const tracked = useStore((s) => s.tracked?.kind === 'pin' && s.tracked.id === pin.id)
-  const found = useStore((s) => s.user.found.includes(pin.id))
+  const found = useStore((s) => foundSet(s.user.found).has(pin.id))
   const { selectPin, setTracked, toggleFound, deleteCustomPin } = useStore.getState()
   const run = (action: () => void) => () => {
     action()
@@ -169,20 +180,66 @@ function Toast() {
   const dismiss = useStore((s) => s.dismissToast)
   useEffect(() => {
     if (!toast) return
-    const t = setTimeout(() => dismiss(toast.id), 2600)
+    const t = setTimeout(() => dismiss(toast.id), toastMs(toast.text, toast.tone))
     return () => clearTimeout(t)
   }, [toast, dismiss])
   if (!toast) return null
+  // As wide as its text up to a limit, then it wraps: an error can run to a few lines.
   return (
     <div
       role="status"
-      className={`glass pointer-events-none absolute bottom-5 left-1/2 z-40 -translate-x-1/2 rounded-full px-4 py-2 text-[13px] ${
+      className={`glass pointer-events-none absolute bottom-5 left-1/2 z-40 w-max max-w-[min(90%,560px)] -translate-x-1/2 rounded-[18px] px-4 py-2 text-center text-[13px] ${
         toast.tone === 'error' ? 'text-danger' : ''
       }`}
     >
       {toast.text}
     </div>
   )
+}
+
+/** Where each edge and corner of the floating map is grabbed to resize it. */
+const GRIP_STYLE: Record<Handle, string> = {
+  n: 'inset-x-4 top-0 h-1.5 cursor-ns-resize',
+  s: 'inset-x-4 bottom-0 h-1.5 cursor-ns-resize',
+  e: 'inset-y-4 right-0 w-1.5 cursor-ew-resize',
+  w: 'inset-y-4 left-0 w-1.5 cursor-ew-resize',
+  nw: 'left-0 top-0 size-4 cursor-nwse-resize',
+  ne: 'right-0 top-0 size-4 cursor-nesw-resize',
+  se: 'bottom-0 right-0 size-4 cursor-nwse-resize',
+  sw: 'bottom-0 left-0 size-4 cursor-nesw-resize',
+}
+
+/** What in the top bar does something itself, so pressing it doesn't move the map. */
+const BAR_CONTROLS = 'button, a, input, select, textarea, [data-menu]'
+
+/**
+ * The floating map moves and resizes like a window: dragged by its top bar, resized by
+ * its edges and corners. Saved when the drag ends (see `ui/dragRect`).
+ */
+function usePanelDrag(panelRef: RefObject<HTMLDivElement | null>, rect: Rect, screen: Size, min: Size) {
+  const begin = (e: ReactPointerEvent, next: (dx: number, dy: number) => Rect) => {
+    let current = rect
+    trackDrag(
+      e,
+      (dx, dy) => {
+        current = next(dx, dy)
+        applyRect(panelRef.current, current)
+      },
+      () => {
+        if (current !== rect) useSettings.getState().setUi({ mapPanel: toFractions(current, screen) })
+      },
+    )
+  }
+  return {
+    move: (e: ReactPointerEvent) => {
+      if (e.button !== 0 || (e.target as HTMLElement).closest(BAR_CONTROLS)) return
+      begin(e, (dx, dy) => moveRect(rect, dx, dy, screen))
+    },
+    resize: (handle: Handle) => (e: ReactPointerEvent) => {
+      if (e.button !== 0) return
+      begin(e, (dx, dy) => resizeRect(rect, handle, dx, dy, min, screen, screen))
+    },
+  }
 }
 
 /** Map area covered by the top bar and sidebar (see the layout below), in screen px. */
@@ -206,19 +263,27 @@ export function FullMap() {
   const screen = useWindowSize()
   const panelRef = useRef<HTMLDivElement>(null)
   const editingLayout = useStore((s) => s.editingLayout)
+  const uiScale = useUiScale()
+  const minPanel = useMemo(() => minMapPanel(uiScale), [uiScale])
   const rect = useMemo(() => {
     const r = fitRect(toPixels(mapPanel, screen), screen)
-    return fills ? { left: 0, top: 0, ...screen } : fitRect({ ...r, width: Math.max(r.width, MIN_MAP_PANEL.width), height: Math.max(r.height, MIN_MAP_PANEL.height) }, screen)
-  }, [mapPanel, screen, fills])
+    return fills ? { left: 0, top: 0, ...screen } : fitRect({ ...r, width: Math.max(r.width, minPanel.width), height: Math.max(r.height, minPanel.height) }, screen)
+  }, [mapPanel, screen, fills, minPanel])
   const hasSelection = useStore((s) => s.selectedPinId !== null)
   const hasLiveSelection = useStore((s) => s.selectedLiveId !== null)
   const tracking = useStore((s) => s.tracked !== null)
   const [menu, setMenu] = useState<MapContextMenuEvent | null>(null)
+  const closeMenu = useCallback(() => setMenu(null), [])
   const [editing, setEditing] = useState<Pin | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const shown = useStore((s) => IS_MAP_WINDOW || s.mode === 'open')
-  const uiScale = useUiScale()
   const fitPadding = useMemo(() => panelPadding(uiScale), [uiScale])
+  const drag = usePanelDrag(panelRef, rect, screen, minPanel)
+  // The map window is moved and resized by its own frame.
+  const floating = !fills
+  const toggleFill = (e: ReactMouseEvent) => {
+    if (!(e.target as HTMLElement).closest(BAR_CONTROLS)) useSettings.getState().setUi({ mapMaximized: !fills })
+  }
   const mode3d = use3DMode()
   const data3d = useMap3D()
   // The same menu as on the map, from a pin in a list.
@@ -230,7 +295,7 @@ export function FullMap() {
   }
 
   return (
-    <div className="relative h-full w-full" onMouseDown={() => setMenu(null)}>
+    <div className="relative h-full w-full" onMouseDown={closeMenu}>
       <div
         ref={panelRef}
         className="absolute overflow-hidden rounded-3xl bg-black/40 shadow-2xl ring-1 ring-white/10"
@@ -246,7 +311,12 @@ export function FullMap() {
           <div className="absolute inset-0 flex flex-col gap-3 p-3">
             {/* Above the sidebar and cards: its menus open over them. */}
             <div className="pointer-events-auto relative z-30">
-              <TopBar onSettings={() => setSettingsOpen(!settingsOpen)} settingsOpen={settingsOpen} />
+              <TopBar
+                onSettings={() => setSettingsOpen(!settingsOpen)}
+                settingsOpen={settingsOpen}
+                onMove={floating ? drag.move : undefined}
+                onToggleFill={IS_MAP_WINDOW ? undefined : toggleFill}
+              />
               <LinkProblem />
             </div>
             <div className="flex min-h-0 flex-1 gap-3">
@@ -265,7 +335,7 @@ export function FullMap() {
                   </div>
                 )}
               </div>
-              <div className="flex min-h-0 flex-col items-end gap-3">
+              <div className="flex min-h-0 min-w-0 flex-col items-end gap-3">
                 {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
                 {!settingsOpen && hasSelection && <PinDetails onEdit={setEditing} />}
                 {!settingsOpen && hasLiveSelection && <LiveDetails />}
@@ -283,13 +353,14 @@ export function FullMap() {
           <MissingMap />
           <Download3D />
           <FogTip />
-          {menu && <ContextMenu at={menu} scale={uiScale} onClose={() => setMenu(null)} onAddPin={setEditing} />}
+          {menu && <ContextMenu at={menu} scale={uiScale} onClose={closeMenu} onAddPin={setEditing} />}
           {editing && <PinEditor pin={editing} onClose={() => setEditing(null)} />}
           <Toast />
         </div>
         </Activity>
+        {floating && !editingLayout && HANDLES.map((h) => <div key={h} className={`absolute z-40 touch-none hover:bg-accent/50 ${GRIP_STYLE[h]}`} onPointerDown={drag.resize(h)} />)}
       </div>
-      {editingLayout && !IS_MAP_WINDOW && <LayoutEditor panelRef={panelRef} panel={rect} screen={screen} />}
+      {editingLayout && !IS_MAP_WINDOW && <LayoutEditor panelRef={panelRef} panel={rect} screen={screen} minPanel={minPanel} />}
     </div>
   )
 }

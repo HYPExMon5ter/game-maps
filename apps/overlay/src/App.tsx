@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { companionAlerts } from './lib/companions'
-import { pinsReached } from './lib/autoFound'
+import { pinsReached, reachInputs, sameInputs } from './lib/autoFound'
 import { resolveTracked } from './lib/tracking'
 import { bagMoved, clearDeathPin, findPin, markBag, markDeath, quickMark, refreshBackSteps, trackNearestUnfound } from './lib/actions'
 import { caveAt, caveIndex, caveRoute } from './lib/caveNav'
+import { foundSet } from './lib/lookup'
 import { nearestEntrance, routeDestination } from './lib/route'
 import type { LocalPlayer, Vec3 } from './lib/protocol'
 import { dueTimers } from './lib/timers'
@@ -178,20 +179,24 @@ function useRoute() {
 
 /** Marks collectibles found as the player passes them (see `lib/autoFound`). */
 function useAutoFound() {
-  useEffect(
-    () =>
-      useStore.subscribe((s, prev) => {
-        const local = s.snapshot?.local
-        if (s.snapshot === prev.snapshot || !local || !s.game || !s.map || !gameSettings(useSettings.getState().ui, s.game.id).autoFound) return
-        // The game is in a world the map hasn't switched to yet: this isn't a find in this one.
-        if (s.snapshot?.world && s.snapshot.world.id !== s.world.id) return
-        const reached = pinsReached(s.gamePins, s.game.categories, new Set(s.user.found), local, s.map.projection, s.game.unitsPerMeter)
-        if (reached.length === 0) return
-        s.markFound(reached.map((p) => p.id))
-        if (s.mode !== 'hidden') s.notify(`Found: ${reached.map((p) => p.name).join(', ')}`)
-      }),
-    [],
-  )
+  useEffect(() => {
+    // What the last check looked at: snapshots arrive many times a second, most of them
+    // with the player where they were, and a check goes through every pin.
+    let checked: unknown[] = []
+    return useStore.subscribe((s, prev) => {
+      const local = s.snapshot?.local
+      if (s.snapshot === prev.snapshot || !local || !s.game || !s.map || !gameSettings(useSettings.getState().ui, s.game.id).autoFound) return
+      // The game is in a world the map hasn't switched to yet: this isn't a find in this one.
+      if (s.snapshot?.world && s.snapshot.world.id !== s.world.id) return
+      const inputs = reachInputs(s.gamePins, s.game.categories, s.user.found, s.world.id, local, s.map.projection, s.game.unitsPerMeter)
+      if (sameInputs(inputs, checked)) return
+      checked = inputs
+      const reached = pinsReached(s.gamePins, s.game.categories, foundSet(s.user.found), local, s.map.projection, s.game.unitsPerMeter)
+      if (reached.length === 0) return
+      s.markFound(reached.map((p) => p.id))
+      if (s.mode !== 'hidden') s.notify(`Found: ${reached.map((p) => p.name).join(', ')}`)
+    })
+  }, [])
 }
 
 /** Says when a companion needs looking after. Nothing is said, or used up, with nothing on screen. */

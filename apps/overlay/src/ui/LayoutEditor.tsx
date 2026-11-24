@@ -5,12 +5,13 @@
 import { Maximize2, Minimize2, RotateCcw } from 'lucide-react'
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react'
 import { HUD_MARGIN } from '../lib/hudLayout'
-import { anchoredRect, anchorOf, fitRect, HANDLES, MIN_MAP_PANEL, moveRect, resizeRect, scaleRect, toFractions, type Handle, type Rect, type Size } from '../lib/layout'
+import { anchoredRect, anchorOf, fitRect, HANDLES, moveRect, resizeRect, scaleRect, toFractions, type Handle, type Rect, type Size } from '../lib/layout'
 import { maxMinimapSize, MIN_MINIMAP_SIZE, minimapSize } from '../lib/minimap'
 import { DEFAULT_SETTINGS } from '../settings/model'
 import { setMinimapLayout, useGameHud, useSettings } from '../settings/store'
 import { useStore } from '../state/store'
 import { Button } from './controls'
+import { applyRect, trackDrag } from './dragRect'
 
 const HANDLE_STYLE: Record<Handle, string> = {
   nw: 'left-0 top-0 -translate-x-1/2 -translate-y-1/2 cursor-nwse-resize',
@@ -21,33 +22,6 @@ const HANDLE_STYLE: Record<Handle, string> = {
   s: 'left-1/2 bottom-0 -translate-x-1/2 translate-y-1/2 cursor-ns-resize',
   sw: 'left-0 bottom-0 -translate-x-1/2 translate-y-1/2 cursor-nesw-resize',
   w: 'left-0 top-1/2 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize',
-}
-
-function applyRect(el: HTMLElement | null, r: Rect) {
-  if (!el) return
-  el.style.left = `${r.left}px`
-  el.style.top = `${r.top}px`
-  el.style.width = `${r.width}px`
-  el.style.height = `${r.height}px`
-}
-
-/** Follows a pointer from `e` until it's released, reporting how far it has moved. */
-function trackDrag(e: ReactPointerEvent, onMove: (dx: number, dy: number) => void, onEnd: () => void) {
-  e.preventDefault()
-  e.stopPropagation()
-  const el = e.currentTarget as HTMLElement
-  const { clientX: x, clientY: y, pointerId } = e
-  el.setPointerCapture(pointerId)
-  const move = (ev: PointerEvent) => onMove(ev.clientX - x, ev.clientY - y)
-  const end = () => {
-    el.removeEventListener('pointermove', move)
-    el.removeEventListener('pointerup', end)
-    el.removeEventListener('pointercancel', end)
-    onEnd()
-  }
-  el.addEventListener('pointermove', move)
-  el.addEventListener('pointerup', end)
-  el.addEventListener('pointercancel', end)
 }
 
 /** A box the user can drag around and resize by its edges. */
@@ -74,6 +48,8 @@ function EditBox({
   const self = useRef<HTMLDivElement>(null)
   const begin = (e: ReactPointerEvent, next: (start: Rect, dx: number, dy: number) => Rect) => {
     let current = rect
+    // A handle's drag isn't also a drag of the box it sits on.
+    e.stopPropagation()
     trackDrag(
       e,
       (dx, dy) => {
@@ -142,7 +118,7 @@ function SizeSlider({ label, value, min, max, onInput, onCommit }: { label: stri
 }
 
 /** Everything edit mode draws, above the map. `panelRef` is the floating map itself. */
-export function LayoutEditor({ panelRef, panel, screen }: { panelRef: RefObject<HTMLDivElement | null>; panel: Rect; screen: Size }) {
+export function LayoutEditor({ panelRef, panel, screen, minPanel }: { panelRef: RefObject<HTMLDivElement | null>; panel: Rect; screen: Size; minPanel: Size }) {
   const { setUi } = useSettings.getState()
   const gameId = useStore((s) => s.game?.id)
   const hud = useGameHud(gameId)
@@ -178,7 +154,7 @@ export function LayoutEditor({ panelRef, panel, screen }: { panelRef: RefObject<
   return (
     <div className="pointer-events-none absolute inset-0 z-50">
       <div className="absolute inset-0 bg-black/20" />
-      {!maximized && <EditBox boxRef={panelRef} rect={panel} screen={screen} min={MIN_MAP_PANEL} max={screen} label="Drag to move the map" onCommit={savePanel} />}
+      {!maximized && <EditBox boxRef={panelRef} rect={panel} screen={screen} min={minPanel} max={screen} label="Drag to move the map" onCommit={savePanel} />}
       <div ref={miniRef}>
         <EditBox rect={mini} screen={screen} min={miniMin} max={miniMax} label="Mini-map" onCommit={saveMini} />
       </div>
@@ -187,11 +163,11 @@ export function LayoutEditor({ panelRef, panel, screen }: { panelRef: RefObject<
           <SizeSlider
             label="Map size"
             value={panel.width / screen.width}
-            min={Math.min(MIN_MAP_PANEL.width / screen.width, 1)}
+            min={Math.min(minPanel.width / screen.width, 1)}
             max={1}
             onInput={(v) => {
               const width = v * screen.width
-              const r = fitRect(scaleRect(panel, width, Math.max(MIN_MAP_PANEL.height, (panel.height / panel.width) * width), screen), screen)
+              const r = fitRect(scaleRect(panel, width, Math.max(minPanel.height, (panel.height / panel.width) * width), screen), screen)
               panelDraft.current = r
               applyRect(panelRef.current, r)
             }}

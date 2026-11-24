@@ -16,7 +16,8 @@ use image::{ImageBuffer, RgbImage};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::link::AgentLink;
+use crate::files::write_atomic;
+use crate::link::{AgentLink, LoadedWorld};
 use crate::{Paths, Registry};
 
 /// Tells the windows a world's map files changed.
@@ -99,19 +100,18 @@ pub fn remember(app: &AppHandle, game: &str, world: &str, zone: ZonePins) {
     let (app, game, world) = (app.clone(), game.to_owned(), world.to_owned());
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(REMEMBER_DELAY).await;
+        // One at a time, from taking what's known to having it on disk: a slow write
+        // finishing after the next one would put older contents back.
+        static WRITING: Mutex<()> = Mutex::new(());
+        let _writing = WRITING.lock().unwrap();
         let bytes = {
             let mut worlds = REMEMBERED.lock().unwrap();
             let Some(known) = worlds.get_mut(&dir) else { return };
             known.flush_pending = false;
             serde_json::to_vec(known)
         };
-        let saved = bytes.map_err(|e| e.to_string()).and_then(|b| {
-            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-            // Whole or not at all: it's a record of everywhere the player has been.
-            let partial = dir.join(format!("{REMEMBERED_FILE}.tmp"));
-            std::fs::write(&partial, b).map_err(|e| e.to_string())?;
-            std::fs::rename(&partial, dir.join(REMEMBERED_FILE)).map_err(|e| e.to_string())
-        });
+        // Whole or not at all: it's a record of everywhere the player has been.
+        let saved = bytes.map_err(|e| e.to_string()).and_then(|b| write_atomic(&dir.join(REMEMBERED_FILE), &b).map_err(|e| e.to_string()));
         match saved {
             Ok(()) => {
                 let _ = app.emit(READY_EVENT, Ready { game_id: game, world_id: world, tiles: false, explored: false });
@@ -125,8 +125,7 @@ pub fn remember(app: &AppHandle, game: &str, world: &str, zone: ZonePins) {
 pub fn save_host_pins(app: &AppHandle, game: &str, world: &str, pins: &[WorldPin]) -> Result<(), String> {
     let dir = world_dir(&app.state::<Paths>().worlds, game, world).ok_or("unusable world id")?;
     let bytes = serde_json::to_vec(&PinFile { version: 1, pins }).map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    std::fs::write(dir.join(HOST_PINS_FILE), bytes).map_err(|e| e.to_string())?;
+    write_atomic(&dir.join(HOST_PINS_FILE), &bytes).map_err(|e| e.to_string())?;
     let _ = app.emit(READY_EVENT, Ready { game_id: game.to_owned(), world_id: world.to_owned(), tiles: false, explored: false });
     Ok(())
 }
@@ -146,24 +145,26 @@ fn world_dir(root: &Path, game: &str, world: &str) -> Option<PathBuf> {
     plain.then(|| root.join(game).join(world))
 }
 
-/// Reads the loaded world's map, in the background.
-pub fn refresh_soon(app: &AppHandle, game: &str, world: &str) {
-    let Some(dir) = world_dir(&app.state::<Paths>().worlds, game, world) else {
-        log::warn!("world map: unusable world id {world:?}");
+/// Reads the map of `world`, the loaded one, in the background. Its folder and what the
+/// agent calls it stay together from here on: by the time the game has built the map, the
+/// player may be in another world, whose map must not end up in this one's folder.
+pub fn refresh_soon(app: &AppHandle, game: &str, world: &LoadedWorld) {
+    let Some(dir) = world_dir(&app.state::<Paths>().worlds, game, &world.id) else {
+        log::warn!("world map: unusable world id {:?}", world.id);
         return;
     };
     if !REFRESHING.lock().unwrap().insert(dir.clone()) {
         return;
     }
-    let (app, game, world) = (app.clone(), game.to_owned(), world.to_owned());
+    let (app, game, world) = (app.clone(), game.to_owned(), world.clone());
     tauri::async_runtime::spawn(async move {
-        let result = refresh(&app, &dir).await;
+        let result = refresh(&app, &dir, &world.agent_id).await;
         REFRESHING.lock().unwrap().remove(&dir);
         match result {
             Ok(tiles) => {
-                let _ = app.emit(READY_EVENT, Ready { game_id: game, world_id: world, tiles, explored: true });
+                let _ = app.emit(READY_EVENT, Ready { game_id: game, world_id: world.id, tiles, explored: true });
             }
-            Err(e) => log::warn!("world map {world}: {e}"),
+            Err(e) => log::warn!("world map {}: {e}", world.id),
         }
     });
 }
@@ -172,7 +173,7 @@ pub fn refresh_soon(app: &AppHandle, game: &str, world: &str) {
 pub fn map_opened(app: &AppHandle) {
     static LAST: Mutex<Option<Instant>> = Mutex::new(None);
     let link = app.state::<Arc<AgentLink>>();
-    let Some((game, world)) = link.status().game_id.zip(link.world_id()) else { return };
+    let Some((game, world)) = link.status().game_id.zip(link.world()) else { return };
     if !app.state::<Registry>().0.iter().any(|g| g.id == game && g.world_maps) {
         return;
     }
@@ -183,14 +184,16 @@ pub fn map_opened(app: &AppHandle) {
     }
 }
 
-/// Returns whether the tiles were made.
-async fn refresh(app: &AppHandle, dir: &Path) -> Result<bool, String> {
+/// Reads the map of the world the agent calls `agent_world` into `dir`. Returns whether
+/// the tiles were made.
+async fn refresh(app: &AppHandle, dir: &Path, agent_world: &str) -> Result<bool, String> {
     let link = app.state::<Arc<AgentLink>>().inner().clone();
     let needs_terrain = !dir.join("tiles").join(DONE_FILE).is_file();
     let mut tries = 0;
     let map = loop {
-        match link.read_world_map(dir.to_string_lossy().into_owned(), needs_terrain).await {
+        match link.read_world_map(dir.to_string_lossy().into_owned(), agent_world.to_owned(), needs_terrain).await {
             Ok(map) => break map,
+            // Anything else won't change by asking again: least of all another world loaded.
             Err(e) if e != WORLD_MAP_NOT_READY || tries + 1 >= READ_TRIES => return Err(e),
             Err(_) => {
                 tries += 1;
@@ -198,11 +201,16 @@ async fn refresh(app: &AppHandle, dir: &Path) -> Result<bool, String> {
             }
         }
     };
-    log::info!("world map: {} pins read into {}", map.pins.len(), dir.display());
+    match &map.pins {
+        Some(pins) => log::info!("world map: {} pins read into {}", pins.len(), dir.display()),
+        None => log::warn!("world map: the pins could not be read; keeping the ones in {}", dir.display()),
+    }
     let dir = dir.to_owned();
     tauri::async_runtime::spawn_blocking(move || {
-        let pins = serde_json::to_vec(&PinFile { version: 1, pins: &map.pins }).map_err(|e| e.to_string())?;
-        std::fs::write(dir.join("pins.json"), pins).map_err(|e| e.to_string())?;
+        if let Some(pins) = &map.pins {
+            let pins = serde_json::to_vec(&PinFile { version: 1, pins }).map_err(|e| e.to_string())?;
+            write_atomic(&dir.join("pins.json"), &pins).map_err(|e| e.to_string())?;
+        }
         if needs_terrain {
             build_tiles(&dir, map.size)?;
         }

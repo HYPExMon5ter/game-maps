@@ -26,7 +26,7 @@ yet), **Deferred** (wanted, waiting on something).
 | Pin menu | Built | Right-click a pin, on the map or in a list, to track, edit or delete it, or mark it found. |
 | Distinct badges | Built | Every category has its own shape, color and symbol. Symbols ship with the app; a game's `iconAliases` replaces icons from its map pack that don't read on a badge. |
 | Nearest unfound | Built | A key that tracks the closest thing not found yet, in the categories shown on the map. |
-| Map and mini-map layout | Built | An edit mode to drag the floating map and the mini-map anywhere and resize them by their edges or with sliders. Each game keeps its own mini-map placement. |
+| Map and mini-map layout | Built | The floating map moves and resizes like a window: drag its top bar, drag its edges and corners, double-click the bar to fill the screen. An edit mode does the same for the mini-map (click-through while playing), with sliders. Each game keeps its own mini-map placement. Over a game in a window, both are laid out in the game's window and follow it. |
 | Grouped sidebar | Built | Categories sit in groups that open up, and big categories split into each kind of thing, going by pin names (iron ore, copper ore), so Valheim's runtime pins work too. Each line has its own eye, and "Only" shows nothing else; "Show all" puts back what was on. Open groups are remembered per game. |
 | Saved filter sets | Built | Name the categories shown now and switch back in one click ("Looting run", "Story items"), per game. |
 | Collection routes | Idea | Visit what's left in a category in an efficient order (nearest-neighbor tour over the route planner). |

@@ -134,6 +134,9 @@ pub struct SonsOfTheForest {
 
     last_layer_check: Option<Instant>,
     layer: WorldLayer,
+    /// Whether the player is dying or dead, as of the last layer check: asking the game
+    /// takes two calls into it, too many for every snapshot.
+    dying: bool,
     last_remote_refresh: Option<Instant>,
     others: Vec<RemotePlayer>,
     logged_player_shape: bool,
@@ -287,6 +290,7 @@ impl SonsOfTheForest {
             notes,
             last_layer_check: None,
             layer: WorldLayer::Surface,
+            dying: false,
             last_remote_refresh: None,
             others: Vec::new(),
             logged_player_shape: false,
@@ -345,6 +349,7 @@ impl SonsOfTheForest {
             });
             let below_ground = self.ground_height(cx, pos).is_some_and(|g| g - pos.y > UNDERGROUND_DEPTH);
             self.layer = if in_caves || below_ground { WorldLayer::Caves } else { WorldLayer::Surface };
+            self.dying = self.is_dying(cx);
         }
 
         Some(LocalPlayer { position, forward, layer: self.layer, camera: None })
@@ -497,9 +502,9 @@ impl SonsOfTheForest {
     unsafe fn refresh_status(&mut self, cx: &Cx) {
         self.world_status = self.environment.as_ref().and_then(|e| e.read(cx.rt, cx.unity));
         if let (Some(c), Some(creatures)) = (self.companions.as_mut(), self.creatures.as_ref()) {
-            self.companion_status = c.read(cx.rt, cx.unity, creatures.kelvin, creatures.virginia);
+            self.companion_status = c.read(cx.rt, cx.unity, creatures.kelvin(), creatures.virginia());
         }
-        let dying = self.is_dying(cx);
+        let dying = self.dying;
         if let Some(bag) = self.bag.as_mut() {
             let dropped = bag.read(cx.rt, cx.unity, dying);
             if dropped != self.dropped_bag {
@@ -600,7 +605,7 @@ impl Provider for SonsOfTheForest {
         if companion != companions::KELVIN {
             return Err(format!("{companion} doesn't take orders"));
         }
-        let kelvin = self.creatures.as_ref().map(|c| c.kelvin).unwrap_or(std::ptr::null_mut());
+        let kelvin = self.creatures.as_ref().map_or(std::ptr::null_mut(), |c| c.kelvin());
         self.companions.as_mut().ok_or("companions aren't available")?.orders(cx.rt, cx.unity, kelvin)
     }
 
@@ -608,7 +613,7 @@ impl Provider for SonsOfTheForest {
         if companion != companions::KELVIN {
             return Err(format!("{companion} doesn't take orders"));
         }
-        let kelvin = self.creatures.as_ref().map(|c| c.kelvin).unwrap_or(std::ptr::null_mut());
+        let kelvin = self.creatures.as_ref().map_or(std::ptr::null_mut(), |c| c.kelvin());
         let client = self.world.as_ref().is_some_and(|w| w.kind == WorldKind::Joined);
         let player = self.local_transform(cx);
         self.companions.as_mut().ok_or("companions aren't available")?.give_order(cx.rt, cx.unity, kelvin, player, order, client)
@@ -631,6 +636,9 @@ impl Provider for SonsOfTheForest {
             self.companion_status = Default::default();
             self.world_status = None;
             self.dropped_bag = None;
+            // Read again as soon as there's a player: this one says nothing about them.
+            self.dying = false;
+            self.last_layer_check = None;
             if let Some(creatures) = self.creatures.as_mut() {
                 creatures.forget_companions();
             }
@@ -675,7 +683,7 @@ impl Provider for SonsOfTheForest {
             companions: self.companion_status.clone(),
             environment: self.world_status.clone(),
             dropped_bag: self.dropped_bag,
-            dying: self.is_dying(cx),
+            dying: self.dying,
             indoors,
             ..Default::default()
         }

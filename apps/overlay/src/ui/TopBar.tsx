@@ -1,5 +1,5 @@
 import { Crosshair, Layers, LocateFixed, Move, PictureInPicture2, Settings, Undo2, Users, X } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { centerOnPlayer, teleportBack } from '../lib/actions'
 import { backend } from '../lib/backend'
 import { compassReading, formatDistance } from '../lib/compass'
@@ -13,6 +13,7 @@ import { useCanTeleport } from '../lib/teleport'
 import { selectViewLayer, useStore } from '../state/store'
 import { use3DDownload, useMap3D, useView3D } from '../state/view3d'
 import { IconButton } from './controls'
+import { useDismiss } from './useDismiss'
 import { WorldMenu } from './WorldMenu'
 import { LiveActions } from './LiveActions'
 import { IS_MAP_WINDOW } from '../lib/view'
@@ -54,71 +55,92 @@ function StatusChip() {
   return (
     <div className="flex min-w-0 items-center gap-2 px-1" title={text}>
       <span className={`size-2 shrink-0 rounded-full ${tone}`} />
-      <span className="font-display shrink-0 truncate text-[14px] font-semibold">{game?.name ?? 'Game Maps'}</span>
+      <span className="font-display min-w-0 truncate text-[14px] font-semibold">{game?.name ?? 'Game Maps'}</span>
       <WorldMenu />
-      <span className="truncate text-[12px] text-ink-faint">{text}</span>
+      <span className="min-w-0 truncate text-[12px] text-ink-faint">{text}</span>
       {environment && <span className="shrink-0 text-[12px] tabular-nums text-ink-dim">{environment}</span>}
     </div>
   )
 }
 
-// Stable empty value: selectors must not return fresh arrays (infinite re-render).
 function PlayersMenu() {
-  const snapshot = useStore((s) => s.snapshot)
-  const others = useMemo(() => movers(snapshot), [snapshot])
-  const local = useStore((s) => s.snapshot?.local ?? null)
-  const map = useStore((s) => s.map)
-  const game = useStore((s) => s.game)
-  const units = useSettings((s) => s.ui.units)
-  const selectLive = useStore((s) => s.selectLive)
+  // The count, not the list: every snapshot has a new one, and only the open menu shows it.
+  const count = useStore((s) => movers(s.snapshot).length)
   const [open, setOpen] = useState(false)
-  const peers = useSyncStore((s) => s.peers)
-  const inRoom = useSyncStore((s) => s.session !== null)
-  if (others.length === 0) return null
+  const root = useRef<HTMLDivElement>(null)
+  const close = useCallback(() => setOpen(false), [])
+  useDismiss(open, root, close)
+  if (count === 0) return null
   return (
-    <div className="relative">
-      <IconButton label="Players & companions" active={open} onClick={() => setOpen(!open)}>
+    <div ref={root} className="relative">
+      <IconButton label="Players & companions" active={open} aria-expanded={open} onClick={() => setOpen(!open)}>
         <span className="relative">
           <Users className="size-[18px]" />
-          <span className="absolute -right-2 -top-1.5 rounded-full bg-live px-1 text-[9px] font-bold text-black">{others.length}</span>
+          <span className="absolute -right-2 -top-1.5 rounded-full bg-live px-1 text-[9px] font-bold text-black">{count}</span>
         </span>
       </IconButton>
-      {open && (
-        <div className="glass absolute right-0 top-11 z-20 w-[280px] rounded-xl p-1.5">
-          {others.map((o) => {
-            const r = local && map && game ? compassReading(map.projection, local, o.position, game.unitsPerMeter) : null
-            const connection = o.kind === 'player' && inRoom ? connectionOf(o, Object.values(peers)) : null
-            return (
-              <div key={o.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-panel-raised">
-                <button
-                  type="button"
-                  className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                  title="Show details"
-                  onClick={() => {
-                    selectLive(o.id)
-                    setOpen(false)
-                  }}
-                >
-                  <span className="size-3 shrink-0 rounded-full ring-2 ring-white" style={{ background: o.color }} />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px]">{o.name}</span>
-                    {r && <span className="block text-[11px] text-ink-faint">{formatDistance(r.distance, units)}</span>}
-                    {connection && (
-                      <span className={`block text-[11px] ${connection === 'connected' ? 'text-live' : connection === 'outdated' ? 'text-danger' : 'text-ink-faint'}`}>{CONNECTION_LABELS[connection]}</span>
-                    )}
-                  </span>
-                </button>
-                <LiveActions entity={o} compact />
-              </div>
-            )
-          })}
-        </div>
-      )}
+      {open && <PlayersList onClose={close} />}
     </div>
   )
 }
 
-export function TopBar({ onSettings, settingsOpen }: { onSettings: () => void; settingsOpen: boolean }) {
+/** The open players menu: where everyone is, kept current with every snapshot. */
+function PlayersList({ onClose }: { onClose: () => void }) {
+  const snapshot = useStore((s) => s.snapshot)
+  const others = useMemo(() => movers(snapshot), [snapshot])
+  const local = snapshot?.local ?? null
+  const map = useStore((s) => s.map)
+  const game = useStore((s) => s.game)
+  const units = useSettings((s) => s.ui.units)
+  const selectLive = useStore((s) => s.selectLive)
+  const peers = useSyncStore((s) => s.peers)
+  const inRoom = useSyncStore((s) => s.session !== null)
+  return (
+    <div data-menu className="glass absolute right-0 top-11 z-20 w-[280px] cursor-default rounded-xl p-1.5">
+      {others.map((o) => {
+        const r = local && map && game ? compassReading(map.projection, local, o.position, game.unitsPerMeter) : null
+        const connection = o.kind === 'player' && inRoom ? connectionOf(o, Object.values(peers)) : null
+        return (
+          <div key={o.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-panel-raised">
+            <button
+              type="button"
+              className="flex min-w-0 flex-1 items-center gap-2 text-left"
+              title="Show details"
+              onClick={() => {
+                selectLive(o.id)
+                onClose()
+              }}
+            >
+              <span className="size-3 shrink-0 rounded-full ring-2 ring-white" style={{ background: o.color }} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[13px]">{o.name}</span>
+                {r && <span className="block text-[11px] text-ink-faint">{formatDistance(r.distance, units)}</span>}
+                {connection && (
+                  <span className={`block text-[11px] ${connection === 'connected' ? 'text-live' : connection === 'outdated' ? 'text-danger' : 'text-ink-faint'}`}>{CONNECTION_LABELS[connection]}</span>
+                )}
+              </span>
+            </button>
+            <LiveActions entity={o} compact />
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+export function TopBar({
+  onSettings,
+  settingsOpen,
+  onMove,
+  onToggleFill,
+}: {
+  onSettings: () => void
+  settingsOpen: boolean
+  /** Pressing the bar itself drags the floating map (see `FullMap`). */
+  onMove?: (e: ReactPointerEvent) => void
+  /** Double-clicking the bar fills the screen with the map, or floats it again. */
+  onToggleFill?: (e: ReactMouseEvent) => void
+}) {
   const gameMap = useStore((s) => s.map)
   const follow = useStore((s) => s.followPlayer)
   const hud = useSettings((s) => s.ui.hud)
@@ -149,7 +171,7 @@ export function TopBar({ onSettings, settingsOpen }: { onSettings: () => void; s
   }
 
   return (
-    <header className="glass flex h-12 items-center gap-1 rounded-2xl px-2">
+    <header className={`glass flex h-12 items-center gap-1 rounded-2xl px-2 ${onMove ? 'cursor-move touch-none' : ''}`} onPointerDown={onMove} onDoubleClick={onToggleFill}>
       <StatusChip />
       <div className="flex-1" />
       {hasCaves && (
@@ -202,7 +224,7 @@ export function TopBar({ onSettings, settingsOpen }: { onSettings: () => void; s
         <PictureInPicture2 className="size-[18px]" />
       </IconButton>
       {!IS_MAP_WINDOW && (
-        <IconButton label="Move and resize the map and mini-map" onClick={() => useStore.getState().setEditingLayout(true)}>
+        <IconButton label="Move and resize the mini-map and the map" onClick={() => useStore.getState().setEditingLayout(true)}>
           <Move className="size-[18px]" />
         </IconButton>
       )}

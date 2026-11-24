@@ -22,7 +22,7 @@ export function LiveDetails() {
   if (!entity) {
     // Gone from the game (left, despawned, or out of range): keep the card until closed.
     return (
-      <div className="glass pointer-events-auto flex w-[340px] items-center gap-3 rounded-2xl p-4">
+      <div className="glass pointer-events-auto flex w-[340px] max-w-full items-center gap-3 rounded-2xl p-4">
         <p className="flex-1 text-[13px] text-ink-dim">No longer on the map.</p>
         <button className="text-ink-faint hover:text-ink" onClick={() => selectLive(null)} aria-label="Close">
           <X className="size-4" />
@@ -35,7 +35,7 @@ export function LiveDetails() {
   const icon = entity.icon ? iconUrl(game.id, `game:${entity.icon}`) : null
 
   return (
-    <div className="glass pointer-events-auto w-[340px] rounded-2xl p-4">
+    <div className="glass pointer-events-auto w-[340px] max-w-full rounded-2xl p-4">
       <div className="flex items-start gap-3">
         <span className="grid size-9 shrink-0 place-items-center rounded-full ring-2 ring-white/80" style={{ background: entity.color }}>
           {icon && <img src={icon} alt="" className="size-5 object-contain" />}

@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use game_maps_protocol::{AgentMessage, LogLevel};
+use game_maps_protocol::LogLevel;
 use tokio::sync::mpsc::Sender;
 use unity_runtime::{Runtime, Unity};
 use unreal_runtime::Unreal;
@@ -34,7 +34,7 @@ use windows::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
 use windows::Win32::System::Threading::{CreateMutexW, GetCurrentProcessId};
 use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetClassNameW, GetWindowThreadProcessId};
 
-use agent::Shared;
+use agent::{Outgoing, Shared};
 use engine::UnityEngine;
 use unreal::UnrealEngine;
 
@@ -68,30 +68,29 @@ extern "system" fn DllMain(module: HMODULE, reason: u32, _reserved: *mut c_void)
         MODULE.store(module, Ordering::Relaxed);
         // Never do real work under the loader lock.
         std::thread::spawn(move || {
-            run();
-            if focus::thread_in_get_message() {
-                filelog::write("a thread is waiting in GetMessage; staying loaded");
-                return;
+            if run() {
+                unload(HMODULE(module as *mut c_void));
             }
-            unload(HMODULE(module as *mut c_void));
         });
     }
     1
 }
 
-fn run() {
+/// Runs the agent until the app tells it to detach. Whether the module can be unloaded
+/// afterwards: not while the game can still be running its code.
+fn run() -> bool {
     // One agent per process: a second injected copy exits immediately.
     let mutex_name = HSTRING::from(format!(r"Local\game-maps-agent-{}", std::process::id()));
-    let _mutex = match unsafe { CreateMutexW(None, false, &mutex_name) } {
+    let only_agent = match unsafe { CreateMutexW(None, false, &mutex_name) } {
         Ok(h) if unsafe { GetLastError() } != ERROR_ALREADY_EXISTS => HandleGuard(h),
         Ok(h) => {
             drop(HandleGuard(h));
             filelog::write("another agent is already loaded; exiting");
-            return;
+            return true;
         }
         Err(e) => {
             filelog::write(&format!("CreateMutexW failed: {e}"));
-            return;
+            return true;
         }
     };
     filelog::write(concat!("agent ", env!("CARGO_PKG_VERSION"), " starting"));
@@ -102,7 +101,7 @@ fn run() {
         Some(Found::Unreal(ue)) => Some(start_unreal(*ue, tx)),
         None => None,
     };
-    let Some(shared) = shared else { return };
+    let Some(shared) = shared else { return true };
     if let Err(e) = focus::install_minimize_guard() {
         shared.log(LogLevel::Warn, format!("minimize guard unavailable: {e}"));
     }
@@ -115,11 +114,23 @@ fn run() {
         Err(e) => filelog::write(&format!("tokio runtime failed: {e}")),
     }
     filelog::write("detaching");
-    worldmap::wait_for_saves();
-    // A tick to undo what was only for the app, before the hooks go.
+    // A tick to undo what was only for the app, before ticks stop.
     std::thread::sleep(LAST_TICK);
     shared.stopping.store(true, std::sync::atomic::Ordering::SeqCst);
-    hook::remove();
+    match hook::remove() {
+        hook::Removed::Clean => true,
+        hook::Removed::InUse => {
+            filelog::write("a game thread is still inside the agent (waiting for a message, most likely); staying loaded, out of the way");
+            false
+        }
+        hook::Removed::StillHooked => {
+            // The game still calls into this agent: another one mustn't hook the same code
+            // on top of it, so this stays the process's agent until the game ends.
+            filelog::write("a hook could not be removed; staying loaded, and no other agent can load into this game");
+            std::mem::forget(only_agent);
+            false
+        }
+    }
 }
 
 struct HandleGuard(HANDLE);
@@ -179,7 +190,7 @@ fn wait_for_engine() -> Option<Found> {
 }
 
 /// Resolves members and installs the frame hooks of a Unity game.
-fn start_unity(rt: Runtime, tx: Sender<AgentMessage>) -> Option<&'static Shared> {
+fn start_unity(rt: Runtime, tx: Sender<Outgoing>) -> Option<&'static Shared> {
     // Attached only while resolving members and installing hooks (Mono's class loading
     // and JIT need an attached thread). This thread then just serves the pipe and never
     // touches managed objects; staying attached could make the runtime wait for it when
@@ -223,7 +234,7 @@ fn start_unity(rt: Runtime, tx: Sender<AgentMessage>) -> Option<&'static Shared>
 }
 
 /// Sets up an Unreal game: it ticks from the message pump (see `hook`).
-fn start_unreal(ue: Unreal, tx: Sender<AgentMessage>) -> &'static Shared {
+fn start_unreal(ue: Unreal, tx: Sender<Outgoing>) -> &'static Shared {
     #[cfg(debug_assertions)]
     unreal::dump_types(&ue);
     let engine = UnrealEngine::new(ue);

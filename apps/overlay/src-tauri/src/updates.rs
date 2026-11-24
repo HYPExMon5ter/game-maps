@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+use tauri_plugin_store::StoreExt;
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 use crate::analytics::{self, Problem};
@@ -75,7 +76,23 @@ impl Updates {
         if manual {
             self.set(app, UpdateState::Checking);
         }
-        let result = async { tokio::time::timeout(CHECK_TIMEOUT, app.updater().map_err(|e| e.to_string())?.check()).await.map_err(|_| "timed out".to_string())?.map_err(|e| e.to_string()) }.await;
+        let result = async {
+            // On Windows the installer ends the app without the usual exit, which is when the
+            // store saves itself. In place of the default hook, so it does that hook's part too.
+            let exiting = app.clone();
+            let updater = app
+                .updater_builder()
+                .on_before_exit(move || {
+                    if let Err(e) = save_user_data(&exiting) {
+                        log::warn!("could not save before the update: {e}");
+                    }
+                    exiting.cleanup_before_exit();
+                })
+                .build()
+                .map_err(|e| e.to_string())?;
+            tokio::time::timeout(CHECK_TIMEOUT, updater.check()).await.map_err(|_| "timed out".to_string())?.map_err(|e| e.to_string())
+        }
+        .await;
         match result {
             Ok(Some(update)) => {
                 log::info!("update available: {}", update.version);
@@ -105,8 +122,8 @@ impl Updates {
         let mut received = 0u64;
         let mut last_emit = Instant::now() - Duration::from_secs(1);
         self.set(app, UpdateState::Downloading { received: 0, total: None });
-        let result = update
-            .download_and_install(
+        let downloaded = update
+            .download(
                 |chunk, total| {
                     received += chunk as u64;
                     if last_emit.elapsed() > Duration::from_millis(150) {
@@ -114,9 +131,16 @@ impl Updates {
                         self.set(app, UpdateState::Downloading { received, total });
                     }
                 },
-                || self.set(app, UpdateState::Installing),
+                || {},
             )
-            .await;
+            .await
+            .map_err(|e| e.to_string());
+        // Installing ends the app: nothing the player did may still be unsaved by then.
+        let result = downloaded.and_then(|bytes| {
+            save_user_data(app).map_err(|e| format!("your map data could not be saved first ({e})"))?;
+            self.set(app, UpdateState::Installing);
+            update.install(bytes).map_err(|e| e.to_string())
+        });
         match result {
             Ok(()) => {
                 log::info!("update {} installed; restarting", update.version);
@@ -127,10 +151,18 @@ impl Updates {
                 analytics::problem(app, Problem::UpdateInstall);
                 self.set(app, UpdateState::Error { message: format!("The update failed to install: {e}") });
                 *self.pending.lock().unwrap() = Some(update);
-                Err(e.to_string())
+                Err(e)
             }
         }
     }
+}
+
+/// The windows' save file (see `state/persist` in the UI).
+const USER_DATA: &str = "user-data.json";
+
+/// Writes what the windows have changed to disk. Nothing to do if no window opened it.
+fn save_user_data(app: &AppHandle) -> Result<(), String> {
+    app.get_store(USER_DATA).map_or(Ok(()), |store| store.save().map_err(|e| e.to_string()))
 }
 
 /// Periodic checks; installs found updates automatically while no game is running.

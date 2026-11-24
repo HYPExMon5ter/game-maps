@@ -47,7 +47,8 @@ function useSetupChecks(running: boolean) {
   const [checks, setChecks] = useState<SetupChecks | null>(null)
   useEffect(() => {
     if (!running) return
-    const poll = () => void backend.setupChecks().then(setChecks)
+    // A check that fails (the app is closing) keeps the last answer.
+    const poll = () => void backend.setupChecks().then(setChecks, () => {})
     poll()
     const id = setInterval(poll, 2000)
     return () => clearInterval(id)

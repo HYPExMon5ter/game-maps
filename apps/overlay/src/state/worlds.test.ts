@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_WORLD, DEFAULT_WORLD_INFO, EMPTY_INDEX, EMPTY_WORLD_DATA, hasData, isUnsaved, keys, mergeWorldData, pickerWorlds, recordPlayed, worldLabel } from './worlds'
+import { changedParts, DEFAULT_WORLD, DEFAULT_WORLD_INFO, EMPTY_INDEX, EMPTY_PREFS, EMPTY_WORLD_DATA, hasData, isUnsaved, keys, mergeWorldData, pickerWorlds, recordPlayed, worldLabel } from './worlds'
 
 describe('worlds', () => {
   it('keeps the default world where data lived before worlds', () => {
@@ -49,6 +49,18 @@ describe('worlds', () => {
     const merged = mergeWorldData({ ...EMPTY_WORLD_DATA, notes: { a: 'mine' }, timers: { t: 1 } }, { ...EMPTY_WORLD_DATA, notes: { a: 'old', b: 'theirs' }, timers: { t: 2, u: 3 } })
     expect(merged.notes).toEqual({ a: 'mine', b: 'theirs' })
     expect(merged.timers).toEqual({ t: 1, u: 3 })
+  })
+
+  it('saves only the part of the user data that changed', () => {
+    const user = { ...EMPTY_PREFS, ...EMPTY_WORLD_DATA, found: ['a'], hiddenCategories: ['caves'] }
+    expect(changedParts(user, user)).toEqual({})
+    expect(changedParts({ ...user, found: ['a', 'b'] }, user)).toEqual({ data: { ...EMPTY_WORLD_DATA, found: ['a', 'b'] } })
+    expect(changedParts({ ...user, hiddenCategories: [] }, user)).toEqual({ prefs: EMPTY_PREFS })
+    const both = changedParts({ ...user, openGroups: ['loot'], notes: { a: 'here' } }, user)
+    expect(both.prefs).toEqual({ ...EMPTY_PREFS, hiddenCategories: ['caves'], openGroups: ['loot'] })
+    expect(both.data).toEqual({ ...EMPTY_WORLD_DATA, found: ['a'], notes: { a: 'here' } })
+    // A part whose last write failed goes out with the next change, whichever part that's in.
+    expect(changedParts({ ...user, hiddenCategories: [] }, user, { data: true })).toEqual({ prefs: EMPTY_PREFS, data: { ...EMPTY_WORLD_DATA, found: ['a'] } })
   })
 
   it('tells unsaved new games apart', () => {

@@ -20,7 +20,7 @@ export interface Fog {
   bits: Uint8Array
 }
 
-/** Stored form (base64 bits). */
+/** As sent to other players, and as older versions saved it (base64 bits). */
 export interface SavedFog {
   cell: number
   minEast: number
@@ -92,6 +92,50 @@ export function saveFog(fog: Fog): SavedFog {
   let binary = ''
   for (let i = 0; i < fog.bits.length; i += 0x8000) binary += String.fromCharCode(...fog.bits.subarray(i, i + 0x8000))
   return { cell: fog.cell, minEast: fog.minEast, minNorth: fog.minNorth, width: fog.width, height: fog.height, bits: btoa(binary) }
+}
+
+/** A saved fog as it was saved, whatever map it fits. */
+export function savedToFog(saved: SavedFog): Fog {
+  const binary = atob(saved.bits)
+  const bits = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bits[i] = binary.charCodeAt(i)
+  return { cell: saved.cell, minEast: saved.minEast, minNorth: saved.minNorth, width: saved.width, height: saved.height, bits }
+}
+
+// A fog's file (see `src-tauri/src/fog.rs`), little-endian throughout: "GMFG", the
+// format's version (u32), `cell`, `minEast`, `minNorth` (f64 each), `width`, `height`
+// (u32 each), then the bits.
+const FILE_MAGIC = 0x4746_4d47
+const FILE_VERSION = 1
+const FILE_HEADER = 40
+
+export function encodeFog(fog: Fog): Uint8Array<ArrayBuffer> {
+  const out = new Uint8Array(new ArrayBuffer(FILE_HEADER + fog.bits.length))
+  const view = new DataView(out.buffer)
+  view.setUint32(0, FILE_MAGIC, true)
+  view.setUint32(4, FILE_VERSION, true)
+  view.setFloat64(8, fog.cell, true)
+  view.setFloat64(16, fog.minEast, true)
+  view.setFloat64(24, fog.minNorth, true)
+  view.setUint32(32, fog.width, true)
+  view.setUint32(36, fog.height, true)
+  out.set(fog.bits, FILE_HEADER)
+  return out
+}
+
+/** A fog's file, if it still fits `blank` (the map's extent may change with a map update). */
+export function decodeFog(file: Uint8Array | null | undefined, blank: Fog): Fog {
+  if (!file || file.length !== FILE_HEADER + blank.bits.length) return blank
+  const view = new DataView(file.buffer, file.byteOffset, file.byteLength)
+  const fits =
+    view.getUint32(0, true) === FILE_MAGIC &&
+    view.getUint32(4, true) === FILE_VERSION &&
+    view.getFloat64(8, true) === blank.cell &&
+    view.getFloat64(16, true) === blank.minEast &&
+    view.getFloat64(24, true) === blank.minNorth &&
+    view.getUint32(32, true) === blank.width &&
+    view.getUint32(36, true) === blank.height
+  return fits ? { ...blank, bits: file.slice(FILE_HEADER) } : blank
 }
 
 /** Adds what `other` has explored to `fog`; true if that revealed anything. */

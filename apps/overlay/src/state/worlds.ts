@@ -10,7 +10,9 @@
 //   game:<game>             the default world's pins and found items (where every
 //                           game's data lived before worlds)
 //   world:<game>:<world>    a detected world's pins and found items
-//   session:<game>[:<world>] map state, `fog:<game>:<world>` explored areas
+//   session:<game>[:<world>] map state
+// Explored areas are a file per world (see `state/persist`); `fog:<game>:<world>` is where
+// older versions kept them, and still what the windows call a world's fog between them.
 
 import type { FilterSet } from '../lib/filterSets'
 import type { OnlyFilter } from '../lib/filters'
@@ -66,6 +68,30 @@ export interface GamePrefs {
 
 export const EMPTY_WORLD_DATA: WorldData = { customPins: [], found: [], notes: {}, timers: {} }
 export const EMPTY_PREFS: GamePrefs = { hiddenCategories: [], shownCategories: [], filterSets: [], only: null, openGroups: [] }
+
+const PREF_KEYS = Object.keys(EMPTY_PREFS) as (keyof GamePrefs)[]
+const DATA_KEYS = Object.keys(EMPTY_WORLD_DATA) as (keyof WorldData)[]
+
+function pick<T extends object>(from: T, fields: (keyof T)[]): T {
+  return Object.fromEntries(fields.map((k) => [k, from[k]])) as T
+}
+
+/**
+ * What to save again of the user data: the filters, the world's data, or both, each only
+ * if something in it changed. The found list alone can be thousands of ids, and hiding a
+ * category shouldn't write it out again. `owed`: parts to save whether they changed or not
+ * (their last write failed).
+ */
+export function changedParts(
+  next: GamePrefs & WorldData,
+  prev: GamePrefs & WorldData,
+  owed: { prefs?: boolean; data?: boolean } = {},
+): { prefs?: GamePrefs; data?: WorldData } {
+  return {
+    ...(owed.prefs || PREF_KEYS.some((k) => next[k] !== prev[k]) ? { prefs: pick<GamePrefs>(next, PREF_KEYS) } : {}),
+    ...(owed.data || DATA_KEYS.some((k) => next[k] !== prev[k]) ? { data: pick<WorldData>(next, DATA_KEYS) } : {}),
+  }
+}
 
 export const keys = {
   prefs: (game: string) => `prefs:${game}`,

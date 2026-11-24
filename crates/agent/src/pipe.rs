@@ -4,18 +4,18 @@
 
 use std::time::Duration;
 
-use game_maps_protocol::{decode_line, encode_line, pipe_name, AgentMessage, AppMessage, LogLevel, PROTOCOL_VERSION};
+use game_maps_protocol::{decode_line, encode_line, pipe_name, AppMessage, LogLevel, PROTOCOL_VERSION};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use tokio::sync::mpsc;
 
-use crate::agent::{Command, Shared};
+use crate::agent::{Command, Outgoing, Shared};
 use crate::filelog;
 
 const RETRY_DELAY: Duration = Duration::from_millis(500);
 
 /// Serves until the app asks the agent to detach.
-pub async fn serve(shared: &'static Shared, mut outbox: mpsc::Receiver<AgentMessage>) {
+pub async fn serve(shared: &'static Shared, mut outbox: mpsc::Receiver<Outgoing>) {
     let name = pipe_name(std::process::id());
     let mut first = true;
     loop {
@@ -59,7 +59,7 @@ fn client_pid(server: &NamedPipeServer) -> u32 {
 }
 
 /// Runs one client session. Returns true if the app asked the agent to detach.
-async fn session(shared: &'static Shared, server: NamedPipeServer, outbox: &mut mpsc::Receiver<AgentMessage>) -> bool {
+async fn session(shared: &'static Shared, server: NamedPipeServer, outbox: &mut mpsc::Receiver<Outgoing>) -> bool {
     let (read_half, mut write_half) = tokio::io::split(server);
     let mut lines = BufReader::new(read_half).lines();
     if write_half.write_all(&encode_line(&shared.hello())).await.is_err() {
@@ -71,7 +71,12 @@ async fn session(shared: &'static Shared, server: NamedPipeServer, outbox: &mut 
         tokio::select! {
             msg = outbox.recv() => {
                 let Some(msg) = msg else { return true };
-                if write_half.write_all(&encode_line(&msg)).await.is_err() {
+                // Queued for an app that has gone (an answer that took a while, say): this
+                // one never asked, and numbers its own requests the same way.
+                if msg.session != shared.session() {
+                    continue;
+                }
+                if write_half.write_all(&encode_line(&msg.message)).await.is_err() {
                     return false;
                 }
             }
@@ -96,7 +101,7 @@ async fn session(shared: &'static Shared, server: NamedPipeServer, outbox: &mut 
                     Ok(AppMessage::PlaceInfo { request_id, position }) => shared.push_command(Command::PlaceInfo { request_id, position }),
                     Ok(AppMessage::CompanionOrders { request_id, companion }) => shared.push_command(Command::CompanionOrders { request_id, companion }),
                     Ok(AppMessage::CompanionOrder { request_id, companion, order }) => shared.push_command(Command::CompanionOrder { request_id, companion, order }),
-                    Ok(AppMessage::ReadWorldMap { request_id, dir, terrain }) => shared.push_command(Command::ReadWorldMap { request_id, dir, terrain }),
+                    Ok(AppMessage::ReadWorldMap { request_id, dir, world, terrain }) => shared.push_command(Command::ReadWorldMap { request_id, dir, world, terrain }),
                     Ok(AppMessage::SetGamePins { pins }) => shared.push_command(Command::SetGamePins(pins)),
                     Ok(AppMessage::GamePing { position }) => shared.push_command(Command::GamePing(position)),
                     Ok(AppMessage::SetGameOptions { options }) => shared.push_command(Command::SetGameOptions(options)),

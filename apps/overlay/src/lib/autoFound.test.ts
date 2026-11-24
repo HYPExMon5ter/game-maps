@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { pinsReached } from './autoFound'
+import { pinsReached, reachInputs, sameInputs } from './autoFound'
 import type { Category, Pin } from './game'
 import type { LocalPlayer } from './protocol'
 import type { Projection } from './projection'
@@ -35,5 +35,33 @@ describe('pinsReached', () => {
 
   it('skips pins already found', () => {
     expect(pinsReached(pins, categories, new Set(['near']), at(0, 0), projection, 1)).toEqual([])
+  })
+})
+
+describe('reachInputs', () => {
+  const pins = [pin('edge', 'weapon', 2.6, 0)]
+  const found: string[] = []
+  const inputs = (local: LocalPlayer, over: { pins?: Pin[]; found?: string[]; world?: string } = {}) =>
+    reachInputs(over.pins ?? pins, categories, over.found ?? found, over.world ?? 'sp:1', local, projection, 1)
+
+  it('is the same while nothing a check goes by has changed', () => {
+    expect(sameInputs(inputs(at(0, 0)), inputs(at(0, 0)))).toBe(true)
+    expect(sameInputs(inputs(at(0, 0)), [])).toBe(false)
+  })
+
+  it('changes with the smallest step, so a pin edged into range is found', () => {
+    const before = at(0, 0)
+    const after = at(0.11, 0)
+    expect(pinsReached(pins, categories, new Set(), before, projection, 1)).toEqual([])
+    expect(sameInputs(inputs(before), inputs(after))).toBe(false)
+    expect(pinsReached(pins, categories, new Set(), after, projection, 1).map((p) => p.id)).toEqual(['edge'])
+  })
+
+  it('changes with the layer, the pins, what is found and the world', () => {
+    const here = inputs(at(0, 0))
+    expect(sameInputs(here, inputs(at(0, 0, 'caves')))).toBe(false)
+    expect(sameInputs(here, inputs(at(0, 0), { pins: [...pins] }))).toBe(false)
+    expect(sameInputs(here, inputs(at(0, 0), { found: ['edge'] }))).toBe(false)
+    expect(sameInputs(here, inputs(at(0, 0), { world: 'sp:2' }))).toBe(false)
   })
 })

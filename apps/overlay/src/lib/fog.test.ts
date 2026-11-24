@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { emptyFog, exploredAt, exploredFraction, fogPixels, isExplored, loadFog, mergeFog, reveal, saveFog } from './fog'
+import { decodeFog, emptyFog, encodeFog, exploredAt, exploredFraction, fogPixels, isExplored, loadFog, mergeFog, reveal, saveFog, savedToFog } from './fog'
 import type { Projection } from './projection'
 
 const p: Projection = { east: 'x', north: 'z', up: 'y', minEast: -400, maxEast: 400, minNorth: -400, maxNorth: 400 }
@@ -47,6 +47,19 @@ describe('fog of war', () => {
     const other = emptyFog({ ...p, maxEast: 800 }, 1)
     expect(exploredFraction(loadFog(saveFog(fog), other))).toBe(0)
     expect(exploredFraction(loadFog(null, other))).toBe(0)
+  })
+
+  it('round-trips through its file, and starts over if the map changed or the file is damaged', () => {
+    const fog = emptyFog(p, 1)
+    reveal(fog, 100, -200, 30)
+    const file = encodeFog(fog)
+    expect(decodeFog(file, emptyFog(p, 1)).bits).toEqual(fog.bits)
+    // What an older version saved becomes the same file.
+    expect(encodeFog(savedToFog(saveFog(fog)))).toEqual(file)
+    expect(exploredFraction(decodeFog(file, emptyFog({ ...p, minEast: -401, maxEast: 399 }, 1)))).toBe(0)
+    expect(exploredFraction(decodeFog(file.slice(0, -1), emptyFog(p, 1)))).toBe(0)
+    expect(exploredFraction(decodeFog(file.fill(0, 0, 4), emptyFog(p, 1)))).toBe(0)
+    expect(exploredFraction(decodeFog(null, emptyFog(p, 1)))).toBe(0)
   })
 
   it('draws north up with explored cells clear', () => {

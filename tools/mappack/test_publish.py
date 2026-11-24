@@ -79,3 +79,58 @@ class PinGateTest(unittest.TestCase):
 
     def test_nothing_to_compare_with_passes(self):
         self.assertEqual(publish.lost_pins({}, {"a": 1}), [])
+
+
+class Completed:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+class ManifestTest(unittest.TestCase):
+    """The manifest lists every game: one that can't be read must stop the run, not start over."""
+
+    def fetch(self, answers):
+        calls = []
+
+        def gh(*args, check=True):
+            calls.append(args[:2])
+            return answers[args[:2]]
+
+        original, publish.gh = publish.gh, gh
+        try:
+            return publish.fetch_manifest("owner/repo"), calls
+        finally:
+            publish.gh = original
+
+    def test_reads_the_published_manifest(self):
+        manifest, _ = self.fetch({
+            ("release", "view"): Completed(stdout="maps.json\nsotf-1.zip\n"),
+            ("release", "download"): Completed(stdout='{"packs": {"sotf": {"version": "1"}}}'),
+        })
+        self.assertEqual(manifest, {"packs": {"sotf": {"version": "1"}}})
+
+    def test_starts_empty_only_when_there_is_none(self):
+        manifest, calls = self.fetch({("release", "view"): Completed(stdout="sotf-1.zip\n")})
+        self.assertEqual(manifest, {"packs": {}})
+        self.assertEqual(calls, [("release", "view")])
+
+        manifest, calls = self.fetch({
+            ("release", "view"): Completed(returncode=1, stderr="release not found"),
+            ("release", "create"): Completed(),
+        })
+        self.assertEqual(manifest, {"packs": {}})
+        self.assertIn(("release", "create"), calls)
+
+    def test_a_failed_lookup_or_download_stops_the_publish(self):
+        with self.assertRaises(SystemExit):
+            self.fetch({("release", "view"): Completed(returncode=1, stderr="HTTP 502")})
+        with self.assertRaises(SystemExit):
+            self.fetch({
+                ("release", "view"): Completed(stdout="maps.json\n"),
+                ("release", "download"): Completed(returncode=1, stderr="connection reset"),
+            })
+
+    def test_a_manifest_that_is_not_one_stops_the_publish(self):
+        for text in ["", "{broken", "[]", "{}", '{"packs": []}']:
+            with self.assertRaises(SystemExit, msg=text):
+                publish.parse_manifest(text)

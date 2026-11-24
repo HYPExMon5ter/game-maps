@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use game_maps_protocol::{Creature, CreatureKind};
-use unity_runtime::{Field, ListLayout, ManagedObject, Method, Runtime, Unity, Vector3};
+use unity_runtime::{Field, ListLayout, ManagedObject, Method, Runtime, Unity, Vector3, WeakRef};
 
 use crate::provider::to_proto;
 
@@ -26,17 +26,23 @@ pub struct Creatures {
     class_id: Method,
     is_dead: Method,
     list_layout: Option<ListLayout>,
-    /// Companions' actors from the last read, null when they aren't active. Check
-    /// `is_alive` before use: they may have gone since.
-    pub kelvin: *mut ManagedObject,
-    pub virginia: *mut ManagedObject,
+    /// Companions' actors from the last read, while they're active. Weak references: the
+    /// game can drop an actor at any time, and a raw pointer kept across frames would then
+    /// point at whatever took its place.
+    kelvin: Option<WeakRef>,
+    virginia: Option<WeakRef>,
     /// Enum names by value (they never change; reading them allocates).
     type_names: HashMap<i32, Option<String>>,
     class_names: HashMap<i32, Option<String>>,
 }
 
-// Raw object pointers are only dereferenced on the main thread.
+// Only used on the main thread.
 unsafe impl Send for Creatures {}
+
+/// What a weak reference points at now: null when there's none, or the object is gone.
+unsafe fn target(actor: &Option<WeakRef>) -> *mut ManagedObject {
+    actor.as_ref().map_or(std::ptr::null_mut(), |a| a.get())
+}
 
 impl Creatures {
     pub fn resolve(rt: &Runtime) -> Option<Self> {
@@ -49,8 +55,8 @@ impl Creatures {
             class_id: rt.method(actor, "get_ClassId", 0).ok()?,
             is_dead: rt.method(actor, "IsDead", 0).ok()?,
             list_layout: None,
-            kelvin: std::ptr::null_mut(),
-            virginia: std::ptr::null_mut(),
+            kelvin: None,
+            virginia: None,
             type_names: HashMap::new(),
             class_names: HashMap::new(),
         })
@@ -58,8 +64,25 @@ impl Creatures {
 
     /// Drops the companions' actors: they don't outlive the world they're in.
     pub fn forget_companions(&mut self) {
-        self.kelvin = std::ptr::null_mut();
-        self.virginia = std::ptr::null_mut();
+        self.kelvin = None;
+        self.virginia = None;
+    }
+
+    /// Kelvin's actor as last read: null when he isn't active, or has gone since. Still to
+    /// be checked with `is_alive`, and only good for this frame.
+    ///
+    /// # Safety
+    /// Must run on the game's main thread.
+    pub unsafe fn kelvin(&self) -> *mut ManagedObject {
+        target(&self.kelvin)
+    }
+
+    /// Virginia's actor (see [`Creatures::kelvin`]).
+    ///
+    /// # Safety
+    /// Must run on the game's main thread.
+    pub unsafe fn virginia(&self) -> *mut ManagedObject {
+        target(&self.virginia)
     }
 
     /// Living creatures within `radius` of `around`.
@@ -88,8 +111,8 @@ impl Creatures {
             // Before the distance check: companions matter wherever they are.
             let type_name = enum_name(rt, actor, &self.type_id, &mut self.type_names);
             match type_name.as_deref() {
-                Some("Robby") => self.kelvin = actor,
-                Some("Virginia") => self.virginia = actor,
+                Some("Robby") => self.kelvin = rt.weak_ref(actor),
+                Some("Virginia") => self.virginia = rt.weak_ref(actor),
                 _ => {}
             }
             let Ok(position) = unity.component_transform(rt, actor).and_then(|t| unity.position(rt, t)) else { continue };

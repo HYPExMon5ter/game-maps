@@ -4,6 +4,7 @@ import { useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { customPinAtPlayer, flyToPin } from '../lib/actions'
 import { formatDistance } from '../lib/compass'
 import { iconUrl, LAYER_LABELS, type BadgeShape, type Category, type Pin } from '../lib/game'
+import { foundSet } from '../lib/lookup'
 import { glyphColor } from '../map/badges'
 import { groundDistance } from '../lib/projection'
 import { PinSearch } from '../lib/search'
@@ -88,6 +89,7 @@ export function Sidebar({ onEditPin, onPinMenu }: { onEditPin: (pin: Pin) => voi
 
   if (!game) return null
   const categories = new Map(game.categories.map((c) => [c.id, c]))
+  const found = foundSet(user.found)
 
   const open = (pin: Pin) => {
     selectPin(pin.id)
@@ -156,7 +158,7 @@ export function Sidebar({ onEditPin, onPinMenu }: { onEditPin: (pin: Pin) => voi
                   <button className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-panel-raised" onClick={() => open(pin)} onContextMenu={(e) => onPinMenu(pin, e)}>
                     <CategoryIcon gameId={game.id} category={cat} icon={pin.icon} color={pin.color} />
                     <span className="min-w-0 flex-1">
-                      <span className={`block truncate text-[13px] ${user.found.includes(pin.id) ? 'text-ink-faint line-through' : ''}`}>{pin.name}</span>
+                      <span className={`block truncate text-[13px] ${found.has(pin.id) ? 'text-ink-faint line-through' : ''}`}>{pin.name}</span>
                       <span className="block truncate text-[11px] text-ink-faint">
                         {cat?.name ?? pin.category}
                         {pin.layer && pin.layer !== 'surface' ? ` · ${LAYER_LABELS[pin.layer]}` : ''}
