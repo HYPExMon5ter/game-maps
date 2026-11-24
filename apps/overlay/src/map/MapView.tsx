@@ -662,6 +662,10 @@ function usePlayers(map: MlMap | null, variant: 'full' | 'mini') {
       const target = followed ? findMover(snapshot, followed)?.position : followPlayer ? local?.position : undefined
       if (target) {
         const center = toLngLat(gameMap.projection, target)
+        // Already there (to within what can be seen): each move would repaint the whole map.
+        const at = map.project([center.lng, center.lat])
+        const middle = map.project(map.getCenter())
+        if (Math.hypot(at.x - middle.x, at.y - middle.y) < 0.5) return
         map.jumpTo({ center: [center.lng, center.lat] })
       }
     }

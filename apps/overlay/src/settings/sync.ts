@@ -6,7 +6,8 @@ import { emit, listen } from '@tauri-apps/api/event'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { backend, events } from '../lib/backend'
 import type { Hotkey } from '../lib/protocol'
-import { getStore } from '../state/persist'
+import { logUiError } from '../lib/errors'
+import { getStore, setKey } from '../state/persist'
 import { readSettings, type SavedSettings, type Settings } from './model'
 import { useSettings } from './store'
 
@@ -57,12 +58,12 @@ export async function startSettings(): Promise<() => void> {
   const { settings, legacyHotkey } = readSettings(saved, games.map((g) => g.id))
   useSettings.setState({ ui: received ?? settings, app, games, autostart })
   // Older versions saved them differently (see `readSettings`).
-  if (saved && !received && !sameJson(saved, settings)) await store.set(STORE_KEY, settings)
+  if (saved && !received && !sameJson(saved, settings)) await setKey(STORE_KEY, settings)
   if (legacyHotkey) void applyLegacyHotkey(legacyHotkey)
 
   const stop = useSettings.subscribe((s, prev) => {
     if (s.ui === prev.ui || applyingRemote) return
-    void store.set(STORE_KEY, s.ui)
+    setKey(STORE_KEY, s.ui).catch((e: unknown) => logUiError(`could not save the settings: ${String(e)}`))
     void emit(EVENT, { from: self, settings: s.ui } satisfies Changed)
   })
   return () => {

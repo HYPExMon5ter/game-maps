@@ -2,8 +2,9 @@
 // and a picker to look at another one while it isn't loaded in the game.
 
 import { Check, ChevronDown, Globe } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
-import { showWorld } from '../state/useWorlds'
+import { useCallback, useRef, useState } from 'react'
+import { pickWorld } from '../state/useWorlds'
+import { useDismiss } from './useDismiss'
 import { useStore } from '../state/store'
 import { hasData, pickerWorlds, worldKindLabel, worldLabel, type WorldInfo } from '../state/worlds'
 
@@ -19,24 +20,8 @@ export function WorldMenu() {
   const inGame = useStore((s) => s.snapshot?.world?.id ?? null)
   const [open, setOpen] = useState(false)
   const root = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!open) return
-    const onPointer = (e: PointerEvent) => {
-      if (!root.current?.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      // Closes this menu, not the map.
-      e.stopPropagation()
-      setOpen(false)
-    }
-    document.addEventListener('pointerdown', onPointer)
-    window.addEventListener('keydown', onKey, { capture: true })
-    return () => {
-      document.removeEventListener('pointerdown', onPointer)
-      window.removeEventListener('keydown', onKey, { capture: true })
-    }
-  }, [open])
+  const close = useCallback(() => setOpen(false), [])
+  useDismiss(open, root, close)
   // Games that don't report worlds only ever have the default world: nothing to show.
   if (index.worlds.length === 0 && world.id === 'default') return null
   const listed = pickerWorlds(index, world.id === 'default' ? hasData(user) : !index.claimed)
@@ -58,7 +43,7 @@ export function WorldMenu() {
         <ChevronDown className="size-3 shrink-0" />
       </button>
       {open && (
-        <div className="glass absolute left-0 top-9 z-20 w-[300px] rounded-xl p-1.5" style={{ background: 'var(--color-panel-solid)' }}>
+        <div data-menu className="glass absolute left-0 top-9 z-20 w-[300px] cursor-default rounded-xl p-1.5" style={{ background: 'var(--color-panel-solid)' }}>
           <p className="px-2 pb-1.5 pt-1 text-[11px] text-ink-faint">
             {locked
               ? 'Each world keeps its own pins, found items and explored areas. The map follows the world loaded in the game.'
@@ -75,7 +60,7 @@ export function WorldMenu() {
                 className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-panel-raised disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent"
                 onClick={() => {
                   setOpen(false)
-                  if (!current) void showWorld(w.id)
+                  if (!current) pickWorld(w.id)
                 }}
               >
                 <span className="min-w-0 flex-1">

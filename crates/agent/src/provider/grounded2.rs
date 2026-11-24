@@ -120,6 +120,10 @@ pub struct Grounded2 {
 
 /// The player held in the air over a teleport destination until the ground is there.
 struct Landing {
+    /// The character that's held, and the world it's in: it flies until it's let go. Only
+    /// good for as long as the player is that character in that world (see `Grounded2::held`).
+    pawn: Obj,
+    world: Obj,
     at: Vec3,
     /// Where the player was, to go back to if the ground never loads.
     from: Vec3,
@@ -199,13 +203,16 @@ impl Grounded2 {
 
     /// Sets a held player down once the ground under them has loaded, or lets go.
     unsafe fn land(&mut self, cx: &UeCx, pawn: Obj) {
+        // Another character or world (the player died, or left): nothing to set down any more.
+        if self.held(cx) != Some(pawn) {
+            return self.let_go(cx);
+        }
         let Some(landing) = &self.landing else { return };
         let (at, from) = (landing.at, landing.from);
         let ground = Self::ground(cx, at);
         if ground.is_none() && Instant::now() < landing.until {
             return;
         }
-        self.landing = None;
         if let Some(y) = ground {
             if let Err(e) = self.move_pawn(cx, pawn, Vec3::new(at.x, y + GROUND_CLEARANCE, at.z)) {
                 self.notes.push(format!("teleport landing failed: {e}"));
@@ -216,9 +223,29 @@ impl Grounded2 {
                 self.notes.push(format!("teleport: going back failed: {e}"));
             }
         }
+        self.let_go(cx);
+    }
+
+    /// Ends a landing, wherever the player is: the character that was held walks again, if
+    /// it's still there. Everything that gives a landing up goes through here, or the player
+    /// would be left flying.
+    unsafe fn let_go(&mut self, cx: &UeCx) {
+        let held = self.held(cx);
+        self.landing = None;
+        // Gone with its world or its life: nothing is left flying, and its address may be
+        // something else's by now.
+        let Some(pawn) = held else { return };
         if let Err(e) = self.set_movement_mode(cx, pawn, MOVE_WALKING) {
             self.notes.push(format!("teleport: could not restore walking: {e}"));
         }
+    }
+
+    /// The character a landing holds in the air, while the player still is that character,
+    /// in the world the landing was started in.
+    unsafe fn held(&self, cx: &UeCx) -> Option<Obj> {
+        let landing = self.landing.as_ref()?;
+        let local = cx.local()?;
+        (local.world == landing.world && local.pawn == Some(landing.pawn)).then_some(landing.pawn)
     }
 
 
@@ -274,7 +301,6 @@ impl Provider<UnrealEngine> for Grounded2 {
         };
         let Some(position) = cx.location(pawn) else { return WorldSnapshot { frame, ..Default::default() } };
         let forward = cx.rotation(local.controller).or_else(|| cx.rotation(pawn)).map(|r| dir_to_proto(FRotator { pitch: 0.0, ..r }.forward()));
-        self.land(cx, pawn);
         let others = self.read_others(cx, local.world, Some(pawn));
         self.other_pawns = others.iter().map(|(_, p)| *p).collect();
         self.others = others.into_iter().map(|(o, _)| o).collect();
@@ -337,6 +363,19 @@ impl Provider<UnrealEngine> for Grounded2 {
         snapshot
     }
 
+    /// A landing is seen through whether or not the app is still there: the player it holds
+    /// in the air can't be left there.
+    unsafe fn every_frame(&mut self, cx: &UeCx) {
+        if self.landing.is_none() {
+            return;
+        }
+        match cx.local().and_then(|l| l.pawn).filter(|&p| cx.location(p).is_some()) {
+            Some(pawn) => self.land(cx, pawn),
+            // Left the world, or died: there's no one to set down.
+            None => self.let_go(cx),
+        }
+    }
+
     unsafe fn find_path(&mut self, cx: &UeCx, from: Vec3, to: Vec3) -> Result<PathInfo, String> {
         // Pins and map clicks can be a little above or below the ground, off the navigation
         // mesh: try again from the ground there.
@@ -381,30 +420,35 @@ impl Provider<UnrealEngine> for Grounded2 {
     }
 
     unsafe fn teleport(&mut self, cx: &UeCx, target: &TeleportTarget) -> Result<(), String> {
-        let pawn = cx.local().and_then(|l| l.pawn).ok_or("not in a world")?;
+        let local = cx.local().ok_or("not in a world")?;
+        let pawn = local.pawn.ok_or("not in a world")?;
         match target {
             TeleportTarget::Position { position, snap_to_ground: true, .. } => {
                 if let Some(y) = Self::ground(cx, *position) {
-                    self.landing = None;
+                    self.let_go(cx);
                     return self.move_pawn(cx, pawn, Vec3::new(position.x, y + GROUND_CLEARANCE, position.z));
                 }
                 // That part of the world isn't loaded: wait there, held in the air, until it is.
                 let here = cx.location(pawn).map(to_proto).ok_or("the player has no position")?;
+                // Already held over somewhere else: where they came from is still the ground
+                // they left, not that spot in the air.
+                let from = self.landing.as_ref().filter(|_| self.held(cx) == Some(pawn)).map_or(here, |l| l.from);
+                self.let_go(cx);
                 self.set_movement_mode(cx, pawn, MOVE_FLYING)?;
                 if let Err(e) = self.move_pawn(cx, pawn, Vec3::new(position.x, here.y, position.z)) {
                     let _ = self.set_movement_mode(cx, pawn, MOVE_WALKING);
                     return Err(e);
                 }
-                self.landing = Some(Landing { at: *position, from: here, until: Instant::now() + LANDING_WAIT });
+                self.landing = Some(Landing { pawn, world: local.world, at: *position, from, until: Instant::now() + LANDING_WAIT });
                 Ok(())
             }
             TeleportTarget::Position { position, .. } => {
-                self.landing = None;
+                self.let_go(cx);
                 self.move_pawn(cx, pawn, Vec3::new(position.x, position.y + GROUND_CLEARANCE, position.z))
             }
             TeleportTarget::Player { id } => {
                 let p = self.others.iter().find(|o| &o.id == id).map(|o| o.position).ok_or("player not found")?;
-                self.landing = None;
+                self.let_go(cx);
                 self.move_pawn(cx, pawn, Vec3::new(p.x + 1.0, p.y + GROUND_CLEARANCE, p.z))
             }
         }

@@ -26,7 +26,7 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::time::{Duration, Instant};
 
-use game_maps_protocol::{Capabilities, Creature, CreatureKind, Environment, GameWorld, LocalPlayer, MultiplayerSession, PathInfo, RemotePlayer, TeleportTarget, Vec3, WorldKind, WorldLayer, WorldPin, WorldSnapshot, ZonePins, WORLD_MAP_NOT_READY};
+use game_maps_protocol::{Capabilities, Creature, CreatureKind, Environment, GameWorld, LocalPlayer, MultiplayerSession, PathInfo, RemotePlayer, TeleportTarget, Vec3, WorldKind, WorldLayer, WorldPin, WorldSnapshot, ZonePins, WORLD_MAP_NOT_READY, WORLD_MAP_OTHER_WORLD};
 use unity_runtime::{read_object_array, read_string, read_value_array, Class, Field, ListLayout, ManagedObject, Method, Runtime, Vector3, WeakRef};
 
 use super::{to_proto, to_unity, Cx, Provider};
@@ -52,6 +52,16 @@ const MAX_CREATURE_NAMES: usize = 4096;
 const ARENA_RADIUS: f32 = 250.0;
 /// How often the scene is searched for a boss that isn't found yet (about 2 ms).
 const BOSS_SEARCH: Duration = Duration::from_secs(3);
+/// How often the scene is searched for one of the game's single objects that isn't there.
+const SINGLETON_SEARCH: Duration = Duration::from_secs(3);
+
+/// One of the game's single objects (see [`StrandedDeep::singleton`]).
+#[derive(Default)]
+struct Singleton {
+    found: Option<WeakRef>,
+    /// When the scene was last searched for it in vain.
+    missed: Option<Instant>,
+}
 const MAX_ENTITIES: usize = 256;
 /// The world's zones, as `StrandedWorld.WORLD_ZONES_SQUARED` has it.
 const WORLD_ZONES: usize = 49;
@@ -209,10 +219,10 @@ pub struct StrandedDeep {
     notes: Vec<String>,
 
     /// Objects found once and kept while they live (see [`StrandedDeep::singleton`]).
-    world_object: Option<WeakRef>,
-    time_object: Option<WeakRef>,
-    calendar_object: Option<WeakRef>,
-    storm_object: Option<WeakRef>,
+    world_object: Singleton,
+    time_object: Singleton,
+    calendar_object: Singleton,
+    storm_object: Singleton,
     names: HashMap<String, String>,
     spawned: bool,
     game_world: Option<GameWorld>,
@@ -233,7 +243,7 @@ pub struct StrandedDeep {
     last_scan_note: Option<Instant>,
     logged_first_scan: bool,
     /// `PiscusInspectionManager`, found once.
-    sea_manager: Option<WeakRef>,
+    sea_manager: Singleton,
     /// The boss of the arena the player is in, once found.
     boss: Option<WeakRef>,
     last_boss_search: Option<Instant>,
@@ -384,10 +394,10 @@ impl StrandedDeep {
             list_layout: None,
             scanner,
             notes,
-            world_object: None,
-            time_object: None,
-            calendar_object: None,
-            storm_object: None,
+            world_object: Singleton::default(),
+            time_object: Singleton::default(),
+            calendar_object: Singleton::default(),
+            storm_object: Singleton::default(),
             names: HashMap::new(),
             spawned: false,
             game_world: None,
@@ -406,7 +416,7 @@ impl StrandedDeep {
             last_input_refresh: None,
             last_scan_note: None,
             logged_first_scan: false,
-            sea_manager: None,
+            sea_manager: Singleton::default(),
             boss: None,
             last_boss_search: None,
             creature_names: HashMap::new(),
@@ -436,14 +446,20 @@ impl StrandedDeep {
     /// The game's one `class` object: the one found before if it's still alive, else the
     /// first in the scene. Searching the scene takes milliseconds, so what's found is kept,
     /// as a weak reference: a raw pointer kept across frames can outlive the object, and
-    /// reading it then crashes the game.
-    unsafe fn singleton(cx: &Cx, cached: &mut Option<WeakRef>, class: Class) -> *mut ManagedObject {
-        let current = cached.as_ref().map_or(std::ptr::null_mut(), |w| w.get());
+    /// reading it then crashes the game. One that isn't there is only looked for now and then.
+    unsafe fn singleton(cx: &Cx, cached: &mut Singleton, class: Class) -> *mut ManagedObject {
+        let current = cached.found.as_ref().map_or(std::ptr::null_mut(), |w| w.get());
         if cx.unity.is_alive(current) {
             return current;
         }
+        // One that was there and went is looked for at once: the game may have made another.
+        let was_there = cached.found.take().is_some();
+        if !was_there && cached.missed.is_some_and(|t| t.elapsed() < SINGLETON_SEARCH) {
+            return std::ptr::null_mut();
+        }
         let found = cx.unity.find_objects(cx.rt, class, false).ok().and_then(|o| o.first().copied()).unwrap_or(std::ptr::null_mut());
-        *cached = cx.rt.weak_ref(found);
+        cached.found = cx.rt.weak_ref(found);
+        cached.missed = found.is_null().then(Instant::now);
         found
     }
 
@@ -470,11 +486,12 @@ impl StrandedDeep {
         layout.elements(list, max)
     }
 
-    /// The zones of the loaded world, in the game's order.
-    unsafe fn zone_objects(&mut self, cx: &Cx) -> Vec<*mut ManagedObject> {
+    /// The zones of the loaded world that are there, each with its place in the game's list:
+    /// that place is what a zone is known by (see `ZoneInfo::index`), whichever others are gone.
+    unsafe fn zone_objects(&mut self, cx: &Cx) -> Vec<(usize, *mut ManagedObject)> {
         let Some(world) = self.world_object(cx) else { return Vec::new() };
         let array: *mut ManagedObject = self.world_members.zones.get(world);
-        read_object_array(array, WORLD_ZONES).into_iter().filter(|z| cx.unity.is_alive(*z)).collect()
+        read_object_array(array, WORLD_ZONES).into_iter().enumerate().filter(|(_, z)| cx.unity.is_alive(*z)).collect()
     }
 
     /// What doesn't change about each zone in this world, read once.
@@ -488,7 +505,7 @@ impl StrandedDeep {
         }
         let f = &self.zone_fields;
         let mut zones = Vec::with_capacity(WORLD_ZONES);
-        for (index, zone) in objects.into_iter().enumerate() {
+        for (index, zone) in objects {
             let Ok(transform) = cx.unity.component_transform(cx.rt, zone) else { return false };
             let Ok(center) = cx.unity.position(cx.rt, transform) else { return false };
             zones.push(ZoneInfo {
@@ -554,8 +571,9 @@ impl StrandedDeep {
         self.peer_name(peer)
     }
 
-    /// The world that's loaded, and the session that goes with it.
-    unsafe fn read_world(&self, cx: &Cx) -> Option<(GameWorld, Option<MultiplayerSession>)> {
+    /// Which world is loaded right now: its kind and id, and the game's mode, seed and
+    /// server peer they come from.
+    unsafe fn world_identity(&self, cx: &Cx) -> Option<(WorldKind, String, i32, i32, *mut ManagedObject)> {
         let mode: i32 = cx.rt.static_value(self.game.mode);
         let server_peer: *mut ManagedObject = self.player.server_peer.map_or(std::ptr::null_mut(), |f| cx.rt.static_value(f));
         let seed = if mode == MODE_SERVER || mode == MODE_CLIENT {
@@ -571,8 +589,6 @@ impl StrandedDeep {
             let general: *mut ManagedObject = cx.rt.static_value(settings);
             (!general.is_null()).then(|| slot.get::<i32>(general))
         });
-        let local_peer: *mut ManagedObject = self.player.local_peer.map_or(std::ptr::null_mut(), |f| cx.rt.static_value(f));
-        let player_name = if cx.unity.is_alive(local_peer) { self.peer_name(local_peer) } else { None };
         let (kind, id) = match mode {
             MODE_CLIENT => {
                 // Someone else's save: their name and the seed tell it from others.
@@ -581,6 +597,20 @@ impl StrandedDeep {
             }
             _ => (if mode == MODE_SERVER { WorldKind::Hosted } else { WorldKind::SinglePlayer }, format!("slot{}-{seed:x}", slot.unwrap_or(0))),
         };
+        Some((kind, id, mode, seed, server_peer))
+    }
+
+    /// Whether the game is still in the world snapshots last reported: they only catch up
+    /// with another one every so often.
+    unsafe fn in_reported_world(&self, cx: &Cx) -> bool {
+        self.world_identity(cx).map(|(_, id, ..)| id) == self.game_world.as_ref().map(|w| w.id.clone())
+    }
+
+    /// The world that's loaded, and the session that goes with it.
+    unsafe fn read_world(&self, cx: &Cx) -> Option<(GameWorld, Option<MultiplayerSession>)> {
+        let (kind, id, mode, seed, server_peer) = self.world_identity(cx)?;
+        let local_peer: *mut ManagedObject = self.player.local_peer.map_or(std::ptr::null_mut(), |f| cx.rt.static_value(f));
+        let player_name = if cx.unity.is_alive(local_peer) { self.peer_name(local_peer) } else { None };
         let session = (mode == MODE_SERVER || mode == MODE_CLIENT).then(|| {
             // The session's id is only known to players in it; the seed and host are a fallback.
             let id = self.session_id(cx).unwrap_or_else(|| format!("{seed:x}-{:x}", fnv1a(self.peer_name(server_peer).unwrap_or_default().as_bytes())));
@@ -725,7 +755,7 @@ impl StrandedDeep {
     /// Which zones the game counts as visited.
     unsafe fn read_visited(&mut self, cx: &Cx) -> Vec<usize> {
         let field = self.zone_fields.visited;
-        self.zone_objects(cx).into_iter().enumerate().filter(|(_, z)| field.get::<bool>(*z)).map(|(i, _)| i).collect()
+        self.zone_objects(cx).into_iter().filter(|(_, z)| field.get::<bool>(*z)).map(|(i, _)| i).collect()
     }
 
     /// The zones the game has loaded, for the scanner, and the zone of what's new since
@@ -736,7 +766,6 @@ impl StrandedDeep {
         let mut zones: Vec<LoadedZone> = self
             .zone_objects(cx)
             .into_iter()
-            .enumerate()
             .filter(|(_, z)| loaded.get::<bool>(*z))
             .filter_map(|(index, z)| {
                 let container: *mut ManagedObject = container.get(z);
@@ -759,16 +788,24 @@ impl StrandedDeep {
         let (data_m, size_m, resolution_m, heights_m) = (t.data.clone(), t.size.clone(), t.resolution.clone(), t.heights.clone());
         let terrain_f = self.zone_fields.terrain;
         let biomes: Vec<i32> = self.zones.iter().map(|z| z.biome).collect();
-        let mut out = Vec::with_capacity(WORLD_ZONES);
-        for (index, zone) in self.zone_objects(cx).into_iter().enumerate() {
+        // Every zone's terrain has to be there before any is copied: copying takes long, and
+        // with one missing the app only asks again.
+        let mut ready = Vec::with_capacity(WORLD_ZONES);
+        for (index, zone) in self.zone_objects(cx) {
             let terrain: *mut ManagedObject = terrain_f.get(zone);
             if !cx.unity.is_alive(terrain) {
                 continue;
             }
             let data = cx.rt.invoke(&data_m, terrain, &mut []).map_err(|e| e.to_string())?;
-            if !cx.unity.is_alive(data) {
-                continue;
+            if cx.unity.is_alive(data) {
+                ready.push((index, terrain, data));
             }
+        }
+        if ready.len() < WORLD_ZONES {
+            return Err(WORLD_MAP_NOT_READY.into());
+        }
+        let mut out = Vec::with_capacity(WORLD_ZONES);
+        for (index, terrain, data) in ready {
             let size: Vector3 = cx.rt.unbox(cx.rt.invoke(&size_m, data, &mut []).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
             let resolution: i32 = cx.rt.unbox(cx.rt.invoke(&resolution_m, data, &mut []).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
             if !(2..=4097).contains(&resolution) {
@@ -788,9 +825,6 @@ impl StrandedDeep {
                 index,
                 ZoneTerrain { origin_x: origin.x, origin_z: origin.z, size_x: size.x, size_z: size.z, base_y: origin.y, scale_y: size.y, resolution: n, heights, rocky: biomes.get(index) == Some(&BIOME_ISLAND_ROCK) },
             ));
-        }
-        if out.len() < WORLD_ZONES {
-            return Err(WORLD_MAP_NOT_READY.into());
         }
         Ok(out)
     }
@@ -825,8 +859,11 @@ impl StrandedDeep {
         self.zones.clear();
         self.visited.clear();
         self.pin_spots.clear();
-        self.world_object = None;
-        self.sea_manager = None;
+        self.world_object = Singleton::default();
+        self.time_object = Singleton::default();
+        self.calendar_object = Singleton::default();
+        self.storm_object = Singleton::default();
+        self.sea_manager = Singleton::default();
         self.boss = None;
         self.creature_names.clear();
         if let Some(scanner) = self.scanner.as_mut() {
@@ -921,6 +958,11 @@ impl Provider for StrandedDeep {
     unsafe fn next_zone_pins(&mut self, cx: &Cx) -> Option<ZonePins> {
         let player = self.local_player(cx);
         if player.is_null() || self.zones.is_empty() || self.scanner.is_none() {
+            return None;
+        }
+        // What's read is filed under the world the app was last told of: nothing is read
+        // while the game is already in another.
+        if !self.in_reported_world(cx) {
             return None;
         }
         let transform = cx.unity.component_transform(cx.rt, player).ok()?;
@@ -1095,8 +1137,15 @@ impl Provider for StrandedDeep {
         Err("Stranded Deep has no routes across its sea".into())
     }
 
-    unsafe fn read_world_map(&mut self, cx: &Cx, terrain: bool) -> Result<WorldMapCapture, String> {
-        if !self.spawned || self.game_world.is_none() || !self.ensure_zones(cx) {
+    unsafe fn read_world_map(&mut self, cx: &Cx, world: &str, terrain: bool) -> Result<WorldMapCapture, String> {
+        // Which world it is comes first, read now (what snapshots report is a moment old):
+        // another one will never have this one's map, however long the app asks.
+        let loaded = self.world_identity(cx).map(|(_, id, ..)| id);
+        if loaded.as_deref().is_some_and(|id| id != world) {
+            return Err(WORLD_MAP_OTHER_WORLD.into());
+        }
+        // The zones kept are those of the world snapshots last reported: that has to be this one.
+        if loaded.is_none() || !self.spawned || self.game_world.as_ref().is_none_or(|w| w.id != world) || !self.ensure_zones(cx) {
             return Err(WORLD_MAP_NOT_READY.into());
         }
         let started = Instant::now();
@@ -1115,7 +1164,7 @@ impl Provider for StrandedDeep {
         let pins = self.read_pins(cx);
         let visited: Vec<Vec3> = self.read_visited(cx).into_iter().filter_map(|i| self.zones.get(i).map(|z| z.center)).collect();
         self.notes.push(format!("Stranded Deep map read in {:?}: {} places, {} zones visited", started.elapsed(), pins.len(), visited.len()));
-        Ok(WorldMapCapture { size: terrain::IMAGE_SIDE as u32, pins, explored: fog_bits(&visited), terrain: draw })
+        Ok(WorldMapCapture { size: terrain::IMAGE_SIDE as u32, pins: Some(pins), explored: fog_bits(&visited), terrain: draw })
     }
 
     unsafe fn input_blocked(&mut self, cx: &Cx) -> bool {

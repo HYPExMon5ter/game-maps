@@ -27,8 +27,13 @@ export type Handle = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
 
 export const HANDLES: readonly Handle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
 
-/** The smallest the floating map may get, in pixels (its panels need the room). */
-export const MIN_MAP_PANEL: Size = { width: 720, height: 480 }
+/**
+ * The smallest the floating map may get, in pixels: its panels need the room, and they're
+ * drawn `uiScale` times their size.
+ */
+export function minMapPanel(uiScale: number): Size {
+  return { width: 720 * uiScale, height: 480 * uiScale }
+}
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v))
 

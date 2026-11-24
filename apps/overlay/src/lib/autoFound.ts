@@ -8,6 +8,20 @@ import type { Projection } from './projection'
 export const AUTO_FOUND_RADIUS = 2.5
 export const AUTO_FOUND_HEIGHT = 3
 
+/**
+ * Everything `pinsReached` goes by, to tell when asking again can't give another answer:
+ * snapshots arrive many times a second, most of them with the player where they were.
+ * `found` and `world` are what the caller reads the found pins and their world from.
+ */
+export function reachInputs(pins: Pin[], categories: Category[], found: unknown, world: unknown, local: LocalPlayer, projection: Projection, unitsPerMeter: number): unknown[] {
+  const { x, y, z } = local.position
+  return [x, y, z, local.layer, pins, categories, found, world, projection, unitsPerMeter]
+}
+
+export function sameInputs(a: unknown[], b: unknown[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i])
+}
+
 /** Pins in auto-found categories, not yet found, that the player is standing at. */
 export function pinsReached(
   pins: Pin[],

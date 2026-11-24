@@ -14,7 +14,8 @@ use game_maps_protocol::{WorldMap, WorldPin};
 pub struct WorldMapCapture {
     /// Pixels per side of the terrain.
     pub size: u32,
-    pub pins: Vec<WorldPin>,
+    /// `None` when they couldn't be read (see `WorldMap::pins`).
+    pub pins: Option<Vec<WorldPin>>,
     /// Bit per fog cell, in the app's fog layout (see `lib/fog.ts`).
     pub explored: Vec<u8>,
     /// Draws the terrain.
@@ -28,15 +29,15 @@ pub struct Terrain {
     pub biomes: Vec<u8>,
 }
 
-/// Running saves: their code goes away with the agent, so it waits for them.
+/// Running saves: their code goes away with the agent, so it waits for them (see `hook::remove`).
 static SAVES: Mutex<Vec<JoinHandle<()>>> = Mutex::new(Vec::new());
 
 /// Writes `capture` into `dir` in the background, then calls `done`.
 pub fn save(capture: WorldMapCapture, dir: String, done: impl FnOnce(Result<WorldMap, String>) + Send + 'static) {
     let handle = std::thread::spawn(move || done(write(capture, Path::new(&dir))));
-    let mut saves = SAVES.lock().unwrap();
-    saves.retain(|s| !s.is_finished());
-    saves.push(handle);
+    // Kept until the agent goes, finished or not: a thread whose work is done may still be
+    // on its way out, through this module's code.
+    SAVES.lock().unwrap().push(handle);
 }
 
 fn write(capture: WorldMapCapture, dir: &Path) -> Result<WorldMap, String> {
@@ -53,8 +54,14 @@ fn write(capture: WorldMapCapture, dir: &Path) -> Result<WorldMap, String> {
     Ok(WorldMap { size: capture.size, pins: capture.pins })
 }
 
-/// Blocks until every running save has finished.
-pub fn wait_for_saves() {
+/// Whether any save is still running.
+pub fn saving() -> bool {
+    SAVES.lock().unwrap().iter().any(|s| !s.is_finished())
+}
+
+/// Waits for the threads of the saves to end. Call once none is [`saving`]: this then
+/// only takes as long as a thread needs to leave.
+pub fn join_saves() {
     for save in std::mem::take(&mut *SAVES.lock().unwrap()) {
         let _ = save.join();
     }

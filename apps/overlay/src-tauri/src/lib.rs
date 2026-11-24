@@ -4,6 +4,8 @@
 
 mod analytics;
 mod checks;
+mod files;
+mod fog;
 mod games;
 mod injector;
 mod launcher;
@@ -50,6 +52,8 @@ struct Paths {
     user: PathBuf,
     /// Maps made from the running game (see `worldmaps`).
     worlds: PathBuf,
+    /// Each world's explored areas (see `fog`).
+    fog: PathBuf,
 }
 
 struct Registry(Vec<GameEntry>);
@@ -500,7 +504,7 @@ fn resolve_paths(app: &AppHandle) -> (Paths, PathBuf) {
         let res = app.path().resource_dir().expect("resource dir");
         (res.join("games"), res.join("agent").join("game_maps_agent.dll"))
     };
-    (Paths { games, user, worlds: data.join("worlds") }, agent)
+    (Paths { games, user, worlds: data.join("worlds"), fog: data.join("fog") }, agent)
 }
 
 fn serve_asset(app: &AppHandle, uri_path: &str) -> Response<Vec<u8>> {
@@ -701,6 +705,10 @@ pub fn run() {
             check_for_updates,
             install_update,
             open_logs_folder,
+            fog::load_fog,
+            fog::save_fog,
+            fog::delete_fog,
+            fog::delete_unsaved_fog,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Game Maps");

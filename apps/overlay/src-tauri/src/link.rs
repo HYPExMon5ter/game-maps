@@ -84,6 +84,15 @@ fn ui_wants_update(app: &AppHandle, inner: &mut Inner) -> bool {
     wanted
 }
 
+/// The world the game has loaded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedWorld {
+    /// What the map knows it by (see `keep_joined_world`).
+    pub id: String,
+    /// What the agent calls it: its `GameWorld::id` as reported, for asking the agent about it.
+    pub agent_id: String,
+}
+
 /// The save of someone else's game the player joined.
 struct JoinedWorld {
     pid: u32,
@@ -152,12 +161,15 @@ struct Inner {
     sender: Option<mpsc::UnboundedSender<AppMessage>>,
     /// Where the player was before each teleport this session (most recent last).
     teleported_from: Vec<(Vec3, WorldLayer)>,
+    /// Counts the times `teleported_from` started over (another world, another session):
+    /// a teleport that began before one doesn't add to the history after it.
+    history_of: u64,
     /// Last snapshot sent to the UI while the map was hidden.
     hidden_sent_at: Option<Instant>,
     /// Last message from the agent.
     last_message: Option<Instant>,
-    /// The world last reported, for telling when the player is in another one.
-    world_id: Option<String>,
+    /// The world the player is in, for telling when they're in another one.
+    world: Option<LoadedWorld>,
     /// Outlives the agent connection (see `keep_joined_world`).
     joined_world: Option<JoinedWorld>,
     /// A whole snapshot was held back from the UI, so it can't take updates yet.
@@ -260,9 +272,10 @@ impl AgentLink {
                 snapshot: None,
                 sender: None,
                 teleported_from: Vec::new(),
+                history_of: 0,
                 hidden_sent_at: None,
                 last_message: None,
-                world_id: None,
+                world: None,
                 joined_world: None,
                 ui_behind: false,
                 route: None,
@@ -377,15 +390,21 @@ impl AgentLink {
 
     /// Teleports the player, remembering where they were for [`AgentLink::teleport_back`].
     pub async fn teleport(&self, app: &AppHandle, target: TeleportTarget) -> Result<(), String> {
-        let from = self.inner.lock().unwrap().snapshot.as_ref().and_then(|s| s.local.as_ref()).map(|l| (l.position, l.layer));
+        let (from, world) = {
+            let inner = self.inner.lock().unwrap();
+            (inner.snapshot.as_ref().and_then(|s| s.local.as_ref()).map(|l| (l.position, l.layer)), inner.history_of)
+        };
         self.send_teleport(target).await?;
         analytics::count(app, Feature::Teleport);
         if let Some(from) = from {
             let mut inner = self.inner.lock().unwrap();
-            if inner.teleported_from.len() == TELEPORT_HISTORY {
-                inner.teleported_from.remove(0);
+            // Where they were is somewhere in the world they were in then.
+            if inner.history_of == world {
+                if inner.teleported_from.len() == TELEPORT_HISTORY {
+                    inner.teleported_from.remove(0);
+                }
+                inner.teleported_from.push(from);
             }
-            inner.teleported_from.push(from);
         }
         Ok(())
     }
@@ -393,11 +412,18 @@ impl AgentLink {
     /// Returns the player to where they were before their last teleport. Each call goes
     /// one teleport further back.
     pub async fn teleport_back(&self) -> Result<(), String> {
-        let from = self.inner.lock().unwrap().teleported_from.pop().ok_or("no teleport to go back from")?;
+        let (from, world) = {
+            let mut inner = self.inner.lock().unwrap();
+            (inner.teleported_from.pop().ok_or("no teleport to go back from")?, inner.history_of)
+        };
         let (position, layer) = from;
         let result = self.send_teleport(TeleportTarget::Position { position, snap_to_ground: false, layer }).await;
         if result.is_err() {
-            self.inner.lock().unwrap().teleported_from.push(from);
+            let mut inner = self.inner.lock().unwrap();
+            // Still somewhere to go back to, unless the history has started over since.
+            if inner.history_of == world {
+                inner.teleported_from.push(from);
+            }
         }
         result
     }
@@ -419,14 +445,20 @@ impl AgentLink {
         self.request(&self.exports, EXPORT_TIMEOUT, |request_id| AppMessage::ExportWorld { request_id }).await
     }
 
-    /// The world the game last reported.
-    pub fn world_id(&self) -> Option<String> {
-        self.inner.lock().unwrap().world_id.clone()
+    /// The world the player is in.
+    pub fn world(&self) -> Option<LoadedWorld> {
+        self.inner.lock().unwrap().world.clone()
     }
 
-    /// Asks the agent to read the loaded world's map into `dir` (see `worldmaps`).
-    pub async fn read_world_map(&self, dir: String, terrain: bool) -> Result<WorldMap, String> {
-        self.request(&self.world_maps, WORLD_MAP_TIMEOUT, |request_id| AppMessage::ReadWorldMap { request_id, dir, terrain }).await
+    /// The world the player is in, as the map knows it.
+    pub fn world_id(&self) -> Option<String> {
+        self.world().map(|w| w.id)
+    }
+
+    /// Asks the agent to read the map of `world` (its `LoadedWorld::agent_id`) into `dir`
+    /// (see `worldmaps`). Fails if the game is in another world by then.
+    pub async fn read_world_map(&self, dir: String, world: String, terrain: bool) -> Result<WorldMap, String> {
+        self.request(&self.world_maps, WORLD_MAP_TIMEOUT, |request_id| AppMessage::ReadWorldMap { request_id, dir, world, terrain }).await
     }
 
     /// Puts the player's pins on the game's own map.
@@ -788,6 +820,10 @@ impl AgentLink {
             let mut inner = self.inner.lock().unwrap();
             inner.sender = None;
             inner.snapshot = None;
+            // Whatever the next agent reports first, it isn't in this world until it says so.
+            inner.world = None;
+            inner.teleported_from.clear();
+            inner.history_of += 1;
         }
         self.teleports.fail_all("connection closed");
         self.exports.fail_all("connection closed");
@@ -841,38 +877,52 @@ impl AgentLink {
             }
             AgentMessage::Snapshot(mut snap) => {
                 let mut inner = self.inner.lock().unwrap();
+                let agent_id = snap.world.as_ref().map(|w| w.id.clone());
                 keep_joined_world(&mut inner.joined_world, pid, &mut snap);
-                if let Some(world) = snap.world.as_ref().filter(|w| Some(&w.id) != inner.world_id.as_ref()) {
-                    // "Teleport back" has nowhere to go in another world.
-                    inner.world_id = Some(world.id.clone());
-                    inner.teleported_from.clear();
-                    if game.world_maps {
-                        worldmaps::refresh_soon(app, &game.id, &world.id);
+                let world = snap.world.as_ref().zip(agent_id).map(|(w, agent_id)| LoadedWorld { id: w.id.clone(), agent_id });
+                if world != inner.world {
+                    // "Teleport back" has nowhere to go in another world, or in none.
+                    if world.as_ref().map(|w| &w.id) != inner.world.as_ref().map(|w| &w.id) {
+                        inner.teleported_from.clear();
+                        inner.history_of += 1;
+                    }
+                    inner.world = world.clone();
+                    if let Some(world) = world.filter(|_| game.world_maps) {
+                        worldmaps::refresh_soon(app, &game.id, &world);
                     }
                 }
-                inner.snapshot = Some((*snap).clone());
+                // Copied only for a window that gets it.
                 if ui_wants_update(app, &mut inner) {
                     inner.ui_behind = false;
+                    inner.snapshot = Some((*snap).clone());
                     drop(inner);
                     let _ = app.emit("world-snapshot", snap);
                 } else {
                     inner.ui_behind = true;
+                    inner.snapshot = Some(*snap);
                 }
             }
             AgentMessage::SnapshotUpdate(update) => {
                 let mut inner = self.inner.lock().unwrap();
+                if inner.snapshot.is_none() {
+                    return;
+                }
+                let wanted = ui_wants_update(app, &mut inner);
+                // An update only means something on top of the one before: once a window
+                // has missed one, it needs the whole snapshot next.
+                let behind = std::mem::replace(&mut inner.ui_behind, !wanted);
                 let Some(snapshot) = inner.snapshot.as_mut() else { return };
-                (*update).clone().apply(snapshot);
-                if ui_wants_update(app, &mut inner) {
-                    // An update only means something on top of the last whole snapshot.
-                    if std::mem::take(&mut inner.ui_behind) {
-                        let whole = inner.snapshot.clone();
-                        drop(inner);
-                        let _ = app.emit("world-snapshot", whole);
-                    } else {
-                        drop(inner);
-                        let _ = app.emit("world-update", update);
-                    }
+                if !wanted {
+                    update.apply(snapshot);
+                } else if behind {
+                    update.apply(snapshot);
+                    let whole = inner.snapshot.clone();
+                    drop(inner);
+                    let _ = app.emit("world-snapshot", whole);
+                } else {
+                    (*update).clone().apply(snapshot);
+                    drop(inner);
+                    let _ = app.emit("world-update", update);
                 }
             }
             AgentMessage::HotkeyPressed { action: HotkeyAction::ToggleMap } => overlay::toggle(app),

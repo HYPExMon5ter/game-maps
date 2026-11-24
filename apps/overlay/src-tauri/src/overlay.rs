@@ -1,6 +1,6 @@
 //! Overlay window modes:
 //! - `Hidden`: window hidden, zero cost.
-//! - `Open`: covers the game's monitor, takes focus and input (full map UI).
+//! - `Open`: covers the game (its window, or its monitor), takes focus and input (full map UI).
 //! - `Pinned`: small click-through HUD (mini-map and/or tracking compass) while playing.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,7 +8,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use game_maps_protocol::HotkeyAction;
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::ClientToScreen;
@@ -199,10 +198,13 @@ fn follow_game(app: &AppHandle, mode: OverlayMode) {
     let Some(center) = game_center(app) else { return };
     let placed = *state(app).monitor.lock().unwrap();
     if placed.is_some_and(|m| contains(m, center)) {
-        // Same monitor; a windowed game may still have moved or changed size.
+        // Same monitor; a windowed game may still have moved or changed size. Only placed
+        // again: taking focus for the open map would end the drag that's moving the game.
         let area = game_area(app);
-        if mode == OverlayMode::Pinned && area.is_some() && area != *state(app).game_area.lock().unwrap() {
-            apply_with(app, mode, false);
+        if area.is_some() && area != *state(app).game_area.lock().unwrap() {
+            if let Some(win) = window(app) {
+                place_over_game(app, &win, mode);
+            }
         }
         return;
     }
@@ -221,11 +223,20 @@ fn follow_game(app: &AppHandle, mode: OverlayMode) {
 /// adjust for a title bar this undecorated window doesn't draw, shifting it by the
 /// caption and border size (20 px left and down, 88 px short). So the rect is set
 /// directly, and [`enforce_placement`] restores it whenever the window drifts.
-fn place(app: &AppHandle, win: &WebviewWindow, x: i32, y: i32, w: u32, h: u32) {
-    let rect = (x, y, w.max(1) as i32, h.max(1) as i32);
-    *state(app).placement.lock().unwrap() = Some(rect);
+///
+/// `mode` is the mode the rect was worked out for. The focus watcher places the window
+/// alongside mode changes: a rect for a mode that has since changed is dropped, and the
+/// mode stays locked while the rect is queued, so the last one queued is the current mode's.
+fn place(app: &AppHandle, win: &WebviewWindow, mode: OverlayMode, (x, y, w, h): Rect) {
+    let rect = (x, y, w.max(1), h.max(1));
     let Ok(hwnd) = win.hwnd() else { return };
     let hwnd = hwnd.0 as usize;
+    let st = state(app);
+    let current = st.mode.lock().unwrap();
+    if *current != mode {
+        return;
+    }
+    *st.placement.lock().unwrap() = Some(rect);
     // Queued after any pending window updates on the main thread.
     let _ = win.run_on_main_thread(move || set_rect(HWND(hwnd as _), rect));
 }
@@ -251,6 +262,51 @@ pub fn enforce_placement(app: &AppHandle) {
     if (r.left, r.top, r.right - r.left, r.bottom - r.top) != target {
         set_rect(hwnd, target);
     }
+}
+
+/// Places the shown window for `mode` over what the game draws on: a windowed game doesn't
+/// fill its monitor, and the map's layout and the markers over the game are placed from
+/// this window's size. With no game window to go by (none attached, or it's minimized),
+/// that's the whole monitor.
+fn place_over_game(app: &AppHandle, win: &WebviewWindow, mode: OverlayMode) {
+    let Some((mx, my, mw, mh, scale)) = target_monitor(app, win) else { return };
+    let area = game_area(app).unwrap_or((mx, my, mw as i32, mh as i32));
+    *state(app).game_area.lock().unwrap() = Some(area);
+    let pin = *state(app).pin.lock().unwrap();
+    match mode {
+        OverlayMode::Hidden => {}
+        // The full map takes input, so only where it can be reached: on the game's monitor.
+        OverlayMode::Open => place(app, win, mode, visible_part(area, (mx, my, mw as i32, mh as i32))),
+        // Waypoints: cover the game, so they line up with it; the HUD then places itself.
+        OverlayMode::Pinned if pin.fullscreen => place(app, win, mode, area),
+        OverlayMode::Pinned => place(app, win, mode, hud_rect(&pin, area, scale)),
+    }
+}
+
+/// The part of `area` on `monitor`, or all of `monitor` if none of it is (a game window
+/// dragged partly off the screen).
+fn visible_part((ax, ay, aw, ah): Rect, monitor: Rect) -> Rect {
+    let (mx, my, mw, mh) = monitor;
+    let (left, top) = (ax.max(mx), ay.max(my));
+    let (right, bottom) = ((ax + aw).min(mx + mw), (ay + ah).min(my + mh));
+    if right > left && bottom > top {
+        (left, top, right - left, bottom - top)
+    } else {
+        monitor
+    }
+}
+
+/// Where the HUD sits in `area`: its anchor runs across the room left inside the margin.
+/// The HUD keeps its size (the interface draws it at that size), so in a game window
+/// smaller than it, it starts at the window's corner and runs over the far edge.
+fn hud_rect(pin: &PinConfig, (ax, ay, aw, ah): Rect, scale: f64) -> Rect {
+    let px = |logical: u32| (logical as f64 * scale).round() as i32;
+    let (w, h) = (px(pin.width).max(1), px(pin.height).max(1));
+    let margin = px(pin.margin);
+    let room = |screen: i32, size: i32| (screen - size - 2 * margin).max(0) as f64;
+    // Without room for the margins the HUD sits against the area's near edge.
+    let offset = |screen: i32, size: i32, anchor: f64| margin.min((screen - size).max(0)) + (anchor * room(screen, size)).round() as i32;
+    (ax + offset(aw, w, pin.anchor_x), ay + offset(ah, h, pin.anchor_y), w, h)
 }
 
 fn focus_game(app: &AppHandle) {
@@ -284,9 +340,7 @@ fn apply_with(app: &AppHandle, next: OverlayMode, return_focus: bool) {
             let _ = win.set_ignore_cursor_events(false);
             let _ = win.show();
             let _ = win.set_focus();
-            if let Some((x, y, w, h, _)) = target_monitor(app, &win) {
-                place(app, &win, x, y, w, h);
-            }
+            place_over_game(app, &win, next);
         }
         OverlayMode::Pinned => {
             let _ = win.set_ignore_cursor_events(true);
@@ -295,26 +349,7 @@ fn apply_with(app: &AppHandle, next: OverlayMode, return_focus: bool) {
             } else {
                 let _ = win.show();
             }
-            let pin = *state(app).pin.lock().unwrap();
-            if let Some((mx, my, mw, mh, scale)) = target_monitor(app, &win) {
-                // What the game draws on: a windowed game doesn't fill its monitor, and
-                // markers over the game are placed from this window's size.
-                let area = game_area(app).unwrap_or((mx, my, mw as i32, mh as i32));
-                *state(app).game_area.lock().unwrap() = Some(area);
-                let (ax, ay, aw, ah) = area;
-                if pin.fullscreen {
-                    // Waypoints: cover the game; the HUD places itself.
-                    place(app, &win, ax, ay, aw as u32, ah as u32);
-                } else {
-                    let w = (pin.width as f64 * scale).round() as i32;
-                    let h = (pin.height as f64 * scale).round() as i32;
-                    let margin = (pin.margin as f64 * scale).round() as i32;
-                    let room = |screen: i32, size: i32| (screen - size - 2 * margin).max(0) as f64;
-                    let x = ax + margin + (pin.anchor_x * room(aw, w)).round() as i32;
-                    let y = ay + margin + (pin.anchor_y * room(ah, h)).round() as i32;
-                    place(app, &win, x, y, w.max(1) as u32, h.max(1) as u32);
-                }
-            }
+            place_over_game(app, &win, next);
         }
     }
     if return_focus && previous == OverlayMode::Open && next != OverlayMode::Open {
@@ -465,8 +500,8 @@ fn poll_map_key(app: &AppHandle, in_front: bool) {
     static WAS_DOWN: AtomicBool = AtomicBool::new(false);
     let Some(link) = app.try_state::<Arc<AgentLink>>() else { return };
     let Some(registry) = app.try_state::<crate::Registry>() else { return };
-    let Some(game) = link.status().game_id.and_then(|id| registry.0.iter().find(|g| g.id == id).cloned()) else { return };
-    let Some(key) = settings::get(app).hotkeys(&game).into_iter().find(|h| h.action == HotkeyAction::ToggleMap) else { return };
+    let Some(game) = link.status().game_id.and_then(|id| registry.0.iter().find(|g| g.id == id)) else { return };
+    let Some(key) = settings::map_hotkey(app, game) else { return };
     let state = unsafe { GetAsyncKeyState(key.vk as i32) };
     let (down, tapped) = (state < 0, state & 1 != 0);
     let was_down = WAS_DOWN.swap(down, Ordering::Relaxed);
@@ -568,6 +603,31 @@ mod tests {
     fn a_visible_game_is_followed_as_it_is() {
         assert_eq!(followed_front(Front::Game, false, false, OverlayMode::Pinned), Front::Game);
         assert_eq!(followed_front(Front::App, false, false, OverlayMode::Open), Front::App);
+    }
+
+    #[test]
+    fn the_hud_is_placed_inside_what_the_game_draws_on() {
+        let pin = PinConfig { enabled: true, anchor_x: 1.0, anchor_y: 0.0, width: 320, height: 320, margin: 24, fullscreen: false };
+        // A fullscreen game, and a windowed one elsewhere on the screen.
+        assert_eq!(hud_rect(&pin, (0, 0, 3440, 1440), 1.0), (3440 - 24 - 320, 24, 320, 320));
+        assert_eq!(hud_rect(&pin, (500, 300, 1280, 720), 1.0), (500 + 1280 - 24 - 320, 324, 320, 320));
+        assert_eq!(hud_rect(&pin, (0, 0, 3840, 2160), 1.5), (3840 - 36 - 480, 36, 480, 480));
+    }
+
+    #[test]
+    fn the_hud_keeps_its_size_in_a_small_game_window() {
+        let pin = PinConfig { enabled: true, anchor_x: 1.0, anchor_y: 1.0, width: 800, height: 320, margin: 24, fullscreen: false };
+        // Wider than the window: from its left edge. Too tall for both margins: one shrinks.
+        assert_eq!(hud_rect(&pin, (100, 100, 640, 330), 1.0), (100, 110, 800, 320));
+    }
+
+    #[test]
+    fn the_open_map_stays_on_the_screen() {
+        let monitor = (0, 0, 1920, 1080);
+        assert_eq!(visible_part((300, 200, 1280, 720), monitor), (300, 200, 1280, 720));
+        assert_eq!(visible_part((-800, 50, 1280, 720), monitor), (0, 50, 480, 720));
+        assert_eq!(visible_part((0, 0, 1920, 1080), monitor), monitor);
+        assert_eq!(visible_part((-2000, 0, 1280, 720), monitor), monitor);
     }
 
     #[test]

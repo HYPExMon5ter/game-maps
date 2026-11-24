@@ -223,7 +223,8 @@ icon.
 | Switch between surface and caves | **Surface / Underground** in the top bar (follows you automatically) |
 | Find other players and companions | **Players** in the top bar |
 | Mini-map while playing | **Picture-in-picture** in the top bar |
-| Move and resize the map and mini-map | **Four arrows** in the top bar |
+| Move and resize the map | Drag its top bar; drag its edges and corners; double-click the bar to fill the screen |
+| Move and resize the mini-map | **Four arrows** in the top bar |
 | Switch world | World name in the top bar |
 | See what's left to find | **Progress** tab in the sidebar |
 | Show or hide a category | The **eye** next to it, or next to a group for all of it |

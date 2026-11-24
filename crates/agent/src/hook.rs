@@ -73,19 +73,26 @@ const QUIT_SLOT: usize = SLOTS;
 static TARGETS: [AtomicUsize; SLOTS + 1] = [const { AtomicUsize::new(0) }; SLOTS + 1];
 static GAME_MAPS_HOOK_ORIGINALS: [AtomicUsize; SLOTS + 1] = [const { AtomicUsize::new(0) }; SLOTS + 1];
 
+/// Threads inside [`thunk_entry`]: they go back to the game through a trampoline, so the
+/// hooks can't be freed under them (see [`remove`]).
+static IN_THUNK: AtomicU32 = AtomicU32::new(0);
+
 /// Called by every thunk, with all argument registers saved, before the original runs.
 extern "C" fn thunk_entry(slot: usize) {
+    IN_THUNK.fetch_add(1, Ordering::SeqCst);
     #[cfg(test)]
     tests::ENTRIES.fetch_add(1, Ordering::SeqCst);
-    let Some(s) = SHARED.get() else { return };
-    if slot == QUIT_SLOT {
-        // Unity is quitting (menu quit, Alt+F4, window close): from now on the agent
-        // does no more work on the main thread, so it never touches objects or runtime
-        // state that are being torn down.
-        s.stopping.store(true, Ordering::SeqCst);
-        return;
+    if let Some(s) = SHARED.get() {
+        if slot == QUIT_SLOT {
+            // Unity is quitting (menu quit, Alt+F4, window close): from now on the agent
+            // does no more work on the main thread, so it never touches objects or runtime
+            // state that are being torn down.
+            s.stopping.store(true, Ordering::SeqCst);
+        } else {
+            run_tick(s);
+        }
     }
-    run_tick(s);
+    IN_THUNK.fetch_sub(1, Ordering::SeqCst);
 }
 
 fn run_tick(s: &crate::agent::Shared) {
@@ -313,31 +320,73 @@ pub fn pump_tick() {
     }
 }
 
-/// Stops all hooks, waits until no thread is inside the agent's tick, then frees them, so
-/// the module can be unloaded safely. In that order: a tick still running returns through
-/// its trampoline, which freeing the hook would pull out from under it.
-pub fn remove() {
+/// How taking the hooks out went (see [`remove`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Removed {
+    /// Nothing of the agent is in use any more: the module can be unloaded.
+    Clean,
+    /// Every hook is off, but a game thread is still inside the agent (waiting for a window
+    /// message, in a long tick, saving a map): it comes back through here, so the module
+    /// and the trampolines stay. Nothing new enters, and another agent can take over.
+    InUse,
+    /// A hook couldn't be turned off: the game still calls into this agent.
+    StillHooked,
+}
+
+/// How long ticks that already started get to finish, and after the hooks are off, threads
+/// inside the detours to leave.
+const QUIESCE: Duration = Duration::from_secs(2);
+/// How long map saves get to finish (drawing a world's terrain takes seconds).
+const SAVES: Duration = Duration::from_secs(10);
+/// For a thread in the few instructions that can't be counted: between a patched jump and
+/// its detour, or between a detour's end and its jump back to the game's code.
+const GRACE: Duration = Duration::from_millis(50);
+
+/// Waits until `done`, at most `limit`. Whether it was.
+fn wait_until(limit: Duration, done: impl Fn() -> bool) -> bool {
+    let deadline = Instant::now() + limit;
+    while !done() {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    true
+}
+
+/// Takes the agent out of the game's code. Call with `Shared::stopping` set, so no tick
+/// starts work. In this order: ticks that had started finish (one may still start a map
+/// save), then the saves, then the hooks go off, then whoever is inside them leaves. Only
+/// with all of that done are the trampolines freed: a thread still in a detour returns
+/// through its trampoline, and through this module's code.
+pub fn remove() -> Removed {
     PUMP_TICKS.store(false, Ordering::SeqCst);
-    crate::focus::disable();
+    let in_tick = || SHARED.get().is_some_and(|s| s.in_tick.load(Ordering::SeqCst) != 0);
+    // The saves are only looked at once no tick can be starting one: a tick mustn't find
+    // their list held by this thread.
+    let saved = wait_until(QUIESCE, || !in_tick()) && wait_until(SAVES, || !crate::worldmap::saving());
+
+    let mut unhooked = crate::focus::disable();
     for t in TARGETS.iter() {
         let code = t.swap(0, Ordering::SeqCst) as *mut std::ffi::c_void;
         if !code.is_null() {
-            unsafe {
-                let _ = MinHook::disable_hook(code);
-            }
+            unhooked &= unsafe { MinHook::disable_hook(code) }.is_ok();
         }
     }
-    if let Some(s) = SHARED.get() {
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while s.in_tick.load(Ordering::SeqCst) != 0 && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(5));
-        }
+    if !unhooked {
+        return Removed::StillHooked;
     }
-    // Let any thread still in a thunk (between the tick and its jump) or between a
-    // patched jump and the thunk finish.
-    std::thread::sleep(Duration::from_millis(50));
+    let inside = || in_tick() || IN_THUNK.load(Ordering::SeqCst) != 0 || crate::focus::thread_inside();
+    let left = saved && wait_until(QUIESCE, || !inside());
+    std::thread::sleep(GRACE);
+    if !left || inside() {
+        return Removed::InUse;
+    }
+    // Their threads are over, not only their work: the last of a thread's code is this module's.
+    crate::worldmap::join_saves();
     // Frees every hook and trampoline.
     MinHook::uninitialize();
+    Removed::Clean
 }
 
 #[cfg(test)]

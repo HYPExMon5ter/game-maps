@@ -116,13 +116,15 @@ pub trait Provider<E: Engine = UnityEngine>: Send {
         Err("this game has no companion orders".into())
     }
 
-    /// Reads the map of the loaded world, for games whose worlds are generated, so no
-    /// map pack can have them. With `terrain` it includes the picture of the land. An
-    /// error may only mean the game hasn't finished building the map: the app asks again.
+    /// Reads the map of `world` (a `GameWorld::id`), for games whose worlds are generated,
+    /// so no map pack can have them. With `terrain` it includes the picture of the land.
+    /// `WORLD_MAP_NOT_READY` while the game hasn't finished building the map (the app asks
+    /// again), `WORLD_MAP_OTHER_WORLD` once another world is loaded: checked against the
+    /// game as it is now, since the app may have asked for a world the player has left.
     ///
     /// # Safety
     /// Must run on the game's main thread.
-    unsafe fn read_world_map(&mut self, _cx: &E::Cx<'_>, _terrain: bool) -> Result<WorldMapCapture, String> {
+    unsafe fn read_world_map(&mut self, _cx: &E::Cx<'_>, _world: &str, _terrain: bool) -> Result<WorldMapCapture, String> {
         Err("this game has no world maps".into())
     }
 

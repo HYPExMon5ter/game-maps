@@ -8,6 +8,7 @@ import { load3d } from './map3d'
 import { terrainHeight } from './terrain'
 import type { Pin } from './game'
 import { LABEL_ZOOM } from '../map/style'
+import { pinById } from './lookup'
 import { nearestUnfound } from './nearest'
 import { mapZoom, toLngLat, type LngLat, toWorld } from './projection'
 import type { LocalPlayer, Vec3, WorldLayer } from './protocol'
@@ -111,7 +112,7 @@ export function centerOnPlayer() {
 }
 
 export function findPin(id: string): Pin | undefined {
-  return selectAllPins(useStore.getState()).find((p) => p.id === id)
+  return pinById(selectAllPins(useStore.getState()), id)
 }
 
 /** A new custom pin at a map point, or at an exact spot when the view knows its height. */

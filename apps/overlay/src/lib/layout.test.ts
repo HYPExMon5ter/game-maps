@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { anchoredRect, anchorOf, fitRect, moveRect, resizeRect, scaleRect, toFractions, toPixels } from './layout'
+import { anchoredRect, anchorOf, fitRect, minMapPanel, moveRect, resizeRect, scaleRect, toFractions, toPixels } from './layout'
 
 const screen = { width: 1000, height: 800 }
 const min = { width: 100, height: 100 }
@@ -62,6 +62,22 @@ describe('fractions', () => {
 describe('fitRect', () => {
   it('brings a layout from a bigger screen back on', () => {
     expect(fitRect({ left: 900, top: 700, width: 2000, height: 300 }, screen)).toEqual({ left: 0, top: 500, width: 1000, height: 300 })
+  })
+})
+
+describe('minMapPanel', () => {
+  it('grows with the interface, which is drawn that many times its size', () => {
+    expect(minMapPanel(1)).toEqual({ width: 720, height: 480 })
+    expect(minMapPanel(1.5)).toEqual({ width: 1080, height: 720 })
+  })
+
+  it('never makes the map bigger than a small screen', () => {
+    const small = { width: 1366, height: 768 }
+    const smallest = minMapPanel(1.75)
+    expect(smallest.height).toBeGreaterThan(small.height)
+    expect(fitRect({ left: 200, top: 100, ...smallest }, small)).toEqual({ left: 106, top: 0, width: 1260, height: 768 })
+    // Dragging an edge can't take it past the screen either.
+    expect(resizeRect({ left: 0, top: 0, width: 1300, height: 700 }, 'se', -500, 500, smallest, small, small)).toEqual({ left: 0, top: 0, width: 1260, height: 768 })
   })
 })
 
